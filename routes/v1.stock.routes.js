@@ -21,6 +21,7 @@ router.get("/categories/flat", StockCategoryController.getCategoriesFlat);
 router.patch("/categories/reorder", StockCategoryController.reorderCategories);
 router.get("/categories/:id", StockCategoryController.getCategoryById);
 router.put("/categories/:id", StockCategoryController.updateCategory);
+router.patch("/categories/:id/toggle-type", StockCategoryController.toggleCategoryType);
 router.patch("/categories/:id/move", StockCategoryController.moveCategory);
 router.delete("/categories/:id", StockCategoryController.softDeleteCategory);
 router.patch("/categories/:id/restore", StockCategoryController.restoreCategory);

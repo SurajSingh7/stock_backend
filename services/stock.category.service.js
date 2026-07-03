@@ -4,18 +4,63 @@ import StockProductDefinitionModel from "../models/stock.product.definition.mode
 import { CATEGORY_TYPES } from "../constants/stock.enums.js";
 
 export default class StockCategoryService {
+  // ─── Helper: escape user input before using in a $regex query ─────────────────
+  static escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  // ─── Helper: builds "wireless / microtick" style name-path from the raw ObjectId path ----------
+  static async buildDisplayPath(idPath, session) {
+    const ids = idPath.split("/").filter(Boolean);
+    if (ids.length === 0) return "";
+    const docs = await StockCategoryModel.find(
+      { _id: { $in: ids.map((i) => new mongoose.Types.ObjectId(i)) } },
+      "name"
+    )
+      .session(session ?? null)
+      .lean();
+    const nameMap = {};
+    docs.forEach((d) => (nameMap[d._id.toString()] = d.name));
+    return ids.map((id) => nameMap[id] ?? "?").join(" / ");
+  }
+
+  // ─── Helper: checks name uniqueness against ACTIVE categories only ────────────
+  // Inactive (soft-deleted) categories are intentionally excluded — they'll be
+  // purged automatically down the line (retention window TBD), so a stale
+  // inactive name should never block creating a fresh active category.
+  static async assertNameNotDuplicate(name, session, excludeId = null) {
+    if (!name || !name.trim()) {
+      throw new Error("Category name is required");
+    }
+
+    const filter = {
+      isActive: true,
+      name: { $regex: `^${StockCategoryService.escapeRegex(name.trim())}$`, $options: "i" },
+    };
+    if (excludeId) filter._id = { $ne: excludeId };
+
+    const existing = await StockCategoryModel.findOne(filter)
+      .lean()
+      .session(session ?? null);
+
+    if (existing) {
+      throw new Error(`Category "${name}" already exists. Duplicate category cannot be created.`);
+    }
+  }
+
   // ─── Create ──────────────────────────────────────────────────────────────────
 
   static async createCategory(body, session) {
     try {
-      const { name, type, parentId, sortOrder } = body;
+      const { name, description, type, parentId, sortOrder } = body;
 
-      let path;
+      // 🔒 Duplicate check — active categories only
+      await StockCategoryService.assertNameNotDuplicate(name, session);
 
       if (!parentId) {
-        // Root category — create first to get _id, then update path
         const category = new StockCategoryModel({
-          name,
+          name: name.trim(),
+          description: description ?? "",
           type,
           parentId: null,
           path: "/placeholder/",
@@ -27,7 +72,6 @@ export default class StockCategoryService {
         return category;
       }
 
-      // With parent
       const parent = await StockCategoryModel.findOne({
         _id: parentId,
         isActive: true,
@@ -40,12 +84,14 @@ export default class StockCategoryService {
         throw new Error("Cannot add children to a LEAF category");
 
       const category = new StockCategoryModel({
-        name,
+        name: name.trim(),
+        description: description ?? "",
         type,
         parentId,
         path: "/placeholder/",
         sortOrder: sortOrder ?? 0,
       });
+
       await category.save({ session });
       category.path = `${parent.path}${category._id}/`;
       await category.save({ session });
@@ -79,6 +125,13 @@ export default class StockCategoryService {
         }
       });
 
+      // childCount lets the UI decide, for every node in the tree (not just
+      // roots), whether a GROUP is "empty" and therefore eligible for delete —
+      // a GROUP can only be deleted when it has zero children.
+      Object.values(map).forEach((node) => {
+        node.childCount = node.children.length;
+      });
+
       return roots;
     } catch (error) {
       throw error;
@@ -102,7 +155,19 @@ export default class StockCategoryService {
         StockCategoryModel.countDocuments(filter),
       ]);
 
-      return { data, total };
+      // Attach human-readable displayPath and childCount (the latter drives
+      // whether the Delete action is available for a GROUP row in the UI).
+      const dataWithPath = await Promise.all(
+        data.map(async (c) => {
+          const [displayPath, childCount] = await Promise.all([
+            StockCategoryService.buildDisplayPath(c.path),
+            StockCategoryModel.countDocuments({ parentId: c._id, isActive: true }),
+          ]);
+          return { ...c, displayPath, childCount };
+        })
+      );
+
+      return { data: dataWithPath, total };
     } catch (error) {
       throw error;
     }
@@ -125,13 +190,35 @@ export default class StockCategoryService {
         .sort({ sortOrder: 1 })
         .lean();
 
-      return { ...category, children };
+      // Each child row needs displayPath (for the "Full Path" column) and
+      // childCount (so the UI only shows Delete on empty GROUP rows).
+      const childrenWithPath = await Promise.all(
+        children.map(async (c) => {
+          const [displayPath, childCount] = await Promise.all([
+            StockCategoryService.buildDisplayPath(c.path),
+            StockCategoryModel.countDocuments({ parentId: c._id, isActive: true }),
+          ]);
+          return { ...c, displayPath, childCount };
+        })
+      );
+
+      let productCount = 0;
+      if (category.type === CATEGORY_TYPES.LEAF) {
+        productCount = await StockProductDefinitionModel.countDocuments({
+          categoryId: id,
+          isActive: true,
+        });
+      }
+
+      const displayPath = await StockCategoryService.buildDisplayPath(category.path);
+
+      return { ...category, displayPath, children: childrenWithPath, productCount };
     } catch (error) {
       throw error;
     }
   }
 
-  // ─── Update (rename only) ─────────────────────────────────────────────────────
+  // ─── Update (rename / description only — type is immutable here) ─────────────
 
   static async updateCategory(id, body, session) {
     try {
@@ -142,7 +229,58 @@ export default class StockCategoryService {
       if (!category) throw new Error("Category not found");
 
       if (body.type !== undefined) throw new Error("type is immutable");
-      category.name = body.name;
+
+      if (body.name !== undefined && body.name.trim() !== category.name) {
+        // 🔒 Same active-only duplicate check applies on rename
+        await StockCategoryService.assertNameNotDuplicate(body.name, session, category._id);
+        category.name = body.name.trim();
+      }
+
+      if (body.description !== undefined) category.description = body.description;
+      await category.save({ session });
+      return category;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // ─── Toggle type (GROUP <-> LEAF) ──────────────────────────────────────────────
+
+  static async toggleCategoryType(id, nextType, session) {
+    try {
+      if (![CATEGORY_TYPES.GROUP, CATEGORY_TYPES.LEAF].includes(nextType)) {
+        throw new Error("Invalid category type");
+      }
+
+      const category = await StockCategoryModel.findOne({
+        _id: id,
+        isActive: true,
+      }).session(session);
+      if (!category) throw new Error("Category not found");
+
+      if (category.type === nextType) {
+        throw new Error(`Category is already ${nextType}`);
+      }
+
+      if (nextType === CATEGORY_TYPES.LEAF) {
+        const childCount = await StockCategoryModel.countDocuments({
+          parentId: category._id,
+          isActive: true,
+        }).session(session);
+        if (childCount > 0) {
+          throw new Error("Cannot convert to LEAF: this category has subcategories.");
+        }
+      } else {
+        const productCount = await StockProductDefinitionModel.countDocuments({
+          categoryId: category._id,
+          isActive: true,
+        }).session(session);
+        if (productCount > 0) {
+          throw new Error("Cannot convert to GROUP because this category contains products.");
+        }
+      }
+
+      category.type = nextType;
       await category.save({ session });
       return category;
     } catch (error) {
@@ -176,7 +314,6 @@ export default class StockCategoryService {
         if (!newParent) throw new Error("New parent category not found");
         if (newParent.type === CATEGORY_TYPES.LEAF)
           throw new Error("Cannot move under a LEAF category");
-        // Prevent moving into own subtree
         if (newParent.path.startsWith(oldPath))
           throw new Error("Cannot move a category into its own descendant");
 
@@ -187,7 +324,6 @@ export default class StockCategoryService {
       category.path = newPath;
       await category.save({ session });
 
-      // Update all descendants
       const descendants = await StockCategoryModel.find({
         path: { $regex: `^${oldPath}` },
         _id: { $ne: category._id },
@@ -211,6 +347,15 @@ export default class StockCategoryService {
   }
 
   // ─── Soft delete ──────────────────────────────────────────────────────────────
+  // Deletion rules (both enforced here as a backend safety net, independent of
+  // whatever the UI shows/hides):
+  //   1. A LEAF category can NEVER be deleted — only moved elsewhere.
+  //   2. A GROUP category can only be deleted while it is completely EMPTY
+  //      (zero active children, of either type). This guarantees delete never
+  //      cascades, which in turn guarantees a LEAF can never be removed
+  //      indirectly by deleting one of its ancestor GROUPs.
+  //   To delete a>b>c>d>e (e = LEAF): move e out first, then delete d, then
+  //   c, then b, then a — bottom-up, one empty GROUP at a time.
 
   static async softDeleteCategory(id, deletedBy, session) {
     try {
@@ -220,42 +365,28 @@ export default class StockCategoryService {
       }).session(session);
       if (!category) throw new Error("Category not found");
 
-      const now = new Date();
+      if (category.type === CATEGORY_TYPES.LEAF) {
+        throw new Error(
+          "LEAF categories cannot be deleted. Please move it under a different GROUP category instead."
+        );
+      }
 
-      // Soft delete self
+      const childCount = await StockCategoryModel.countDocuments({
+        parentId: category._id,
+        isActive: true,
+      }).session(session);
+
+      if (childCount > 0) {
+        throw new Error(
+          "Cannot delete this category because it still has subcategories. Please delete or move its subcategories first."
+        );
+      }
+
+      const now = new Date();
       category.isActive = false;
       category.deletedAt = now;
       category.deletedBy = deletedBy ?? null;
       await category.save({ session });
-
-      // Soft delete all descendants
-      await StockCategoryModel.updateMany(
-        { path: { $regex: `^${category.path}` }, isActive: true },
-        { $set: { isActive: false, deletedAt: now, deletedBy: deletedBy ?? null } },
-        { session }
-      );
-
-      // If LEAF or any descendant LEAFs, soft delete their product definitions
-      const leafIds = await StockCategoryModel.find(
-        {
-          path: { $regex: `^${category.path}` },
-          type: CATEGORY_TYPES.LEAF,
-        },
-        "_id"
-      )
-        .lean()
-        .session(session);
-
-      const leafIdArr = leafIds.map((l) => l._id);
-      if (category.type === CATEGORY_TYPES.LEAF) leafIdArr.push(category._id);
-
-      if (leafIdArr.length > 0) {
-        await StockProductDefinitionModel.updateMany(
-          { categoryId: { $in: leafIdArr }, isActive: true },
-          { $set: { isActive: false, deletedAt: now, deletedBy: deletedBy ?? null } },
-          { session }
-        );
-      }
 
       return category;
     } catch (error) {

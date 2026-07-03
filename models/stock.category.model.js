@@ -8,6 +8,11 @@ const stockCategorySchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    description: {
+      type: String,
+      default: "",
+      trim: true,
+    },
     type: {
       type: String,
       enum: CATEGORY_TYPES_ARRAY,
@@ -45,6 +50,22 @@ const stockCategorySchema = new mongoose.Schema(
 stockCategorySchema.index({ parentId: 1 });
 stockCategorySchema.index({ path: 1 });
 stockCategorySchema.index({ isActive: 1, type: 1 });
+
+// 🔒 DB-level duplicate-name guard — works alongside the service-layer check.
+// Case-insensitive (collation strength 2), scoped to ACTIVE categories only
+// via partialFilterExpression. Inactive (soft-deleted) categories are
+// deliberately excluded from this constraint — they're expected to be
+// purged automatically after a retention window, so a stale inactive name
+// should never block creating a new active category with the same name.
+stockCategorySchema.index(
+  { name: 1 },
+  {
+    unique: true,
+    collation: { locale: "en", strength: 2 },
+    partialFilterExpression: { isActive: true },
+    name: "uniq_active_category_name_ci",
+  }
+);
 
 const StockCategoryModel = mongoose.model("stock_categories", stockCategorySchema);
 

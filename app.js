@@ -1,11 +1,25 @@
 import express from "express";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
+import cors from "cors";
 import stockRoutes from "./routes/v1.stock.routes.js";
 
 dotenv.config();
 
 const app = express();
+
+// CORS must come before routes
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      callback(null, origin || true); // reflects incoming origin (acts like "allow all")
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
 app.use(express.json());
 
 // Health check

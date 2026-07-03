@@ -92,6 +92,28 @@ export default class StockCategoryController {
     }
   }
 
+  // Explicit GROUP <-> LEAF toggle. Kept separate from updateCategory since it
+  // carries its own guard rails (blocked by child categories or active products)
+  // rather than being a plain field update.
+  static async toggleCategoryType(req, res) {
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction();
+      const { type } = req.body;
+      if (!type) throw new Error("type is required");
+      const data = await StockCategoryService.toggleCategoryType(req.params.id, type, session);
+      await session.commitTransaction();
+      log.info("Stock category type toggled");
+      successResponseHandler(res, data, "Category type updated successfully");
+    } catch (error) {
+      await session.abortTransaction();
+      log.error("Error toggling stock category type", error);
+      errorResponseHandler(res, error);
+    } finally {
+      await session.endSession();
+    }
+  }
+
   static async moveCategory(req, res) {
     const session = await mongoose.startSession();
     try {
