@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import {
   TRACKING_METHODS_ARRAY,
   PRODUCT_DEF_STATUS_ARRAY,
+  UNIT_TYPES_ARRAY,
+  GST_RATES_ARRAY,
 } from "../constants/stock.enums.js";
 
 const selectedFieldSchema = new mongoose.Schema(
@@ -44,6 +46,39 @@ const stockProductDefinitionSchema = new mongoose.Schema(
       type: [selectedFieldSchema],
       default: [],
     },
+
+    // ── FIELDS added earlier for billing/GST/unit UI ──
+    companyUseOnly: {
+      type: Boolean,
+      default: false,
+    },
+    gstRate: {
+      type: String,
+      enum: GST_RATES_ARRAY,
+      default: null,
+    },
+    unit: {
+      type: String,
+      enum: UNIT_TYPES_ARRAY,
+      default: null,
+    },
+    stockAlertThreshold: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    // ───────────────────────────────────────────────────
+
+    // ── NEW — product image ──
+    // Stores a relative public path (e.g. "/uploads/stock/products/product_xxx.jpg"),
+    // set by the controller after multer saves the file to disk. Never store an
+    // absolute filesystem path here — see stock.upload.helper.js.
+    image: {
+      type: String,
+      default: null,
+    },
+    // ──────────────────────────
+
     status: {
       type: String,
       enum: PRODUCT_DEF_STATUS_ARRAY,

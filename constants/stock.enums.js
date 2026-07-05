@@ -43,3 +43,14 @@ export const PRODUCT_DEF_STATUS = {
 };
 
 export const PRODUCT_DEF_STATUS_ARRAY = Object.values(PRODUCT_DEF_STATUS);
+export const UNIT_TYPES = {
+  PIECES: "pieces",
+  METER: "meter",
+  KG: "kg",
+  BOX: "box",
+  LITRE: "litre",
+  DOZEN: "dozen",
+};
+
+export const UNIT_TYPES_ARRAY = Object.values(UNIT_TYPES);
+export const GST_RATES_ARRAY = ["0", "5", "12", "18", "28"];

@@ -1,12 +1,24 @@
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockCategoryModel from "../models/stock.category.model.js";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
-import { CATEGORY_TYPES } from "../constants/stock.enums.js";
+import { CATEGORY_TYPES, GST_RATES_ARRAY } from "../constants/stock.enums.js";
+import { deleteProductImageFile } from "../helpers/stock.upload.helper.js";
 
 export default class StockProductDefinitionService {
   static async createProductDefinition(body, session) {
     try {
-      const { categoryId, name, trackingMethod, selectedFields, status } = body;
+      const {
+        categoryId,
+        name,
+        trackingMethod,
+        selectedFields,
+        status,
+        companyUseOnly,
+        gstRate,
+        unit,
+        stockAlertThreshold,
+        image, // NEW — public path set by controller from req.file, or null
+      } = body;
 
       const category = await StockCategoryModel.findOne({
         _id: categoryId,
@@ -24,6 +36,11 @@ export default class StockProductDefinitionService {
         trackingMethod,
         selectedFields,
         status: status ?? "ACTIVE",
+        companyUseOnly: companyUseOnly ?? false,
+        gstRate: gstRate ?? null,
+        unit: unit ?? null,
+        stockAlertThreshold: stockAlertThreshold ?? null,
+        image: image ?? null,
       });
 
       await def.save({ session });
@@ -105,12 +122,33 @@ export default class StockProductDefinitionService {
       }).session(session);
       if (!def) throw new Error("Product definition not found");
 
-      const allowed = ["name", "trackingMethod", "selectedFields", "status"];
+      // Track the previous image so it can be cleaned up from disk AFTER the
+      // save succeeds — never delete the old file before the new document is
+      // safely persisted, or a failed save would leave the product with no image.
+      const previousImage = def.image;
+      const replacingImage = body.image !== undefined && body.image !== previousImage;
+
+      const allowed = [
+        "name",
+        "trackingMethod",
+        "selectedFields",
+        "status",
+        "companyUseOnly",
+        "gstRate",
+        "unit",
+        "stockAlertThreshold",
+        "image", // NEW
+      ];
       allowed.forEach((key) => {
         if (body[key] !== undefined) def[key] = body[key];
       });
 
       await def.save({ session });
+
+      if (replacingImage && previousImage) {
+        deleteProductImageFile(previousImage);
+      }
+
       return def;
     } catch (error) {
       throw error;
@@ -138,6 +176,10 @@ export default class StockProductDefinitionService {
       def.deletedAt = new Date();
       def.deletedBy = deletedBy ?? null;
       await def.save({ session });
+      // NOTE: the image file is intentionally NOT deleted on soft delete —
+      // soft delete is reversible (restore), so the image must survive it.
+      // Only a real replace (updateProductDefinition) or a future hard-delete
+      // path should ever call deleteProductImageFile().
       return def;
     } catch (error) {
       throw error;
@@ -155,6 +197,17 @@ export default class StockProductDefinitionService {
       def.deletedBy = null;
       await def.save({ session });
       return def;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  static async getGstRates() {
+    try {
+      return GST_RATES_ARRAY.map((rate) => ({
+        value: rate,
+        label: `${rate}%`,
+      }));
     } catch (error) {
       throw error;
     }

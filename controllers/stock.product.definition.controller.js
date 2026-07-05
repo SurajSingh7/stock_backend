@@ -3,6 +3,7 @@ import { successResponseHandler, errorResponseHandler } from "../helpers/respons
 import { getLogger } from "../helpers/logger.helper.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import StockProductDefinitionService from "../services/stock.product.definition.service.js";
+import { toPublicImagePath, deleteProductImageFile } from "../helpers/stock.upload.helper.js";
 import {
   validateCreateProductDefinition,
   validateUpdateProductDefinition,
@@ -10,14 +11,31 @@ import {
 
 const log = getLogger(import.meta.url);
 
+// Requests now arrive as multipart/form-data (to carry the optional image file
+// alongside the rest of the payload), so the JSON body is sent as a single
+// "data" field and parsed here. Plain JSON bodies (no file, no multipart) are
+// still supported as a fallback for callers that never send an image.
+function parseBody(req) {
+  if (req.body && typeof req.body.data === "string") {
+    return JSON.parse(req.body.data);
+  }
+  return req.body || {};
+}
+
 export default class StockProductDefinitionController {
   static async createProductDefinition(req, res) {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      validateCreateProductDefinition(req.body);
+      const body = parseBody(req);
+      validateCreateProductDefinition(body);
+
+      if (req.file) {
+        body.image = toPublicImagePath(req.file.filename);
+      }
+
       const data = await StockProductDefinitionService.createProductDefinition(
-        req.body,
+        body,
         session
       );
       await session.commitTransaction();
@@ -25,6 +43,9 @@ export default class StockProductDefinitionController {
       successResponseHandler(res, data, "Product definition created successfully");
     } catch (error) {
       await session.abortTransaction();
+      // The file was already written to disk by multer before this handler ran —
+      // if the DB write failed, don't leave an orphaned image behind.
+      if (req.file) deleteProductImageFile(toPublicImagePath(req.file.filename));
       log.error("Error creating product definition", error);
       errorResponseHandler(res, error);
     } finally {
@@ -50,6 +71,16 @@ export default class StockProductDefinitionController {
       );
     } catch (error) {
       log.error("Error fetching product definitions", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
+  static async getGstRates(req, res) {
+    try {
+      const data = await StockProductDefinitionService.getGstRates();
+      successResponseHandler(res, data, "GST rates fetched successfully");
+    } catch (error) {
+      log.error("Error fetching GST rates", error);
       errorResponseHandler(res, error);
     }
   }
@@ -80,10 +111,16 @@ export default class StockProductDefinitionController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      validateUpdateProductDefinition(req.body);
+      const body = parseBody(req);
+      validateUpdateProductDefinition(body);
+
+      if (req.file) {
+        body.image = toPublicImagePath(req.file.filename);
+      }
+
       const data = await StockProductDefinitionService.updateProductDefinition(
         req.params.id,
-        req.body,
+        body,
         session
       );
       await session.commitTransaction();
@@ -91,6 +128,7 @@ export default class StockProductDefinitionController {
       successResponseHandler(res, data, "Product definition updated successfully");
     } catch (error) {
       await session.abortTransaction();
+      if (req.file) deleteProductImageFile(toPublicImagePath(req.file.filename));
       log.error("Error updating product definition", error);
       errorResponseHandler(res, error);
     } finally {

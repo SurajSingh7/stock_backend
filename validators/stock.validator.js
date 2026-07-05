@@ -3,6 +3,8 @@ import {
   TRACKING_METHODS_ARRAY,
   ITEM_STATUS_ARRAY,
   CATEGORY_TYPES_ARRAY,
+  UNIT_TYPES_ARRAY,
+  GST_RATES_ARRAY,
 } from "../constants/stock.enums.js";
 
 // ─── Field Definition Validators ─────────────────────────────────────────────
@@ -58,6 +60,26 @@ export const validateReorderCategories = (body) => {
 
 // ─── Product Definition Validators ───────────────────────────────────────────
 
+const validateProductDefinitionExtras = (body) => {
+  const { unit, gstRate, stockAlertThreshold, companyUseOnly } = body;
+
+  if (unit !== undefined && unit !== null && !UNIT_TYPES_ARRAY.includes(unit))
+    throw new Error(`unit must be one of: ${UNIT_TYPES_ARRAY.join(", ")}`);
+
+  if (gstRate !== undefined && gstRate !== null && !GST_RATES_ARRAY.includes(String(gstRate)))
+    throw new Error(`gstRate must be one of: ${GST_RATES_ARRAY.join(", ")}`);
+
+  if (
+    stockAlertThreshold !== undefined &&
+    stockAlertThreshold !== null &&
+    (typeof stockAlertThreshold !== "number" || stockAlertThreshold < 0)
+  )
+    throw new Error("stockAlertThreshold must be a non-negative number");
+
+  if (companyUseOnly !== undefined && typeof companyUseOnly !== "boolean")
+    throw new Error("companyUseOnly must be a boolean");
+};
+
 export const validateCreateProductDefinition = (body) => {
   const { categoryId, name, trackingMethod, selectedFields } = body;
   if (!categoryId) throw new Error("categoryId is required");
@@ -71,10 +93,14 @@ export const validateCreateProductDefinition = (body) => {
     if (!f.fieldDefId) throw new Error(`selectedFields[${i}].fieldDefId is required`);
     if (f.order === undefined) throw new Error(`selectedFields[${i}].order is required`);
   });
+
+  validateProductDefinitionExtras(body);
 };
 
 export const validateUpdateProductDefinition = (body) => {
   if (body.categoryId !== undefined) throw new Error("categoryId cannot be changed after creation");
+  if (body.trackingMethod !== undefined && !TRACKING_METHODS_ARRAY.includes(body.trackingMethod))
+    throw new Error(`trackingMethod must be one of: ${TRACKING_METHODS_ARRAY.join(", ")}`);
   if (body.selectedFields !== undefined) {
     if (!Array.isArray(body.selectedFields) || body.selectedFields.length === 0)
       throw new Error("selectedFields must be a non-empty array");
@@ -83,6 +109,8 @@ export const validateUpdateProductDefinition = (body) => {
       if (f.order === undefined) throw new Error(`selectedFields[${i}].order is required`);
     });
   }
+
+  validateProductDefinitionExtras(body);
 };
 
 // ─── Inventory Item Validators ────────────────────────────────────────────────

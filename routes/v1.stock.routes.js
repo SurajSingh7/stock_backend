@@ -3,6 +3,7 @@ import StockCategoryController from "../controllers/stock.category.controller.js
 import StockFieldDefinitionController from "../controllers/stock.field.definition.controller.js";
 import StockProductDefinitionController from "../controllers/stock.product.definition.controller.js";
 import StockInventoryItemController from "../controllers/stock.inventory.item.controller.js";
+import { uploadProductImage } from "../helpers/stock.upload.helper.js";
 
 const router = express.Router();
 
@@ -27,11 +28,23 @@ router.delete("/categories/:id", StockCategoryController.softDeleteCategory);
 router.patch("/categories/:id/restore", StockCategoryController.restoreCategory);
 
 // ─── Product Definitions ──────────────────────────────────────────────────────
-router.post("/product-definitions", StockProductDefinitionController.createProductDefinition);
+// NEW — uploadProductImage.single("image") parses multipart/form-data, populates
+// req.file (the image, if sent) and req.body.data (the JSON payload string).
+// See parseBody() in stock.product.definition.controller.js.
+router.post(
+  "/product-definitions",
+  uploadProductImage.single("image"),
+  StockProductDefinitionController.createProductDefinition
+);
 router.get("/product-definitions", StockProductDefinitionController.getAllProductDefinitions);
+router.get("/product-definitions/gst-rates", StockProductDefinitionController.getGstRates);
 router.get("/product-definitions/by-category/:catId", StockProductDefinitionController.getProductDefinitionsByCategory);
 router.get("/product-definitions/:id", StockProductDefinitionController.getProductDefinitionById);
-router.put("/product-definitions/:id", StockProductDefinitionController.updateProductDefinition);
+router.put(
+  "/product-definitions/:id",
+  uploadProductImage.single("image"),
+  StockProductDefinitionController.updateProductDefinition
+);
 router.delete("/product-definitions/:id", StockProductDefinitionController.softDeleteProductDefinition);
 router.patch("/product-definitions/:id/restore", StockProductDefinitionController.restoreProductDefinition);
 
