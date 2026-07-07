@@ -4,6 +4,7 @@ import StockFieldDefinitionController from "../controllers/stock.field.definitio
 import StockProductDefinitionController from "../controllers/stock.product.definition.controller.js";
 import StockInventoryItemController from "../controllers/stock.inventory.item.controller.js";
 import { uploadProductImage } from "../helpers/stock.upload.helper.js";
+import StockVendorController from "../controllers/stock.vendor.controller.js";
 
 const router = express.Router();
 
@@ -47,6 +48,17 @@ router.put(
 );
 router.delete("/product-definitions/:id", StockProductDefinitionController.softDeleteProductDefinition);
 router.patch("/product-definitions/:id/restore", StockProductDefinitionController.restoreProductDefinition);
+
+// ─── Vendor ──────────────────────────────────────────────────────────
+
+router.post("/vendors", StockVendorController.createVendor);
+router.get("/vendors", StockVendorController.getAllVendors);
+router.get("/vendors/:id", StockVendorController.getVendorById);
+router.put("/vendors/:id", StockVendorController.updateVendor);
+router.delete("/vendors/:id", StockVendorController.softDeleteVendor);
+router.patch("/vendors/:id/restore", StockVendorController.restoreVendor);
+
+
 
 // ─── Inventory Items ──────────────────────────────────────────────────────────
 router.post("/inventory-items/bulk", StockInventoryItemController.bulkCreateInventoryItems);

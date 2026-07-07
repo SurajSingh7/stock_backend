@@ -15,10 +15,9 @@ const stockFieldDefinitionSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    order:
-    {
+    order: {
       type: Number,
-      default: 0
+      default: 0,
     },
     inputType: {
       type: String,
@@ -56,9 +55,11 @@ const stockFieldDefinitionSchema = new mongoose.Schema(
 stockFieldDefinitionSchema.index({ code: 1 }, { unique: true });
 stockFieldDefinitionSchema.index({ isActive: 1 });
 
+// 3rd arg pins the collection explicitly — no pluralization guessing.
 const StockFieldDefinitionModel = mongoose.model(
-  "stock_field_definitions",
-  stockFieldDefinitionSchema
+  "field_definitions",
+  stockFieldDefinitionSchema,
+  "field_definitions"
 );
 
 export default StockFieldDefinitionModel;

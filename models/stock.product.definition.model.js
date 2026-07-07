@@ -10,7 +10,7 @@ const selectedFieldSchema = new mongoose.Schema(
   {
     fieldDefId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "stock_field_definitions",
+      ref: "field_definitions", // ← was "stock_field_definitions"
       required: true,
     },
     isRequired: {
@@ -29,7 +29,7 @@ const stockProductDefinitionSchema = new mongoose.Schema(
   {
     categoryId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "stock_categories",
+      ref: "categories", // ← was "stock_categories"
       required: true,
     },
     name: {
@@ -69,7 +69,7 @@ const stockProductDefinitionSchema = new mongoose.Schema(
     },
     // ───────────────────────────────────────────────────
 
-    // ── NEW — product image ──
+    // ── Product image ──
     // Stores a relative public path (e.g. "/uploads/stock/products/product_xxx.jpg"),
     // set by the controller after multer saves the file to disk. Never store an
     // absolute filesystem path here — see stock.upload.helper.js.
@@ -104,9 +104,11 @@ stockProductDefinitionSchema.index({ categoryId: 1, isActive: 1 });
 stockProductDefinitionSchema.index({ trackingMethod: 1 });
 stockProductDefinitionSchema.index({ name: 1 });
 
+// 3rd arg pins the collection explicitly — no pluralization guessing.
 const StockProductDefinitionModel = mongoose.model(
-  "stock_product_definitions",
-  stockProductDefinitionSchema
+  "product_definitions",
+  stockProductDefinitionSchema,
+  "product_definitions"
 );
 
 export default StockProductDefinitionModel;

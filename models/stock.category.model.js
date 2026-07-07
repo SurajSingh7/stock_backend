@@ -20,7 +20,7 @@ const stockCategorySchema = new mongoose.Schema(
     },
     parentId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "stock_categories",
+      ref: "categories", // ← was "stock_categories"
       default: null,
     },
     path: {
@@ -67,6 +67,11 @@ stockCategorySchema.index(
   }
 );
 
-const StockCategoryModel = mongoose.model("stock_categories", stockCategorySchema);
+// 3rd arg pins the collection explicitly — no pluralization guessing.
+const StockCategoryModel = mongoose.model(
+  "categories",
+  stockCategorySchema,
+  "categories"
+);
 
 export default StockCategoryModel;

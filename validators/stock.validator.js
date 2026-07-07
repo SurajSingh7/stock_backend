@@ -135,3 +135,65 @@ export const validateUpdateItemStatus = (body) => {
   if (!ITEM_STATUS_ARRAY.includes(status))
     throw new Error(`status must be one of: ${ITEM_STATUS_ARRAY.join(", ")}`);
 };
+
+
+export const validateCreateVendor = (body) => {
+  const { name, paymentTerms, contacts, address, bankAccounts, gst } = body || {};
+
+  if (!name || !String(name).trim()) throw new Error("name is required");
+  if (!paymentTerms || !String(paymentTerms).trim()) {
+    throw new Error("paymentTerms is required");
+  }
+
+  // Contacts — PRIMARY is mandatory, cannot be removed by the frontend either
+  if (!Array.isArray(contacts) || contacts.length === 0) {
+    throw new Error("At least one contact is required");
+  }
+  const primaryContact = contacts.find((c) => c?.label === "PRIMARY");
+  if (!primaryContact) throw new Error("PRIMARY contact is required");
+  contacts.forEach((c) => {
+    const label = c?.label || "Contact";
+    if (!c?.name || !String(c.name).trim()) throw new Error(`${label}: name is required`);
+    if (!c?.email || !String(c.email).trim()) throw new Error(`${label}: email is required`);
+    if (!c?.phone || !String(c.phone).trim()) throw new Error(`${label}: phone is required`);
+  });
+
+  // Address
+  if (!address || !address.fullAddress || !String(address.fullAddress).trim()) {
+    throw new Error("address.fullAddress is required");
+  }
+  if (!address.area || !String(address.area).trim()) throw new Error("address.area is required");
+  if (!address.city || !String(address.city).trim()) throw new Error("address.city is required");
+  if (!address.pinCode || !String(address.pinCode).trim()) {
+    throw new Error("address.pinCode is required");
+  }
+
+  // Bank accounts — PRIMARY is mandatory
+  if (!Array.isArray(bankAccounts) || bankAccounts.length === 0) {
+    throw new Error("At least one bank account is required");
+  }
+  const primaryBank = bankAccounts.find((b) => b?.label === "PRIMARY");
+  if (!primaryBank) throw new Error("PRIMARY bank account is required");
+  bankAccounts.forEach((b) => {
+    const label = b?.label || "Bank account";
+    if (!b?.ifsc || !String(b.ifsc).trim()) throw new Error(`${label}: ifsc is required`);
+    if (!b?.accountNumber || !String(b.accountNumber).trim()) {
+      throw new Error(`${label}: accountNumber is required`);
+    }
+  });
+
+  // GST — only required when the user says GST is available
+  if (gst && gst.isAvailable) {
+    if (!gst.gstNumber || !String(gst.gstNumber).trim()) {
+      throw new Error("gst.gstNumber is required when GST is available");
+    }
+  }
+};
+
+export const validateUpdateVendor = (body) => {
+  // Mirrors Rule 10 (fieldDefinition.code immutability) for vendorCode.
+  if (Object.prototype.hasOwnProperty.call(body || {}, "vendorCode")) {
+    throw new Error("vendorCode cannot be updated once set");
+  }
+  validateCreateVendor(body);
+};
