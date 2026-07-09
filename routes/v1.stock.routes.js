@@ -5,6 +5,7 @@ import StockProductDefinitionController from "../controllers/stock.product.defin
 import StockInventoryItemController from "../controllers/stock.inventory.item.controller.js";
 import { uploadProductImage } from "../helpers/stock.upload.helper.js";
 import StockVendorController from "../controllers/stock.vendor.controller.js";
+import StockQuotationController from "../controllers/stock.quotation.controller.js";
 
 const router = express.Router();
 
@@ -29,9 +30,6 @@ router.delete("/categories/:id", StockCategoryController.softDeleteCategory);
 router.patch("/categories/:id/restore", StockCategoryController.restoreCategory);
 
 // ─── Product Definitions ──────────────────────────────────────────────────────
-// NEW — uploadProductImage.single("image") parses multipart/form-data, populates
-// req.file (the image, if sent) and req.body.data (the JSON payload string).
-// See parseBody() in stock.product.definition.controller.js.
 router.post(
   "/product-definitions",
   uploadProductImage.single("image"),
@@ -50,15 +48,12 @@ router.delete("/product-definitions/:id", StockProductDefinitionController.softD
 router.patch("/product-definitions/:id/restore", StockProductDefinitionController.restoreProductDefinition);
 
 // ─── Vendor ──────────────────────────────────────────────────────────
-
 router.post("/vendors", StockVendorController.createVendor);
 router.get("/vendors", StockVendorController.getAllVendors);
 router.get("/vendors/:id", StockVendorController.getVendorById);
 router.put("/vendors/:id", StockVendorController.updateVendor);
 router.delete("/vendors/:id", StockVendorController.softDeleteVendor);
 router.patch("/vendors/:id/restore", StockVendorController.restoreVendor);
-
-
 
 // ─── Inventory Items ──────────────────────────────────────────────────────────
 router.post("/inventory-items/bulk", StockInventoryItemController.bulkCreateInventoryItems);
@@ -70,5 +65,19 @@ router.put("/inventory-items/:id", StockInventoryItemController.updateInventoryI
 router.patch("/inventory-items/:id/status", StockInventoryItemController.updateItemStatus);
 router.delete("/inventory-items/:id", StockInventoryItemController.softDeleteInventoryItem);
 router.patch("/inventory-items/:id/restore", StockInventoryItemController.restoreInventoryItem);
+
+// ─── Quotations ────────────────────────────────────────────────────────────────
+// Specific string paths are declared BEFORE "/:id" so Express doesn't treat them
+// as an id (same pattern as /categories/flat).
+router.post("/quotations", StockQuotationController.createQuotation);
+router.get("/quotations", StockQuotationController.getAllQuotations);
+router.get("/quotations/status-summary", StockQuotationController.getStatusSummary);
+router.get("/quotations/vendors-for-category/:catId", StockQuotationController.getVendorsForCategory);
+router.get("/quotations/:id", StockQuotationController.getQuotationById);
+router.put("/quotations/:id", StockQuotationController.updateQuotation);
+// Approver submits one decision per category, all at once.
+router.patch("/quotations/:id/review", StockQuotationController.reviewQuotation);
+router.delete("/quotations/:id", StockQuotationController.softDeleteQuotation);
+router.patch("/quotations/:id/restore", StockQuotationController.restoreQuotation);
 
 export default router;

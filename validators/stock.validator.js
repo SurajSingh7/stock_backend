@@ -5,7 +5,9 @@ import {
   CATEGORY_TYPES_ARRAY,
   UNIT_TYPES_ARRAY,
   GST_RATES_ARRAY,
+  CATEGORY_APPROVAL_STATUS_ARRAY,
 } from "../constants/stock.enums.js";
+
 
 // ─── Field Definition Validators ─────────────────────────────────────────────
 
@@ -136,6 +138,7 @@ export const validateUpdateItemStatus = (body) => {
     throw new Error(`status must be one of: ${ITEM_STATUS_ARRAY.join(", ")}`);
 };
 
+// ─── Vendor Validators ────────────────────────────────────────────────────────
 
 export const validateCreateVendor = (body) => {
   const { name, paymentTerms, contacts, address, bankAccounts, gst } = body || {};
@@ -145,7 +148,6 @@ export const validateCreateVendor = (body) => {
     throw new Error("paymentTerms is required");
   }
 
-  // Contacts — PRIMARY is mandatory, cannot be removed by the frontend either
   if (!Array.isArray(contacts) || contacts.length === 0) {
     throw new Error("At least one contact is required");
   }
@@ -158,7 +160,6 @@ export const validateCreateVendor = (body) => {
     if (!c?.phone || !String(c.phone).trim()) throw new Error(`${label}: phone is required`);
   });
 
-  // Address
   if (!address || !address.fullAddress || !String(address.fullAddress).trim()) {
     throw new Error("address.fullAddress is required");
   }
@@ -168,7 +169,6 @@ export const validateCreateVendor = (body) => {
     throw new Error("address.pinCode is required");
   }
 
-  // Bank accounts — PRIMARY is mandatory
   if (!Array.isArray(bankAccounts) || bankAccounts.length === 0) {
     throw new Error("At least one bank account is required");
   }
@@ -182,7 +182,6 @@ export const validateCreateVendor = (body) => {
     }
   });
 
-  // GST — only required when the user says GST is available
   if (gst && gst.isAvailable) {
     if (!gst.gstNumber || !String(gst.gstNumber).trim()) {
       throw new Error("gst.gstNumber is required when GST is available");
@@ -191,9 +190,89 @@ export const validateCreateVendor = (body) => {
 };
 
 export const validateUpdateVendor = (body) => {
-  // Mirrors Rule 10 (fieldDefinition.code immutability) for vendorCode.
   if (Object.prototype.hasOwnProperty.call(body || {}, "vendorCode")) {
     throw new Error("vendorCode cannot be updated once set");
   }
   validateCreateVendor(body);
+};
+
+// ─── Quotation Validators ─────────────────────────────────────────────────────
+
+const isNonEmptyString = (v) => typeof v === "string" && v.trim().length > 0;
+const isPositiveNumber = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
+const isNonNegativeNumber = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
+
+export const validateCreateQuotation = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+
+  const { items } = body;
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error("At least one product must be selected");
+  }
+
+  items.forEach((item, idx) => {
+    const where = `Item ${idx + 1}`;
+    if (!isNonEmptyString(item.productDefinitionId)) {
+      throw new Error(`${where}: productDefinitionId is required`);
+    }
+    if (!isNonEmptyString(item.vendorId)) throw new Error(`${where}: vendorId is required`);
+    if (!isNonEmptyString(item.categoryId)) throw new Error(`${where}: categoryId is required`);
+    if (!isPositiveNumber(item.quantity)) {
+      throw new Error(`${where}: quantity must be greater than 0`);
+    }
+    if (!isNonNegativeNumber(item.unitPrice)) {
+      throw new Error(`${where}: price must be 0 or greater`);
+    }
+  });
+};
+
+/*
+  Approval submit — one decision per category, all at once. Shape check only;
+  the service enforces "every category decided" and "selection belongs to the
+  category" against the actual quotation.
+
+  decisions: [
+    { categoryId, status: "APPROVED",
+      selection: { productDefinitionId, vendorId }, remarks? },
+    { categoryId, status: "REJECTED", remarks? }
+  ]
+*/
+export const validateReviewQuotation = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+
+  const { decisions } = body;
+  if (!Array.isArray(decisions) || decisions.length === 0) {
+    throw new Error("decisions must be a non-empty array");
+  }
+
+  const seen = new Set();
+  decisions.forEach((d, idx) => {
+    const where = `Decision ${idx + 1}`;
+    if (!isNonEmptyString(d.categoryId)) throw new Error(`${where}: categoryId is required`);
+    if (seen.has(d.categoryId)) throw new Error("Each category can be decided only once");
+    seen.add(d.categoryId);
+
+    if (!CATEGORY_APPROVAL_STATUS_ARRAY.includes(d.status)) {
+      throw new Error(
+        `${where}: status must be one of: ${CATEGORY_APPROVAL_STATUS_ARRAY.join(", ")}`
+      );
+    }
+    if (d.remarks !== undefined && typeof d.remarks !== "string") {
+      throw new Error(`${where}: remarks must be a string`);
+    }
+
+    if (d.status === "APPROVED") {
+      const sel = d.selection;
+      // Exactly one product + one vendor per approved category (current rule).
+      if (!sel || typeof sel !== "object" || Array.isArray(sel)) {
+        throw new Error(`${where}: an approved category needs one product + vendor selection`);
+      }
+      if (!isNonEmptyString(sel.productDefinitionId)) {
+        throw new Error(`${where}: selection.productDefinitionId is required`);
+      }
+      if (!isNonEmptyString(sel.vendorId)) {
+        throw new Error(`${where}: selection.vendorId is required`);
+      }
+    }
+  });
 };

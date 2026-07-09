@@ -20,6 +20,7 @@ export const TRACKING_METHODS = {
 
 export const TRACKING_METHODS_ARRAY = Object.values(TRACKING_METHODS);
 
+// Inventory-item physical status (NOT quotations).
 export const ITEM_STATUS = {
   AVAILABLE: "AVAILABLE",
   ALLOCATED: "ALLOCATED",
@@ -43,6 +44,7 @@ export const PRODUCT_DEF_STATUS = {
 };
 
 export const PRODUCT_DEF_STATUS_ARRAY = Object.values(PRODUCT_DEF_STATUS);
+
 export const UNIT_TYPES = {
   PIECES: "pieces",
   METER: "meter",
@@ -54,3 +56,29 @@ export const UNIT_TYPES = {
 
 export const UNIT_TYPES_ARRAY = Object.values(UNIT_TYPES);
 export const GST_RATES_ARRAY = ["0", "5", "12", "18", "28"];
+
+// ─── Quotation status ─────────────────────────────────────────────────────────
+// DERIVED from categoryApprovals[] and re-stored on review:
+//   no decisions yet                 -> PENDING
+//   every category APPROVED          -> APPROVED
+//   every category REJECTED          -> REJECTED
+//   a mix of APPROVED + REJECTED     -> PARTIALLY_APPROVED
+export const QUOTATION_STATUS = {
+  PENDING: "PENDING",
+  APPROVED: "APPROVED",
+  PARTIALLY_APPROVED: "PARTIALLY_APPROVED",
+  REJECTED: "REJECTED",
+};
+
+export const QUOTATION_STATUS_ARRAY = Object.values(QUOTATION_STATUS);
+
+// Per-CATEGORY decision (stored in quotation.categoryApprovals[].status).
+export const CATEGORY_APPROVAL_STATUS = {
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+};
+
+export const CATEGORY_APPROVAL_STATUS_ARRAY = Object.values(CATEGORY_APPROVAL_STATUS);
+
+// Placeholder shown when a snapshot has no source yet (no history / no reviews).
+export const EMPTY_SNAPSHOT_DISPLAY = "-";
