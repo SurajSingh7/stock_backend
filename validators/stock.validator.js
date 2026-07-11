@@ -276,3 +276,39 @@ export const validateReviewQuotation = (body) => {
     }
   });
 };
+
+
+export const validateCreatePurchaseOrder = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!body.sourceQuotationId || typeof body.sourceQuotationId !== "string")
+    throw new Error("sourceQuotationId is required");
+  if (!body.vendorId || typeof body.vendorId !== "string")
+    throw new Error("vendorId is required");
+  if (!Array.isArray(body.quotationItemIds) || body.quotationItemIds.length === 0)
+    throw new Error("Select at least one item for the PO");
+  if (!body.buyerEntity || typeof body.buyerEntity !== "object")
+    throw new Error("Entity (buyer) is required");
+  if (!body.buyerEntity.stateCode)
+    throw new Error("Entity state code is required (for GST split)");
+  if (!body.requester || !String(body.requester).trim())
+    throw new Error("Requester is required");
+  if (body.skippedItems !== undefined) {
+    if (!Array.isArray(body.skippedItems)) throw new Error("skippedItems must be an array");
+    body.skippedItems.forEach((s, i) => {
+      if (!s || !s.itemId) throw new Error(`skippedItems[${i}].itemId is required`);
+      if (!s.reason || !String(s.reason).trim())
+        throw new Error(`A reason is required for every skipped item`);
+    });
+  }
+};
+
+export const validateDisableVendor = (body) => {
+  if (!body?.vendorId) throw new Error("vendorId is required");
+  if (!body?.reason || !String(body.reason).trim()) throw new Error("A reason is required");
+};
+
+export const validateRejectPurchaseOrder = (body) => {
+  if (body && body.rejectedReason !== undefined && typeof body.rejectedReason !== "string") {
+    throw new Error("rejectedReason must be a string");
+  }
+};

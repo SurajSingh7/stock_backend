@@ -1,0 +1,679 @@
+import mongoose from "mongoose";
+
+import StockPurchaseOrderModel from "../models/stock.purchase.order.model.js";
+import StockQuotationModel from "../models/stock.quotation.model.js";
+import StockVendorModel from "../models/stock.vendor.model.js";
+import "../models/stock.category.model.js";
+import "../models/stock.product.definition.model.js";
+
+import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
+import { getLogger } from "../helpers/logger.helper.js";
+import { generatePOPdf } from "../helpers/stock.po.pdf.helper.js";
+import { PO_STATUS, PO_TAX_TYPE, QUOTATION_STATUS } from "../constants/stock.enums.js";
+
+const log = getLogger(import.meta.url);
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+export default class StockPurchaseOrderService {
+  static async generatePONumber(session) {
+    const year = new Date().getFullYear();
+    const prefix = `PO-${year}-`;
+    const count = await StockPurchaseOrderModel.countDocuments({
+      poNumber: new RegExp(`^${prefix}`),
+    }).session(session);
+    return `${prefix}${String(count + 1).padStart(4, "0")}`;
+  }
+
+  static vendorStateCode(vendor) {
+    return (
+      vendor?.gst?.state?.code ||
+      vendor?.address?.state?.code ||
+      ""
+    );
+  }
+
+  // CGST+SGST when buyer & vendor share a state code, else IGST.
+  static computeLineTax(taxable, gstRate, taxType) {
+    const gstAmount = round2((taxable * (gstRate || 0)) / 100);
+    if (taxType === PO_TAX_TYPE.CGST_SGST) {
+      const half = round2(gstAmount / 2);
+      return { cgst: half, sgst: half, igst: 0, gstAmount: round2(half * 2) };
+    }
+    return { cgst: 0, sgst: 0, igst: gstAmount, gstAmount };
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Candidates — approved selections not yet on a PO, grouped by vendor     */
+  /* ---------------------------------------------------------------------- */
+
+  static async getCandidates(query = {}) {
+    const filter = {
+      isActive: true,
+      status: { $in: [QUOTATION_STATUS.APPROVED, QUOTATION_STATUS.PARTIALLY_APPROVED] },
+    };
+    if (query.sourceQuotationId) filter._id = query.sourceQuotationId;
+
+    const quotations = await StockQuotationModel.find(filter)
+      .select("quotationNumber items categoryApprovals")
+      .lean();
+
+    const groups = [];
+    quotations.forEach((q) => {
+      // map itemId -> item (to read poId + snapshot)
+      const itemById = new Map((q.items || []).map((it) => [String(it._id), it]));
+
+      const byVendor = new Map();
+      (q.categoryApprovals || [])
+        .filter((ca) => ca.status === "APPROVED")
+        .forEach((ca) => {
+          (ca.selections || []).forEach((sel) => {
+            const item = itemById.get(String(sel.itemId));
+            if (!item || item.poId || item.poSkipped) return; // already on a PO, or permanently skipped
+            const vId = String(sel.vendorId);
+            if (!byVendor.has(vId)) {
+              byVendor.set(vId, {
+                sourceQuotationId: q._id,
+                quotationNumber: q.quotationNumber,
+                vendorId: sel.vendorId,
+                vendorName: sel.vendorName,
+                items: [],
+              });
+            }
+            byVendor.get(vId).items.push({
+              quotationItemId: sel.itemId,
+              categoryId: ca.categoryId,
+              categoryName: ca.categoryName,
+              productDefinitionId: sel.productDefinitionId,
+              productName: sel.productName,
+              quantity: sel.quantity,
+              unitPrice: sel.unitPrice,
+              gstRate: sel.gstRate,
+              lineTotal: sel.lineTotal,
+            });
+          });
+        });
+
+      byVendor.forEach((g) => {
+        if (g.items.length) groups.push(g);
+      });
+    });
+
+    return groups;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Board — one entry per quotation, each with vendor sections              */
+  /* ---------------------------------------------------------------------- */
+
+
+static async getBoard(query = {}) {
+  const { search, vendorId, categoryId, productId, entityAlias, status, dateFrom, dateTo } = query;
+
+  const qFilter = {
+    isActive: true,
+    status: { $in: [QUOTATION_STATUS.APPROVED, QUOTATION_STATUS.PARTIALLY_APPROVED] },
+  };
+  if (query.sourceQuotationId) qFilter._id = query.sourceQuotationId;
+
+  const quotations = await StockQuotationModel.find(qFilter)
+    .select("quotationNumber items categoryApprovals disabledVendors updatedAt")
+    .lean();
+
+  const vendorIds = new Set();
+  quotations.forEach((q) =>
+    (q.categoryApprovals || [])
+      .filter((c) => c.status === "APPROVED")
+      .forEach((ca) => (ca.selections || []).forEach((s) => vendorIds.add(String(s.vendorId))))
+  );
+  const vendors = await StockVendorModel.find({ _id: { $in: [...vendorIds] } }).lean();
+  const vendorMap = new Map(vendors.map((v) => [String(v._id), v]));
+
+  const quotationIds = quotations.map((q) => q._id);
+  const pos = await StockPurchaseOrderModel.find({ sourceQuotationId: { $in: quotationIds }, isActive: true })
+    .select("poNumber status grandTotal vendorId sourceQuotationId items buyerEntity createdAt updatedAt reviewedAt rejectedReason")
+    .lean();
+  const poByKey = new Map();
+  pos.forEach((po) => poByKey.set(`${po.sourceQuotationId}::${po.vendorId}`, po));
+
+  // ── build the full board (unfiltered) ────────────────────────────────────
+  const fullBoard = [];
+  quotations.forEach((q) => {
+    const itemById = new Map((q.items || []).map((it) => [String(it._id), it]));
+    const disabledMap = new Map((q.disabledVendors || []).map((d) => [String(d.vendorId), d]));
+
+    let approvalDate = null;
+    (q.categoryApprovals || []).forEach((ca) => {
+      if (ca.decidedAt && (!approvalDate || new Date(ca.decidedAt) > new Date(approvalDate))) approvalDate = ca.decidedAt;
+    });
+
+    const byVendor = new Map();
+    (q.categoryApprovals || [])
+      .filter((c) => c.status === "APPROVED")
+      .forEach((ca) =>
+        (ca.selections || []).forEach((sel) => {
+          const item = itemById.get(String(sel.itemId));
+          if (!item) return;
+          const vId = String(sel.vendorId);
+          if (!byVendor.has(vId)) {
+            const v = vendorMap.get(vId) || {};
+            const primary = (v.contacts || []).find((c) => c.label === "PRIMARY") || (v.contacts || [])[0] || {};
+            const d = disabledMap.get(vId);
+            byVendor.set(vId, {
+              vendorId: vId, vendorName: sel.vendorName || v.name || "",
+              phone: primary.phone || "", email: primary.email || "",
+              gstNumber: v.gst?.gstNumber || "", address: v.address?.fullAddress || "",
+              state: v.gst?.state?.name || v.address?.state?.name || "",
+              stateCode: v.gst?.state?.code || v.address?.state?.code || "",
+              paymentTerms: v.paymentTerms || "",
+              disabled: Boolean(d), disabledReason: d?.reason || "",
+              _pending: [],
+              _skipped: [],
+            });
+          }
+          const row = byVendor.get(vId);
+          const qty = sel.quantity, price = sel.unitPrice, gstRate = sel.gstRate;
+          const taxable = round2(qty * price);
+          const gstAmount = round2((taxable * gstRate) / 100);
+          const lineTotal = round2(taxable + gstAmount);
+          const detail = {
+            quotationItemId: item._id, categoryId: ca.categoryId, categoryName: ca.categoryName,
+            productDefinitionId: sel.productDefinitionId, productName: sel.productName,
+            quantity: qty, unitPrice: price, gstRate, taxable, gstAmount, lineTotal,
+          };
+          if (item.poSkipped) row._skipped.push({ ...detail, poSkipReason: item.poSkipReason || "" });
+          else if (!item.poId) row._pending.push(detail);
+        })
+      );
+
+    const rows = [];
+    byVendor.forEach((row, vId) => {
+      const po = poByKey.get(`${q._id}::${vId}`);
+      let statusVal, items, poId = null, poNumber = "", entityAlias = "";
+      let totalAmount = 0, totalQuantity = 0, rejectedReason = "", filterDate = approvalDate;
+
+      if (po) {
+        poId = po._id; poNumber = po.poNumber; statusVal = po.status; entityAlias = po.buyerEntity?.alias || "";
+        items = (po.items || []).map((it) => ({
+          quotationItemId: it.quotationItemId, categoryId: it.categoryId, categoryName: it.categoryName,
+          productDefinitionId: it.productDefinitionId, productName: it.productName,
+          quantity: it.quantity, unitPrice: it.unitPrice, gstRate: it.gstRate,
+          taxable: it.taxable, gstAmount: it.gstAmount, lineTotal: it.lineTotal,
+        }));
+        totalAmount = po.grandTotal;
+        totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
+        rejectedReason = po.rejectedReason || "";
+        filterDate = po.status === "GENERATED" ? po.createdAt : (po.reviewedAt || po.updatedAt || po.createdAt);
+      } else {
+        statusVal = "PO_PENDING"; items = row._pending;
+        totalAmount = round2(items.reduce((s, i) => s + (i.lineTotal || 0), 0));
+        totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
+        filterDate = approvalDate;
+      }
+
+      if (!po && items.length === 0 && row._skipped.length === 0) return;
+
+      const catIds = [...new Set(items.map((i) => String(i.categoryId)).filter(Boolean))];
+      const prodIds = [...new Set(items.map((i) => String(i.productDefinitionId)).filter(Boolean))];
+
+      rows.push({
+        vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email,
+        gstNumber: row.gstNumber, address: row.address, state: row.state, stateCode: row.stateCode,
+        paymentTerms: row.paymentTerms,
+        poId, poNumber, status: statusVal, entityAlias,
+        items, totalAmount, totalQuantity, skipped: row._skipped, filterDate,
+        disabled: row.disabled, disabledReason: row.disabledReason, rejectedReason,
+        _catIds: catIds, _prodIds: prodIds,
+      });
+    });
+
+    if (rows.length) {
+      fullBoard.push({
+        sourceQuotationId: q._id, quotationNumber: q.quotationNumber,
+        quotationApprovalDate: approvalDate, vendorCount: rows.length, rows,
+      });
+    }
+  });
+
+  // ── server-side filters ───────────────────────────────────────────────────
+  const t = search ? String(search).toLowerCase().trim() : "";
+  const from = dateFrom ? new Date(dateFrom) : null;
+  const to = dateTo ? new Date(dateTo + "T23:59:59") : null;
+
+  const rowPass = (row, quotationNumber, ignoreStatus) => {
+    if (!ignoreStatus && status && row.status !== status) return false;
+    if (vendorId && String(row.vendorId) !== String(vendorId)) return false;
+    if (entityAlias && (row.entityAlias || "") !== entityAlias) return false;
+    if (categoryId && !row._catIds.includes(String(categoryId))) return false;
+    if (productId && !row._prodIds.includes(String(productId))) return false;
+    if (t) {
+      const hit =
+        (quotationNumber || "").toLowerCase().includes(t) ||
+        (row.poNumber || "").toLowerCase().includes(t) ||
+        (row.vendorName || "").toLowerCase().includes(t) ||
+        row.items.some((it) => (it.productName || "").toLowerCase().includes(t));
+      if (!hit) return false;
+    }
+    if (from && (!row.filterDate || new Date(row.filterDate) < from)) return false;
+    if (to && (!row.filterDate || new Date(row.filterDate) > to)) return false;
+    return true;
+  };
+
+  // counts: every filter EXCEPT status
+  const counts = { ALL: 0, PO_PENDING: 0, GENERATED: 0, APPROVED: 0, REJECTED: 0 };
+  fullBoard.forEach((q) =>
+    q.rows.forEach((r) => {
+      if (rowPass(r, q.quotationNumber, true)) {
+        counts.ALL += 1;
+        if (counts[r.status] !== undefined) counts[r.status] += 1;
+      }
+    })
+  );
+
+  // final filtered board (incl status); strip internal fields
+  const filteredBoard = fullBoard
+    .map((q) => ({
+      ...q,
+      rows: q.rows
+        .filter((r) => rowPass(r, q.quotationNumber, false))
+        .map(({ _catIds, _prodIds, ...r }) => r),
+    }))
+    .filter((q) => q.rows.length > 0);
+
+  // pagination — page the QUOTATION CARDS (counts stay global for the filter set)
+  const { skip, limit, page } = paginate(query);
+  const total = filteredBoard.length;
+  const board = filteredBoard.slice(skip, skip + limit);
+
+  // successResponseHandler flattens `.pagination` to the top level and sets
+  // response.data to `.data` — so board + counts must live inside `data`,
+  // else they get dropped.
+  return {
+    data: { board, counts },
+    pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+  };
+}
+
+  /* Disable / enable a vendor on a quotation (admin). Disabled = hidden from PO flow. */
+  static async disableVendor(quotationId, payload, user, session) {
+    const { vendorId, reason } = payload || {};
+    const quotation = await StockQuotationModel.findOne({ _id: quotationId, isActive: true }).session(session);
+    if (!quotation) throw new Error("Quotation not found");
+    if (!vendorId) throw new Error("vendorId is required");
+    if (!reason || !String(reason).trim()) throw new Error("A reason is required to disable a vendor");
+
+    const exists = (quotation.disabledVendors || []).some((d) => String(d.vendorId) === String(vendorId));
+    if (!exists) {
+      const item = quotation.items.find((it) => String(it.vendorId) === String(vendorId));
+      quotation.disabledVendors.push({
+        vendorId,
+        vendorName: item?.vendorName || "",
+        reason: String(reason).trim(),
+        disabledBy: user?.id || user?._id || null,
+        disabledByName: user?.name || "",
+        disabledAt: new Date(),
+      });
+      await quotation.save({ session });
+    }
+    return quotation;
+  }
+
+  static async enableVendor(quotationId, vendorId, user, session) {
+    const quotation = await StockQuotationModel.findOne({ _id: quotationId, isActive: true }).session(session);
+    if (!quotation) throw new Error("Quotation not found");
+    quotation.disabledVendors = (quotation.disabledVendors || []).filter(
+      (d) => String(d.vendorId) !== String(vendorId)
+    );
+    await quotation.save({ session });
+    return quotation;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Create — one PO from the given quotation item ids (all same vendor)     */
+  /* ---------------------------------------------------------------------- */
+
+  static async createPurchaseOrder(body, user, session) {
+    const {
+      sourceQuotationId,
+      vendorId,
+      quotationItemIds,
+      skippedItems,
+      buyerEntity,
+      requester,
+      poDate,
+      shipmentPreference,
+      terms,
+      notes,
+    } = body;
+
+    const quotation = await StockQuotationModel.findOne({
+      _id: sourceQuotationId,
+      isActive: true,
+    }).session(session);
+    if (!quotation) throw new Error("Source quotation not found");
+
+    const vendor = await StockVendorModel.findOne({
+      _id: vendorId,
+      isActive: true,
+    })
+      .session(session)
+      .lean();
+    if (!vendor) throw new Error("Vendor not found or inactive");
+
+    // Collect the approved-selection snapshots for the requested item ids.
+    const wantIds = new Set((quotationItemIds || []).map(String));
+    const selByItemId = new Map();
+    (quotation.categoryApprovals || [])
+      .filter((ca) => ca.status === "APPROVED")
+      .forEach((ca) =>
+        (ca.selections || []).forEach((sel) => {
+          selByItemId.set(String(sel.itemId), { ca, sel });
+        })
+      );
+
+    if (wantIds.size === 0) throw new Error("Select at least one item for the PO");
+
+    const buyerStateCode = String(buyerEntity?.stateCode || "");
+    const vendorStateCode = String(StockPurchaseOrderService.vendorStateCode(vendor));
+    const taxType =
+      buyerStateCode && buyerStateCode === vendorStateCode
+        ? PO_TAX_TYPE.CGST_SGST
+        : PO_TAX_TYPE.IGST;
+
+    const items = [];
+    let subTotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0;
+
+    for (const itemId of wantIds) {
+      const found = selByItemId.get(itemId);
+      if (!found) throw new Error("An item is not an approved selection of this quotation");
+
+      const item = quotation.items.id(itemId);
+      if (!item) throw new Error("Quotation item not found");
+      if (String(item.vendorId) !== String(vendorId)) {
+        throw new Error("All items in one PO must belong to the same vendor");
+      }
+      if (item.poId) throw new Error(`${item.productName} is already on a PO`);
+      if (item.poSkipped) throw new Error(`${item.productName} was skipped and can't be added`);
+
+      const { sel, ca } = found;
+      const taxable = round2(sel.quantity * sel.unitPrice);
+      const { cgst, sgst, igst, gstAmount } = StockPurchaseOrderService.computeLineTax(
+        taxable,
+        sel.gstRate,
+        taxType
+      );
+      const lineTotal = round2(taxable + gstAmount);
+
+      subTotal = round2(subTotal + taxable);
+      cgstTotal = round2(cgstTotal + cgst);
+      sgstTotal = round2(sgstTotal + sgst);
+      igstTotal = round2(igstTotal + igst);
+
+      items.push({
+        quotationItemId: item._id,
+        categoryId: ca.categoryId,
+        categoryName: ca.categoryName,
+        productDefinitionId: sel.productDefinitionId,
+        productName: sel.productName,
+        quantity: sel.quantity,
+        unitPrice: sel.unitPrice,
+        gstRate: sel.gstRate,
+        taxable,
+        cgst,
+        sgst,
+        igst,
+        gstAmount,
+        lineTotal,
+      });
+    }
+
+    const gstTotal = round2(cgstTotal + sgstTotal + igstTotal);
+    const grandTotal = round2(subTotal + gstTotal);
+    const poNumber = await StockPurchaseOrderService.generatePONumber(session);
+    const primaryContact = (vendor.contacts || []).find((c) => c.label === "PRIMARY") ||
+      (vendor.contacts || [])[0] || {};
+
+    const [po] = await StockPurchaseOrderModel.create(
+      [
+        {
+          poNumber,
+          sourceQuotationId,
+          vendorId,
+          vendorName: vendor.name || "",
+          vendorGstin: vendor.gst?.gstNumber || "",
+          vendorAddress: vendor.address?.fullAddress || "",
+          vendorState: vendor.gst?.state?.name || vendor.address?.state?.name || "",
+          vendorStateCode,
+          vendorPhone: primaryContact.phone || "",
+          vendorEmail: primaryContact.email || "",
+          buyerEntity: {
+            entityId: buyerEntity?.entityId || null,
+            name: buyerEntity?.name || "",
+            alias: buyerEntity?.alias || "",
+            gstNumber: buyerEntity?.gstNumber || "",
+            address: buyerEntity?.address || "",
+            state: buyerEntity?.state || "",
+            stateCode: buyerStateCode,
+          },
+          requester: requester || "",
+          poDate: poDate || new Date(),
+          shipmentPreference: shipmentPreference || "",
+          paymentTerms: vendor.paymentTerms || "",
+          terms: terms || "",
+          notes: notes || "",
+          taxType,
+          items,
+          subTotal,
+          cgstTotal,
+          sgstTotal,
+          igstTotal,
+          gstTotal,
+          grandTotal,
+          status: PO_STATUS.GENERATED,
+          createdBy: user?.id || user?._id || null,
+          createdByName: user?.name || "",
+        },
+      ],
+      { session }
+    );
+
+    // Lock the used quotation items so they can't be PO'd again.
+    wantIds.forEach((itemId) => {
+      const item = quotation.items.id(itemId);
+      if (item) {
+        item.poId = po._id;
+        item.poAddedAt = new Date();
+      }
+    });
+
+    // Permanently skip the unchecked items (reason required — validated in controller).
+    (skippedItems || []).forEach((s) => {
+      const item = quotation.items.id(String(s.itemId));
+      if (item && !item.poId && !item.poSkipped) {
+        item.poSkipped = true;
+        item.poSkipReason = String(s.reason || "").trim();
+        item.poSkippedBy = user?.id || user?._id || null;
+        item.poSkippedAt = new Date();
+      }
+    });
+
+    await quotation.save({ session });
+
+    // Generate the PDF (outside the mongoose write, but before commit is fine).
+    const pdfPath = await generatePOPdf(po.toObject());
+    po.pdfPath = pdfPath;
+    await po.save({ session });
+
+    log.info(`PO created: ${poNumber} (${items.length} items, ${taxType})`);
+    return po;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Read                                                                    */
+  /* ---------------------------------------------------------------------- */
+
+  static async getAllPurchaseOrders(query) {
+    const { search, status, vendorId, sourceQuotationId } = query;
+    const { skip, limit, page } = paginate(query);
+
+    const filter = { isActive: true };
+    if (status) filter.status = status;
+    if (vendorId) filter.vendorId = vendorId;
+    if (sourceQuotationId) filter.sourceQuotationId = sourceQuotationId;
+    if (search) {
+      const regex = new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      filter.$or = [{ poNumber: regex }, { vendorName: regex }];
+    }
+
+    const [data, total] = await Promise.all([
+      StockPurchaseOrderModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      StockPurchaseOrderModel.countDocuments(filter),
+    ]);
+    return paginateReturn(data, total, page, limit);
+  }
+
+  static async getPurchaseOrderById(id) {
+    const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).lean();
+    if (!po) throw new Error("Purchase order not found");
+    return po;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Edit (GENERATED/REJECTED only) → regenerate PDF                         */
+  /* ---------------------------------------------------------------------- */
+
+  static async updatePurchaseOrder(id, body, user, session) {
+    const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!po) throw new Error("Purchase order not found");
+    if (![PO_STATUS.GENERATED, PO_STATUS.REJECTED].includes(po.status)) {
+      throw new Error("Only a generated or rejected PO can be edited");
+    }
+
+    if (body.requester !== undefined) po.requester = body.requester;
+    if (body.poDate !== undefined) po.poDate = body.poDate;
+    if (body.shipmentPreference !== undefined) po.shipmentPreference = body.shipmentPreference;
+    if (body.terms !== undefined) po.terms = body.terms;
+    if (body.notes !== undefined) po.notes = body.notes;
+
+    // Buyer entity change can flip the GST split → recompute every line.
+    if (body.buyerEntity) {
+      po.buyerEntity = {
+        entityId: body.buyerEntity.entityId || null,
+        name: body.buyerEntity.name || "",
+        alias: body.buyerEntity.alias || "",
+        gstNumber: body.buyerEntity.gstNumber || "",
+        address: body.buyerEntity.address || "",
+        state: body.buyerEntity.state || "",
+        stateCode: String(body.buyerEntity.stateCode || ""),
+      };
+      const taxType =
+        po.buyerEntity.stateCode && po.buyerEntity.stateCode === po.vendorStateCode
+          ? PO_TAX_TYPE.CGST_SGST
+          : PO_TAX_TYPE.IGST;
+      po.taxType = taxType;
+
+      let subTotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0;
+      po.items.forEach((it) => {
+        const taxable = round2(it.quantity * it.unitPrice);
+        const { cgst, sgst, igst, gstAmount } = StockPurchaseOrderService.computeLineTax(
+          taxable,
+          it.gstRate,
+          taxType
+        );
+        it.taxable = taxable;
+        it.cgst = cgst;
+        it.sgst = sgst;
+        it.igst = igst;
+        it.gstAmount = gstAmount;
+        it.lineTotal = round2(taxable + gstAmount);
+        subTotal = round2(subTotal + taxable);
+        cgstTotal = round2(cgstTotal + cgst);
+        sgstTotal = round2(sgstTotal + sgst);
+        igstTotal = round2(igstTotal + igst);
+      });
+      po.subTotal = subTotal;
+      po.cgstTotal = cgstTotal;
+      po.sgstTotal = sgstTotal;
+      po.igstTotal = igstTotal;
+      po.gstTotal = round2(cgstTotal + sgstTotal + igstTotal);
+      po.grandTotal = round2(subTotal + po.gstTotal);
+    }
+
+    // Editing an approved-then... no: edit only allowed on GENERATED/REJECTED,
+    // and after edit it goes back to GENERATED for a fresh review.
+    po.status = PO_STATUS.GENERATED;
+    po.rejectedReason = "";
+    po.updatedBy = user?.id || user?._id || null;
+    po.updatedByName = user?.name || "";
+
+    po.pdfPath = await generatePOPdf(po.toObject());
+    await po.save({ session });
+    return po;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Approve / Reject                                                        */
+  /* ---------------------------------------------------------------------- */
+
+  static async approvePurchaseOrder(id, user, session) {
+    const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!po) throw new Error("Purchase order not found");
+    if (![PO_STATUS.GENERATED, PO_STATUS.REJECTED].includes(po.status)) {
+      throw new Error("Only a generated or rejected PO can be approved");
+    }
+    po.status = PO_STATUS.APPROVED;
+    po.rejectedReason = "";
+    po.reviewedBy = user?.id || user?._id || null;
+    po.reviewedByName = user?.name || "";
+    po.reviewedAt = new Date();
+    await po.save({ session });
+    return po;
+  }
+
+  static async rejectPurchaseOrder(id, reason, user, session) {
+    const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!po) throw new Error("Purchase order not found");
+    if (po.status !== PO_STATUS.GENERATED) {
+      throw new Error("Only a generated PO can be rejected");
+    }
+    po.status = PO_STATUS.REJECTED;
+    po.rejectedReason = typeof reason === "string" ? reason : "";
+    po.reviewedBy = user?.id || user?._id || null;
+    po.reviewedByName = user?.name || "";
+    po.reviewedAt = new Date();
+    await po.save({ session });
+    return po;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Soft delete — frees the quotation-item lock                             */
+  /* ---------------------------------------------------------------------- */
+
+  static async softDeletePurchaseOrder(id, user, session) {
+    const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!po) throw new Error("Purchase order not found");
+    if (po.status === PO_STATUS.SENT) {
+      throw new Error("Cannot delete — this PO has already been sent to the vendor");
+    }
+
+    // Free the locked quotation items so they can be PO'd again.
+    const quotation = await StockQuotationModel.findOne({
+      _id: po.sourceQuotationId,
+      isActive: true,
+    }).session(session);
+    if (quotation) {
+      quotation.items.forEach((it) => {
+        if (String(it.poId) === String(po._id)) {
+          it.poId = null;
+          it.poAddedAt = null;
+        }
+      });
+      await quotation.save({ session });
+    }
+
+    po.isActive = false;
+    po.deletedAt = new Date();
+    po.deletedBy = user?.id || user?._id || null;
+    await po.save({ session });
+    return po;
+  }
+}

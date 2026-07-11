@@ -43,6 +43,14 @@ const quotationLineItemSchema = new Schema(
     // convenience flag set true when this exact offer is the winning selection
     // of an approved category (mirrors categoryApprovals[].selections[].itemId).
     isApproved: { type: Boolean, default: false },
+
+    // PO Management board state
+    poId: { type: Schema.Types.ObjectId, ref: "purchase_orders", default: null },
+    poAddedAt: { type: Date, default: null },
+    poSkipped: { type: Boolean, default: false }, // unchecked at Create PO → permanent skip
+    poSkipReason: { type: String, trim: true, default: "" },
+    poSkippedBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
+    poSkippedAt: { type: Date, default: null },
   },
   { _id: true } // each offer keeps its own _id so a selection can point at it
 );
@@ -103,6 +111,19 @@ const categoryApprovalSchema = new Schema(
   { _id: true }
 );
 
+/* Vendors an admin has excluded from the PO flow for this quotation (with a reason). */
+const disabledVendorSchema = new Schema(
+  {
+    vendorId: { type: Schema.Types.ObjectId, ref: "vendors" },
+    vendorName: { type: String, trim: true, default: "" },
+    reason: { type: String, trim: true, default: "" },
+    disabledBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
+    disabledByName: { type: String, trim: true, default: "" },
+    disabledAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
 const quotationSchema = new Schema(
   {
     quotationNumber: { type: String, trim: true, uppercase: true, default: null },
@@ -125,6 +146,9 @@ const quotationSchema = new Schema(
 
     // Empty until the approver submits; then one entry per category.
     categoryApprovals: { type: [categoryApprovalSchema], default: [] },
+
+    // Vendors excluded from the PO Management board for this quotation.
+    disabledVendors: { type: [disabledVendorSchema], default: [] },
 
     notes: { type: String, trim: true, default: "" },
 

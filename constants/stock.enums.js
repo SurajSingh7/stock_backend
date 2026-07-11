@@ -82,3 +82,31 @@ export const CATEGORY_APPROVAL_STATUS_ARRAY = Object.values(CATEGORY_APPROVAL_ST
 
 // Placeholder shown when a snapshot has no source yet (no history / no reviews).
 export const EMPTY_SNAPSHOT_DISPLAY = "-";
+
+
+// ─── Purchase Order — ADD these to constants/stock.enums.js ───────────────────
+ 
+export const PO_STATUS = {
+  GENERATED: "GENERATED",   // form submitted + PDF made, review pending ("PO Created")
+  APPROVED: "APPROVED",     // PO reviewed OK, ready to email (future SENT)
+  REJECTED: "REJECTED",     // sent back → edit → regenerate
+  SENT: "SENT",             // future — emailed to vendor
+};
+export const PO_STATUS_ARRAY = Object.values(PO_STATUS);
+ 
+// GST split mode — derived from buyer entity state vs vendor state.
+export const PO_TAX_TYPE = {
+  CGST_SGST: "CGST_SGST",   // same state
+  IGST: "IGST",             // different state
+};
+ 
+// Frontend-only enum for the shipment dropdown (future: more, or API-driven).
+export const SHIPMENT_PREFERENCE_OPTIONS = [
+  "Self Pickup",
+  "Vendor Delivery",
+  "Courier",
+  "Transport",
+  "Third-Party Logistics",
+  "Hand Delivery",
+];
+ 

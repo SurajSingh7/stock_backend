@@ -6,6 +6,7 @@ import StockInventoryItemController from "../controllers/stock.inventory.item.co
 import { uploadProductImage } from "../helpers/stock.upload.helper.js";
 import StockVendorController from "../controllers/stock.vendor.controller.js";
 import StockQuotationController from "../controllers/stock.quotation.controller.js";
+import StockPurchaseOrderController from "../controllers/stock.purchase.order.controller.js";
 
 const router = express.Router();
 
@@ -77,7 +78,26 @@ router.get("/quotations/:id", StockQuotationController.getQuotationById);
 router.put("/quotations/:id", StockQuotationController.updateQuotation);
 // Approver submits one decision per category, all at once.
 router.patch("/quotations/:id/review", StockQuotationController.reviewQuotation);
+router.patch("/quotations/:quotationId/disable-vendor", StockPurchaseOrderController.disableVendor);
+router.patch("/quotations/:quotationId/enable-vendor", StockPurchaseOrderController.enableVendor);
 router.delete("/quotations/:id", StockQuotationController.softDeleteQuotation);
 router.patch("/quotations/:id/restore", StockQuotationController.restoreQuotation);
 
+// ─── Purchase Orders ─────────────────────────────────────────────────────────
+// Specific paths BEFORE "/:id".
+router.get("/purchase-orders/board", StockPurchaseOrderController.getBoard);
+router.get("/purchase-orders/candidates", StockPurchaseOrderController.getCandidates);
+router.post("/purchase-orders", StockPurchaseOrderController.createPurchaseOrder);
+router.get("/purchase-orders", StockPurchaseOrderController.getAllPurchaseOrders);
+router.get("/purchase-orders/:id/pdf", StockPurchaseOrderController.getPurchaseOrderPdf);
+router.get("/purchase-orders/:id", StockPurchaseOrderController.getPurchaseOrderById);
+router.put("/purchase-orders/:id", StockPurchaseOrderController.updatePurchaseOrder);
+router.patch("/purchase-orders/:id/approve", StockPurchaseOrderController.approvePurchaseOrder);
+router.patch("/purchase-orders/:id/reject", StockPurchaseOrderController.rejectPurchaseOrder);
+router.delete("/purchase-orders/:id", StockPurchaseOrderController.softDeletePurchaseOrder);
+ 
+
 export default router;
+
+
+
