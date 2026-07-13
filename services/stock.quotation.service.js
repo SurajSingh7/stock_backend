@@ -389,13 +389,14 @@ export default class StockQuotationService {
   /* ---------------------------------------------------------------------- */
 
   static async getAllQuotations(query) {
-    const { search, status, categoryId, vendorId } = query;
+    const { search, status, categoryId, vendorId, productId, dateFrom, dateTo } = query;
     const { skip, limit, page } = paginate(query);
 
     const filter = { isActive: true };
     if (status) filter.status = status;
     if (categoryId) filter.categoryIds = categoryId;
     if (vendorId) filter["items.vendorId"] = vendorId;
+    if (productId) filter["items.productDefinitionId"] = productId;
     if (search) {
       const regex = new RegExp(escapeRegex(search.trim()), "i");
       filter.$or = [
@@ -403,6 +404,16 @@ export default class StockQuotationService {
         { "items.vendorName": regex },
         { createdByName: regex },
       ];
+    }
+
+    // status-wise date range: Pending/All → submission date (createdAt);
+    // Approved/Partial/Rejected → decision date (updatedAt, stamped by /review)
+    if (dateFrom || dateTo) {
+      const decided = status && status !== QUOTATION_STATUS.PENDING;
+      const dateField = decided ? "updatedAt" : "createdAt";
+      filter[dateField] = {};
+      if (dateFrom) filter[dateField].$gte = new Date(dateFrom);
+      if (dateTo) filter[dateField].$lte = new Date(dateTo + "T23:59:59.999");
     }
 
     const [data, total] = await Promise.all([

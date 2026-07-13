@@ -37,6 +37,12 @@ const gstSchema = new Schema(
     legalName: { type: String, trim: true, default: "" },
     tradeName: { type: String, trim: true, default: "" },
     gstAddress: { type: String, trim: true, default: "" },
+    // Spec 8.4 lists gst.state as auto-filled on verify, but it was missing
+    // from this schema — so Mongoose (strict mode) silently DROPPED it on
+    // every save. That also broke the PO GST split, which reads
+    // `vendor.gst.state.code || vendor.address.state.code` and always fell
+    // through to the address. Restored here.
+    state: { type: stateSchema, default: () => ({}) },
   },
   { _id: false }
 );
@@ -56,7 +62,9 @@ const contactSchema = new Schema(
 const addressSchema = new Schema(
   {
     fullAddress: { type: String, required: true, trim: true },
-    area: { type: String, required: true, trim: true },
+    // area is OPTIONAL in the form (VendorForm.jsx). Keeping required:true
+    // here threw a ValidationError for any vendor saved without a locality.
+    area: { type: String, trim: true, default: "" },
     city: { type: String, required: true, trim: true },
     pinCode: { type: String, required: true, trim: true },
     state: { type: stateSchema, default: () => ({}) },
@@ -101,10 +109,20 @@ const stockVendorSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
 
-    // Optional, unique when present, IMMUTABLE after create — mirrors
-    // fieldDefinition.code (Rule 10). Not required at create time in the UI,
-    // so sparse unique index rather than a hard required+unique constraint.
-    vendorCode: { type: String, trim: true, uppercase: true, default: null },
+    /*
+      vendorCode — optional, unique WHEN PRESENT, IMMUTABLE after create
+      (mirrors fieldDefinition.code, Rule 10).
+
+      E11000 BUG FIX (duplicate key: { vendorCode: null }):
+      `default: null` + a `sparse` unique index do NOT work together. `sparse`
+      only skips documents where the key is ABSENT — a stored `null` is a real
+      value, so the second vendor saved without a code collided with the first.
+      Fix = no default (field simply stays undefined/absent) + a PARTIAL index
+      that only covers string values (see below). The service should also
+      `delete payload.vendorCode` / unset it when it comes in empty, so an
+      empty string never gets stored either.
+    */
+    vendorCode: { type: String, trim: true, uppercase: true },
 
     vendorAlias: { type: String, trim: true, default: "" },
 
@@ -137,9 +155,34 @@ const stockVendorSchema = new Schema(
 );
 
 stockVendorSchema.index({ name: 1 });
-stockVendorSchema.index({ vendorCode: 1 }, { unique: true, sparse: true });
+
+/*
+  PARTIAL unique index — only indexes documents where vendorCode is an actual
+  string. Vendors saved without a code are not in the index at all, so any
+  number of them can coexist. This REPLACES the old
+  `{ unique: true, sparse: true }` index, which broke on stored nulls.
+
+  MIGRATION (run once, backend stopped — same posture as RULE 28):
+    db.vendors.dropIndex("vendorCode_1")
+    db.vendors.updateMany({ vendorCode: null }, { $unset: { vendorCode: "" } })
+    db.vendors.updateMany({ vendorCode: "" },   { $unset: { vendorCode: "" } })
+  Then restart — Mongoose recreates the index in its new partial form.
+  (Changing the index definition in code does NOT alter an existing index.)
+*/
+stockVendorSchema.index(
+  { vendorCode: 1 },
+  { unique: true, partialFilterExpression: { vendorCode: { $type: "string" } } }
+);
+
 stockVendorSchema.index({ "gst.gstNumber": 1 }, { sparse: true });
 stockVendorSchema.index({ isActive: 1 });
+
+// Hot paths for the Vendors list filters (Rule 23 — the category/product
+// pickers in Vendors.jsx send ?categoryId= / ?productId= and the filter is
+// applied in StockVendorService.getAllVendors). Without these, every filtered
+// list request is a full collection scan on the vendors master.
+stockVendorSchema.index({ "assignedProducts.categoryId": 1 });
+stockVendorSchema.index({ "assignedProducts.productIds": 1 });
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.
 // NOTE: "vendors" (correct spelling) — keep it consistent everywhere.

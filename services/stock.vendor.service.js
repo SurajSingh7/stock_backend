@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import StockVendorModel from "../models/stock.vendor.model.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
@@ -37,6 +38,30 @@ export default class StockVendorService {
     }
   }
 
+  /**
+   * Server-generated, auto-incrementing vendor code — "VEN0001", "VEN0002"...
+   * Never trust vendorCode from the client; it's derived purely from the
+   * highest existing code matching the prefix. Padded to 4 digits so plain
+   * string sort ({ vendorCode: -1 }) also sorts numerically correctly.
+   */
+  static async generateNextVendorCode(session) {
+    const PREFIX = "VEN";
+    const PAD = 4;
+
+    const last = await StockVendorModel.findOne({ vendorCode: { $regex: `^${PREFIX}\\d+$` } })
+      .sort({ vendorCode: -1 })
+      .session(session)
+      .lean();
+
+    let nextNum = 1;
+    if (last?.vendorCode) {
+      const match = last.vendorCode.match(/(\d+)$/);
+      if (match) nextNum = parseInt(match[1], 10) + 1;
+    }
+
+    return `${PREFIX}${String(nextNum).padStart(PAD, "0")}`;
+  }
+
   static async createVendor(body, userId, session) {
     try {
       await StockVendorService.assertVendorNotDuplicate({
@@ -45,34 +70,52 @@ export default class StockVendorService {
         session,
       });
 
-      const [vendor] = await StockVendorModel.create(
-        [
-          {
-            name: body.name,
-            vendorCode: body.vendorCode || null,
-            vendorAlias: body.vendorAlias || "",
-            gst: body.gst || {},
-            panNumber: body.panNumber || "",
-            paymentTerms: body.paymentTerms,
-            notes: body.notes || "",
-            contacts: body.contacts || [],
-            address: body.address || {},
-            assignedProducts: body.assignedProducts || [],
-            bankAccounts: body.bankAccounts || [],
-          },
-        ],
-        { session }
-      );
+      const docData = {
+        name: body.name,
+        vendorAlias: body.vendorAlias || "",
+        gst: body.gst || {},
+        panNumber: body.panNumber || "",
+        paymentTerms: body.paymentTerms,
+        notes: body.notes || "",
+        contacts: body.contacts || [],
+        address: body.address || {},
+        assignedProducts: body.assignedProducts || [],
+        bankAccounts: body.bankAccounts || [],
+      };
 
-      return vendor;
+      // vendorCode is ALWAYS server-generated (ignore anything the client
+      // sends for it — it's create-only + immutable anyway, see
+      // updateVendor). generateNextVendorCode() is a read-then-use pattern,
+      // not atomic, so under concurrent creates two requests could compute
+      // the same next number — the partial unique index on vendorCode will
+      // reject the second insert with E11000, and we just retry with a
+      // freshly computed number until one lands.
+      const MAX_ATTEMPTS = 5;
+      let lastErr = null;
+
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+        const vendorCode = await StockVendorService.generateNextVendorCode(session);
+        try {
+          const [vendor] = await StockVendorModel.create([{ ...docData, vendorCode }], { session });
+          return vendor;
+        } catch (err) {
+          if (err?.code === 11000 && err?.keyPattern?.vendorCode) {
+            lastErr = err;
+            continue; // someone else just took this number — retry with the next one
+          }
+          throw err;
+        }
+      }
+
+      throw lastErr || new Error("Could not generate a unique vendor code, please try again");
     } catch (error) {
       throw error;
     }
   }
 
-  static async getAllVendors(query) {
+ static async getAllVendors(query) {
     try {
-      const { search, showInactive } = query;
+      const { search, showInactive, categoryId, productId } = query;
       const { skip, limit, page } = paginate(query);
 
       const filter = {};
@@ -85,6 +128,26 @@ export default class StockVendorService {
       if (search) {
         const regex = new RegExp(escapeRegex(search.trim()), "i");
         filter.$or = [{ name: regex }, { vendorCode: regex }, { "gst.gstNumber": regex }];
+      }
+
+      // RULE 23 — dropdown/picker filters are applied in the SERVICE layer.
+      // Vendors.jsx sends ?categoryId= / ?productId= from its leaf-category
+      // and dependent-product pickers; never fetch-all-then-filter in the
+      // browser (it silently breaks limit/total — Section 20, lesson 3).
+      // Both match against the vendor's assignedProducts sub-documents.
+      // An unparseable id yields zero rows instead of a CastError 500.
+      if (categoryId) {
+        if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+          return paginateReturn([], 0, page, limit);
+        }
+        filter["assignedProducts.categoryId"] = new mongoose.Types.ObjectId(categoryId);
+      }
+
+      if (productId) {
+        if (!mongoose.Types.ObjectId.isValid(productId)) {
+          return paginateReturn([], 0, page, limit);
+        }
+        filter["assignedProducts.productIds"] = new mongoose.Types.ObjectId(productId);
       }
 
       const [data, total] = await Promise.all([

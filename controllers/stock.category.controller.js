@@ -45,13 +45,14 @@ export default class StockCategoryController {
   static async getCategoriesFlat(req, res) {
     try {
       const { skip, limit, page } = paginate(req.query);
-      const { search, type, showInactive } = req.query;
+      const { search, type, showInactive, hasProducts } = req.query;
       const { data, total } = await StockCategoryService.getCategoriesFlat({
         skip,
         limit,
         search,
         type,
         showInactive: showInactive === "true",
+        hasProducts,
       });
       successResponseHandler(
         res,

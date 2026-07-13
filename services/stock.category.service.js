@@ -140,11 +140,17 @@ export default class StockCategoryService {
 
   // ─── Flat list ────────────────────────────────────────────────────────────────
 
-  static async getCategoriesFlat({ skip, limit, search, type, showInactive }) {
+  static async getCategoriesFlat({ skip, limit, search, type, showInactive, hasProducts }) {
     try {
       const filter = showInactive ? {} : { isActive: true };
       if (search) filter.name = { $regex: search, $options: "i" };
       if (type) filter.type = type;
+
+      if (String(hasProducts) === "true") {
+        // leaf categories that currently have at least one ACTIVE product
+        const catIds = await StockProductDefinitionModel.distinct("categoryId", { isActive: true });
+        filter._id = { $in: catIds };
+      }
 
       const [data, total] = await Promise.all([
         StockCategoryModel.find(filter)
