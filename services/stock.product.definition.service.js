@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockCategoryModel from "../models/stock.category.model.js";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
@@ -30,6 +31,13 @@ export default class StockProductDefinitionService {
       if (category.type !== CATEGORY_TYPES.LEAF)
         throw new Error("productDefinitions can only be linked to LEAF categories");
 
+      // Pre-check for a case-insensitive duplicate so the user gets a clean
+      // error instead of a raw E11000 bubbling up from the unique index.
+      const exists = await StockProductDefinitionModel.findOne({ categoryId, name, isActive: true })
+        .collation({ locale: "en", strength: 2 })
+        .session(session);
+      if (exists) throw new Error("A product with this name already exists in this category");
+
       const def = new StockProductDefinitionModel({
         categoryId,
         name,
@@ -50,11 +58,21 @@ export default class StockProductDefinitionService {
     }
   }
 
-  static async getAllProductDefinitions({ skip, limit, search, categoryId, showInactive }) {
+  static async getAllProductDefinitions({
+    skip,
+    limit,
+    search,
+    categoryId,
+    showInactive,
+    trackingMethod,
+    productId,
+  }) {
     try {
       const filter = showInactive ? {} : { isActive: true };
       if (search) filter.name = { $regex: search, $options: "i" };
       if (categoryId) filter.categoryId = categoryId;
+      if (trackingMethod) filter.trackingMethod = trackingMethod;
+      if (productId) filter._id = new mongoose.Types.ObjectId(productId);
 
       const [data, total] = await Promise.all([
         StockProductDefinitionModel.find(filter)

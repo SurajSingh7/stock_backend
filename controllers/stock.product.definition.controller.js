@@ -56,14 +56,23 @@ export default class StockProductDefinitionController {
   static async getAllProductDefinitions(req, res) {
     try {
       const { skip, limit, page } = paginate(req.query);
-      const { search, categoryId, showInactive } = req.query;
+
+      // trackingMethod + productId were missing here. The service already reads
+      // them, but an un-forwarded param arrives as undefined, so `if (productId)`
+      // is false and the filter silently no-ops — the whole category comes back
+      // instead of the one selected product.
+      const { search, categoryId, showInactive, trackingMethod, productId } = req.query;
+
       const { data, total } = await StockProductDefinitionService.getAllProductDefinitions({
         skip,
         limit,
         search,
         categoryId,
         showInactive: showInactive === "true",
+        trackingMethod,
+        productId,
       });
+
       successResponseHandler(
         res,
         paginateReturn(data, total, page, limit),

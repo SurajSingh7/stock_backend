@@ -106,192 +106,207 @@ export default class StockPurchaseOrderService {
   /* ---------------------------------------------------------------------- */
 
 
-static async getBoard(query = {}) {
-  const { search, vendorId, categoryId, productId, entityAlias, status, dateFrom, dateTo } = query;
+  static async getBoard(query = {}) {
+    const { search, vendorId, categoryId, productId, entityAlias, status, dateFrom, dateTo } = query;
 
-  const qFilter = {
-    isActive: true,
-    status: { $in: [QUOTATION_STATUS.APPROVED, QUOTATION_STATUS.PARTIALLY_APPROVED] },
-  };
-  if (query.sourceQuotationId) qFilter._id = query.sourceQuotationId;
+    const qFilter = {
+      isActive: true,
+      status: { $in: [QUOTATION_STATUS.APPROVED, QUOTATION_STATUS.PARTIALLY_APPROVED] },
+    };
+    if (query.sourceQuotationId) qFilter._id = query.sourceQuotationId;
 
-  const quotations = await StockQuotationModel.find(qFilter)
-    .select("quotationNumber items categoryApprovals disabledVendors updatedAt")
-    .lean();
+    const quotations = await StockQuotationModel.find(qFilter)
+      .select("quotationNumber items categoryApprovals disabledVendors updatedAt")
+      .lean();
 
-  const vendorIds = new Set();
-  quotations.forEach((q) =>
-    (q.categoryApprovals || [])
-      .filter((c) => c.status === "APPROVED")
-      .forEach((ca) => (ca.selections || []).forEach((s) => vendorIds.add(String(s.vendorId))))
-  );
-  const vendors = await StockVendorModel.find({ _id: { $in: [...vendorIds] } }).lean();
-  const vendorMap = new Map(vendors.map((v) => [String(v._id), v]));
+    const vendorIds = new Set();
+    quotations.forEach((q) =>
+      (q.categoryApprovals || [])
+        .filter((c) => c.status === "APPROVED")
+        .forEach((ca) => (ca.selections || []).forEach((s) => vendorIds.add(String(s.vendorId))))
+    );
+    const vendors = await StockVendorModel.find({ _id: { $in: [...vendorIds] } }).lean();
+    const vendorMap = new Map(vendors.map((v) => [String(v._id), v]));
 
-  const quotationIds = quotations.map((q) => q._id);
-  const pos = await StockPurchaseOrderModel.find({ sourceQuotationId: { $in: quotationIds }, isActive: true })
-    .select("poNumber status grandTotal vendorId sourceQuotationId items buyerEntity createdAt updatedAt reviewedAt rejectedReason")
-    .lean();
-  const poByKey = new Map();
-  pos.forEach((po) => poByKey.set(`${po.sourceQuotationId}::${po.vendorId}`, po));
+    const quotationIds = quotations.map((q) => q._id);
+    const pos = await StockPurchaseOrderModel.find({ sourceQuotationId: { $in: quotationIds }, isActive: true })
+      .select("poNumber status grandTotal vendorId sourceQuotationId items buyerEntity createdAt updatedAt reviewedAt rejectedReason")
+      .lean();
+    const poByKey = new Map();
+    pos.forEach((po) => poByKey.set(`${po.sourceQuotationId}::${po.vendorId}`, po));
 
-  // ── build the full board (unfiltered) ────────────────────────────────────
-  const fullBoard = [];
-  quotations.forEach((q) => {
-    const itemById = new Map((q.items || []).map((it) => [String(it._id), it]));
-    const disabledMap = new Map((q.disabledVendors || []).map((d) => [String(d.vendorId), d]));
+    // ── build the full board (unfiltered) ────────────────────────────────────
+    const fullBoard = [];
+    quotations.forEach((q) => {
+      const itemById = new Map((q.items || []).map((it) => [String(it._id), it]));
+      const disabledMap = new Map((q.disabledVendors || []).map((d) => [String(d.vendorId), d]));
 
-    let approvalDate = null;
-    (q.categoryApprovals || []).forEach((ca) => {
-      if (ca.decidedAt && (!approvalDate || new Date(ca.decidedAt) > new Date(approvalDate))) approvalDate = ca.decidedAt;
+      let approvalDate = null;
+      (q.categoryApprovals || []).forEach((ca) => {
+        if (ca.decidedAt && (!approvalDate || new Date(ca.decidedAt) > new Date(approvalDate))) approvalDate = ca.decidedAt;
+      });
+
+      const byVendor = new Map();
+      (q.categoryApprovals || [])
+        .filter((c) => c.status === "APPROVED")
+        .forEach((ca) =>
+          (ca.selections || []).forEach((sel) => {
+            const item = itemById.get(String(sel.itemId));
+            if (!item) return;
+            const vId = String(sel.vendorId);
+            if (!byVendor.has(vId)) {
+              const v = vendorMap.get(vId) || {};
+              const primary = (v.contacts || []).find((c) => c.label === "PRIMARY") || (v.contacts || [])[0] || {};
+              const d = disabledMap.get(vId);
+              byVendor.set(vId, {
+                vendorId: vId, vendorName: sel.vendorName || v.name || "",
+                phone: primary.phone || "", email: primary.email || "",
+                gstNumber: v.gst?.gstNumber || "", address: v.address?.fullAddress || "",
+                state: v.gst?.state?.name || v.address?.state?.name || "",
+                stateCode: v.gst?.state?.code || v.address?.state?.code || "",
+                paymentTerms: v.paymentTerms || "",
+                disabled: Boolean(d), disabledReason: d?.reason || "",
+                _pending: [],
+                _skipped: [],
+              });
+            }
+            const row = byVendor.get(vId);
+            const qty = sel.quantity, price = sel.unitPrice, gstRate = sel.gstRate;
+            const taxable = round2(qty * price);
+            const gstAmount = round2((taxable * gstRate) / 100);
+            const lineTotal = round2(taxable + gstAmount);
+            const detail = {
+              quotationItemId: item._id, categoryId: ca.categoryId, categoryName: ca.categoryName,
+              productDefinitionId: sel.productDefinitionId, productName: sel.productName,
+              quantity: qty, unitPrice: price, gstRate, taxable, gstAmount, lineTotal,
+            };
+            if (item.poSkipped) row._skipped.push({ ...detail, poSkipReason: item.poSkipReason || "" });
+            else if (!item.poId) row._pending.push(detail);
+          })
+        );
+
+      const rows = [];
+      byVendor.forEach((row, vId) => {
+        const po = poByKey.get(`${q._id}::${vId}`);
+        let statusVal, items, poId = null, poNumber = "", entityAlias = "";
+        let totalAmount = 0, totalQuantity = 0, rejectedReason = "", filterDate = approvalDate;
+
+        if (po) {
+          poId = po._id; poNumber = po.poNumber; statusVal = po.status; entityAlias = po.buyerEntity?.alias || "";
+          items = (po.items || []).map((it) => ({
+            quotationItemId: it.quotationItemId, categoryId: it.categoryId, categoryName: it.categoryName,
+            productDefinitionId: it.productDefinitionId, productName: it.productName,
+            quantity: it.quantity, unitPrice: it.unitPrice, gstRate: it.gstRate,
+            taxable: it.taxable, gstAmount: it.gstAmount, lineTotal: it.lineTotal,
+          }));
+          totalAmount = po.grandTotal;
+          totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
+          rejectedReason = po.rejectedReason || "";
+          filterDate = po.status === "GENERATED" ? po.createdAt : (po.reviewedAt || po.updatedAt || po.createdAt);
+        } else {
+          statusVal = "PO_PENDING"; items = row._pending;
+          totalAmount = round2(items.reduce((s, i) => s + (i.lineTotal || 0), 0));
+          totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
+          filterDate = approvalDate;
+        }
+
+        if (!po && items.length === 0 && row._skipped.length === 0) return;
+
+        const catIds = [...new Set(items.map((i) => String(i.categoryId)).filter(Boolean))];
+        const prodIds = [...new Set(items.map((i) => String(i.productDefinitionId)).filter(Boolean))];
+
+        rows.push({
+          vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email,
+          gstNumber: row.gstNumber, address: row.address, state: row.state, stateCode: row.stateCode,
+          paymentTerms: row.paymentTerms,
+          poId, poNumber, status: statusVal, entityAlias,
+          items, totalAmount, totalQuantity, skipped: row._skipped, filterDate,
+          disabled: row.disabled, disabledReason: row.disabledReason, rejectedReason,
+          _catIds: catIds, _prodIds: prodIds,
+        });
+      });
+
+      if (rows.length) {
+        fullBoard.push({
+          sourceQuotationId: q._id, quotationNumber: q.quotationNumber,
+          quotationApprovalDate: approvalDate, vendorCount: rows.length, rows,
+        });
+      }
     });
 
-    const byVendor = new Map();
-    (q.categoryApprovals || [])
-      .filter((c) => c.status === "APPROVED")
-      .forEach((ca) =>
-        (ca.selections || []).forEach((sel) => {
-          const item = itemById.get(String(sel.itemId));
-          if (!item) return;
-          const vId = String(sel.vendorId);
-          if (!byVendor.has(vId)) {
-            const v = vendorMap.get(vId) || {};
-            const primary = (v.contacts || []).find((c) => c.label === "PRIMARY") || (v.contacts || [])[0] || {};
-            const d = disabledMap.get(vId);
-            byVendor.set(vId, {
-              vendorId: vId, vendorName: sel.vendorName || v.name || "",
-              phone: primary.phone || "", email: primary.email || "",
-              gstNumber: v.gst?.gstNumber || "", address: v.address?.fullAddress || "",
-              state: v.gst?.state?.name || v.address?.state?.name || "",
-              stateCode: v.gst?.state?.code || v.address?.state?.code || "",
-              paymentTerms: v.paymentTerms || "",
-              disabled: Boolean(d), disabledReason: d?.reason || "",
-              _pending: [],
-              _skipped: [],
-            });
-          }
-          const row = byVendor.get(vId);
-          const qty = sel.quantity, price = sel.unitPrice, gstRate = sel.gstRate;
-          const taxable = round2(qty * price);
-          const gstAmount = round2((taxable * gstRate) / 100);
-          const lineTotal = round2(taxable + gstAmount);
-          const detail = {
-            quotationItemId: item._id, categoryId: ca.categoryId, categoryName: ca.categoryName,
-            productDefinitionId: sel.productDefinitionId, productName: sel.productName,
-            quantity: qty, unitPrice: price, gstRate, taxable, gstAmount, lineTotal,
-          };
-          if (item.poSkipped) row._skipped.push({ ...detail, poSkipReason: item.poSkipReason || "" });
-          else if (!item.poId) row._pending.push(detail);
-        })
+    // most recently updated / approved cards float to the top — each card's
+    // "latest" is the newest filterDate among its rows (PO create/approve/
+    // reject date, or the quotation approval date when a row has no PO yet)
+    fullBoard.sort((a, b) => {
+      const aLatest = a.rows.reduce(
+        (m, r) => (r.filterDate && (!m || new Date(r.filterDate) > new Date(m)) ? r.filterDate : m),
+        null
       );
-
-    const rows = [];
-    byVendor.forEach((row, vId) => {
-      const po = poByKey.get(`${q._id}::${vId}`);
-      let statusVal, items, poId = null, poNumber = "", entityAlias = "";
-      let totalAmount = 0, totalQuantity = 0, rejectedReason = "", filterDate = approvalDate;
-
-      if (po) {
-        poId = po._id; poNumber = po.poNumber; statusVal = po.status; entityAlias = po.buyerEntity?.alias || "";
-        items = (po.items || []).map((it) => ({
-          quotationItemId: it.quotationItemId, categoryId: it.categoryId, categoryName: it.categoryName,
-          productDefinitionId: it.productDefinitionId, productName: it.productName,
-          quantity: it.quantity, unitPrice: it.unitPrice, gstRate: it.gstRate,
-          taxable: it.taxable, gstAmount: it.gstAmount, lineTotal: it.lineTotal,
-        }));
-        totalAmount = po.grandTotal;
-        totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
-        rejectedReason = po.rejectedReason || "";
-        filterDate = po.status === "GENERATED" ? po.createdAt : (po.reviewedAt || po.updatedAt || po.createdAt);
-      } else {
-        statusVal = "PO_PENDING"; items = row._pending;
-        totalAmount = round2(items.reduce((s, i) => s + (i.lineTotal || 0), 0));
-        totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
-        filterDate = approvalDate;
-      }
-
-      if (!po && items.length === 0 && row._skipped.length === 0) return;
-
-      const catIds = [...new Set(items.map((i) => String(i.categoryId)).filter(Boolean))];
-      const prodIds = [...new Set(items.map((i) => String(i.productDefinitionId)).filter(Boolean))];
-
-      rows.push({
-        vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email,
-        gstNumber: row.gstNumber, address: row.address, state: row.state, stateCode: row.stateCode,
-        paymentTerms: row.paymentTerms,
-        poId, poNumber, status: statusVal, entityAlias,
-        items, totalAmount, totalQuantity, skipped: row._skipped, filterDate,
-        disabled: row.disabled, disabledReason: row.disabledReason, rejectedReason,
-        _catIds: catIds, _prodIds: prodIds,
-      });
+      const bLatest = b.rows.reduce(
+        (m, r) => (r.filterDate && (!m || new Date(r.filterDate) > new Date(m)) ? r.filterDate : m),
+        null
+      );
+      return new Date(bLatest || 0) - new Date(aLatest || 0);
     });
 
-    if (rows.length) {
-      fullBoard.push({
-        sourceQuotationId: q._id, quotationNumber: q.quotationNumber,
-        quotationApprovalDate: approvalDate, vendorCount: rows.length, rows,
-      });
-    }
-  });
+    // ── server-side filters ───────────────────────────────────────────────────
+    const t = search ? String(search).toLowerCase().trim() : "";
+    const from = dateFrom ? new Date(dateFrom) : null;
+    const to = dateTo ? new Date(dateTo + "T23:59:59") : null;
 
-  // ── server-side filters ───────────────────────────────────────────────────
-  const t = search ? String(search).toLowerCase().trim() : "";
-  const from = dateFrom ? new Date(dateFrom) : null;
-  const to = dateTo ? new Date(dateTo + "T23:59:59") : null;
-
-  const rowPass = (row, quotationNumber, ignoreStatus) => {
-    if (!ignoreStatus && status && row.status !== status) return false;
-    if (vendorId && String(row.vendorId) !== String(vendorId)) return false;
-    if (entityAlias && (row.entityAlias || "") !== entityAlias) return false;
-    if (categoryId && !row._catIds.includes(String(categoryId))) return false;
-    if (productId && !row._prodIds.includes(String(productId))) return false;
-    if (t) {
-      const hit =
-        (quotationNumber || "").toLowerCase().includes(t) ||
-        (row.poNumber || "").toLowerCase().includes(t) ||
-        (row.vendorName || "").toLowerCase().includes(t) ||
-        row.items.some((it) => (it.productName || "").toLowerCase().includes(t));
-      if (!hit) return false;
-    }
-    if (from && (!row.filterDate || new Date(row.filterDate) < from)) return false;
-    if (to && (!row.filterDate || new Date(row.filterDate) > to)) return false;
-    return true;
-  };
-
-  // counts: every filter EXCEPT status
-  const counts = { ALL: 0, PO_PENDING: 0, GENERATED: 0, APPROVED: 0, REJECTED: 0 };
-  fullBoard.forEach((q) =>
-    q.rows.forEach((r) => {
-      if (rowPass(r, q.quotationNumber, true)) {
-        counts.ALL += 1;
-        if (counts[r.status] !== undefined) counts[r.status] += 1;
+    const rowPass = (row, quotationNumber, ignoreStatus) => {
+      if (!ignoreStatus && status && row.status !== status) return false;
+      if (vendorId && String(row.vendorId) !== String(vendorId)) return false;
+      if (entityAlias && (row.entityAlias || "") !== entityAlias) return false;
+      if (categoryId && !row._catIds.includes(String(categoryId))) return false;
+      if (productId && !row._prodIds.includes(String(productId))) return false;
+      if (t) {
+        const hit =
+          (quotationNumber || "").toLowerCase().includes(t) ||
+          (row.poNumber || "").toLowerCase().includes(t) ||
+          (row.vendorName || "").toLowerCase().includes(t) ||
+          row.items.some((it) => (it.productName || "").toLowerCase().includes(t));
+        if (!hit) return false;
       }
-    })
-  );
+      if (from && (!row.filterDate || new Date(row.filterDate) < from)) return false;
+      if (to && (!row.filterDate || new Date(row.filterDate) > to)) return false;
+      return true;
+    };
 
-  // final filtered board (incl status); strip internal fields
-  const filteredBoard = fullBoard
-    .map((q) => ({
-      ...q,
-      rows: q.rows
-        .filter((r) => rowPass(r, q.quotationNumber, false))
-        .map(({ _catIds, _prodIds, ...r }) => r),
-    }))
-    .filter((q) => q.rows.length > 0);
+    // counts: every filter EXCEPT status
+    const counts = { ALL: 0, PO_PENDING: 0, GENERATED: 0, APPROVED: 0, REJECTED: 0 };
+    fullBoard.forEach((q) =>
+      q.rows.forEach((r) => {
+        if (rowPass(r, q.quotationNumber, true)) {
+          counts.ALL += 1;
+          if (counts[r.status] !== undefined) counts[r.status] += 1;
+        }
+      })
+    );
 
-  // pagination — page the QUOTATION CARDS (counts stay global for the filter set)
-  const { skip, limit, page } = paginate(query);
-  const total = filteredBoard.length;
-  const board = filteredBoard.slice(skip, skip + limit);
+    // final filtered board (incl status); strip internal fields
+    const filteredBoard = fullBoard
+      .map((q) => ({
+        ...q,
+        rows: q.rows
+          .filter((r) => rowPass(r, q.quotationNumber, false))
+          .map(({ _catIds, _prodIds, ...r }) => r),
+      }))
+      .filter((q) => q.rows.length > 0);
 
-  // successResponseHandler flattens `.pagination` to the top level and sets
-  // response.data to `.data` — so board + counts must live inside `data`,
-  // else they get dropped.
-  return {
-    data: { board, counts },
-    pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
-  };
-}
+    // pagination — page the QUOTATION CARDS (counts stay global for the filter set)
+    const { skip, limit, page } = paginate(query);
+    const total = filteredBoard.length;
+    const board = filteredBoard.slice(skip, skip + limit);
+
+    // successResponseHandler flattens `.pagination` to the top level and sets
+    // response.data to `.data` — so board + counts must live inside `data`,
+    // else they get dropped.
+    return {
+      data: { board, counts },
+      pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+    };
+  }
 
   /* Disable / enable a vendor on a quotation (admin). Disabled = hidden from PO flow. */
   static async disableVendor(quotationId, payload, user, session) {

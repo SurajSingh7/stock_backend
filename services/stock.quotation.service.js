@@ -93,6 +93,14 @@ export default class StockQuotationService {
       - clamps quantity (>=1) and unitPrice (>0)
       - snapshots previousQty/Price + averageRating
       - computes totals server-side
+
+    NOTE: All queries below that pass `.session(session)` are awaited
+    sequentially, not via Promise.all. The MongoDB driver does not support
+    running multiple concurrent operations on the same ClientSession inside
+    a transaction — doing so intermittently throws:
+      "Given transaction number X does not match any in-progress transactions"
+    Promise.all is safe again once a query does NOT share this session.
+
     Returns { items, categoryIds }.
   */
   static async buildItems(rawItems, session) {
@@ -105,14 +113,18 @@ export default class StockQuotationService {
       ...new Set(rawItems.map((i) => String(i.productDefinitionId))),
     ];
 
-    const [vendors, products] = await Promise.all([
-      StockVendorModel.find({ _id: { $in: vendorIds }, isActive: true })
-        .session(session)
-        .lean(),
-      StockProductDefinitionModel.find({ _id: { $in: productIds }, isActive: true })
-        .session(session)
-        .lean(),
-    ]);
+    const vendors = await StockVendorModel.find({
+      _id: { $in: vendorIds },
+      isActive: true,
+    })
+      .session(session)
+      .lean();
+    const products = await StockProductDefinitionModel.find({
+      _id: { $in: productIds },
+      isActive: true,
+    })
+      .session(session)
+      .lean();
 
     const vendorMap = new Map(vendors.map((v) => [String(v._id), v]));
     const productMap = new Map(products.map((p) => [String(p._id), p]));
@@ -158,19 +170,17 @@ export default class StockQuotationService {
       const { baseAmount, gstAmount, lineTotal } =
         StockQuotationService.computeTotals(quantity, unitPrice, gstRate);
 
-      const [{ previousQuantity, previousPrice }, averageRating] =
-        await Promise.all([
-          StockQuotationService.getPreviousPurchase(
-            raw.vendorId,
-            raw.productDefinitionId,
-            session
-          ),
-          StockQuotationService.getAverageRating(
-            raw.vendorId,
-            raw.productDefinitionId,
-            session
-          ),
-        ]);
+      const { previousQuantity, previousPrice } =
+        await StockQuotationService.getPreviousPurchase(
+          raw.vendorId,
+          raw.productDefinitionId,
+          session
+        );
+      const averageRating = await StockQuotationService.getAverageRating(
+        raw.vendorId,
+        raw.productDefinitionId,
+        session
+      );
 
       categoryIdSet.add(String(raw.categoryId));
 
