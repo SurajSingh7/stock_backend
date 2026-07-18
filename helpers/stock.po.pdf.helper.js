@@ -36,6 +36,22 @@ const fmtDate = (d) => {
   return `${p(dt.getDate())}-${p(dt.getMonth() + 1)}-${dt.getFullYear()}`;
 };
 
+// po.terms is rich text (HTML) from the Terms & Conditions master — pdfkit's
+// doc.text() only renders plain strings, so flatten block/list tags to
+// newlines and "• " bullets, then strip whatever markup is left.
+const stripHtmlForPdf = (html) =>
+  String(html || "")
+    .replace(/<li[^>]*>/gi, "• ")
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
 /* ── palette — kept minimal on purpose ─────────────────────────────────── */
 const C = {
   ink: "#1a1a1a",
@@ -198,7 +214,7 @@ export const generatePOPdf = (po) =>
       // ── Terms + signatory ────────────────────────────────────────────────
       ty += 20;
       doc.fillColor(C.accent).font("Helvetica-Bold").fontSize(7.5).text("TERMS AND CONDITIONS", MARGIN, ty);
-      doc.fillColor(C.ink).font("Helvetica").fontSize(8.5).text(po.terms || "-", MARGIN, ty + 12, { width: 330 });
+      doc.fillColor(C.ink).font("Helvetica").fontSize(8.5).text(stripHtmlForPdf(po.terms) || "-", MARGIN, ty + 12, { width: 330 });
       doc
         .fillColor(C.muted)
         .font("Helvetica")

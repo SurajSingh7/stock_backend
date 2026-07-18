@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { PO_STATUS, PO_STATUS_ARRAY, PO_TAX_TYPE } from "../constants/stock.enums.js";
+import { PO_STATUS, PO_STATUS_ARRAY, PO_TAX_TYPE, TERMS_SOURCE_ARRAY, TERMS_SOURCE } from "../constants/stock.enums.js";
 
 const { Schema } = mongoose;
 
@@ -68,7 +68,15 @@ const purchaseOrderSchema = new Schema(
     poDate: { type: Date, default: Date.now },
     shipmentPreference: { type: String, trim: true, default: "" },
     paymentTerms: { type: String, trim: true, default: "" }, // snapshot from vendor
-    terms: { type: String, trim: true, default: "" },
+
+    // Terms snapshot — auto-resolved server-side at create time from the
+    // Terms & Conditions master (vendor-specific match, else the Default
+    // term). NOT settable by the client and immutable after create — see
+    // StockPurchaseOrderService.createPurchaseOrder / updatePurchaseOrder.
+    terms: { type: String, default: "" }, // rich text (HTML) snapshot
+    termsConditionId: { type: mongoose.Schema.Types.ObjectId, ref: "terms_conditions", default: null },
+    termsSource: { type: String, enum: TERMS_SOURCE_ARRAY, default: TERMS_SOURCE.NONE },
+
     notes: { type: String, trim: true, default: "" },
 
     // GST split — derived from buyer vs vendor state code

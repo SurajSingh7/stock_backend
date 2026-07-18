@@ -1,2 +1,6 @@
 /node_modules
 .env*
+.claude
+/.claude
+CLAUDE.md
+API_DOCUMENTATION.md

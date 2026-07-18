@@ -109,4 +109,20 @@ export const SHIPMENT_PREFERENCE_OPTIONS = [
   "Third-Party Logistics",
   "Hand Delivery",
 ];
+
+// ─── Terms & Conditions master ─────────────────────────────────────────────
+export const TERMS_STATUS = {
+  ACTIVE: "ACTIVE",
+  INACTIVE: "INACTIVE",
+};
+export const TERMS_STATUS_ARRAY = Object.values(TERMS_STATUS);
+
+// Where a PO's terms snapshot came from at create time — a vendor-specific
+// term, the single Default term, or (nothing configured yet) none.
+export const TERMS_SOURCE = {
+  VENDOR: "VENDOR",
+  DEFAULT: "DEFAULT",
+  NONE: "NONE",
+};
+export const TERMS_SOURCE_ARRAY = Object.values(TERMS_SOURCE);
  

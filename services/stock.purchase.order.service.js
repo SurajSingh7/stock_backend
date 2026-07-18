@@ -6,6 +6,7 @@ import StockVendorModel from "../models/stock.vendor.model.js";
 import "../models/stock.category.model.js";
 import "../models/stock.product.definition.model.js";
 
+import StockTermsConditionService from "./stock.terms.condition.service.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import { generatePOPdf } from "../helpers/stock.po.pdf.helper.js";
@@ -356,7 +357,9 @@ export default class StockPurchaseOrderService {
       requester,
       poDate,
       shipmentPreference,
-      terms,
+      // NOTE: any `terms` sent by the client is intentionally ignored — the
+      // PO's terms snapshot is always auto-resolved server-side below (Terms
+      // & Conditions master: vendor-specific match, else the Default term).
       notes,
     } = body;
 
@@ -373,6 +376,11 @@ export default class StockPurchaseOrderService {
       .session(session)
       .lean();
     if (!vendor) throw new Error("Vendor not found or inactive");
+
+    // Auto-pick terms: a vendor-specific ACTIVE term wins, else the single
+    // Default term, else none (graceful — doesn't block PO creation).
+    const { term: resolvedTerm, source: termsSource } =
+      await StockTermsConditionService.resolveForVendor(vendorId, session);
 
     // Collect the approved-selection snapshots for the requested item ids.
     const wantIds = new Set((quotationItemIds || []).map(String));
@@ -473,7 +481,9 @@ export default class StockPurchaseOrderService {
           poDate: poDate || new Date(),
           shipmentPreference: shipmentPreference || "",
           paymentTerms: vendor.paymentTerms || "",
-          terms: terms || "",
+          terms: resolvedTerm?.termsContent || "",
+          termsConditionId: resolvedTerm?._id || null,
+          termsSource,
           notes: notes || "",
           taxType,
           items,
@@ -566,7 +576,9 @@ export default class StockPurchaseOrderService {
     if (body.requester !== undefined) po.requester = body.requester;
     if (body.poDate !== undefined) po.poDate = body.poDate;
     if (body.shipmentPreference !== undefined) po.shipmentPreference = body.shipmentPreference;
-    if (body.terms !== undefined) po.terms = body.terms;
+    // terms/termsConditionId/termsSource are immutable after create — they're
+    // a point-in-time snapshot from the Terms & Conditions master, not a
+    // free-text field (see createPurchaseOrder).
     if (body.notes !== undefined) po.notes = body.notes;
 
     // Buyer entity change can flip the GST split → recompute every line.

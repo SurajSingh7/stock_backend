@@ -6,7 +6,10 @@ import {
   UNIT_TYPES_ARRAY,
   GST_RATES_ARRAY,
   CATEGORY_APPROVAL_STATUS_ARRAY,
+  TERMS_STATUS_ARRAY,
 } from "../constants/stock.enums.js";
+
+const stripTags = (html) => String(html || "").replace(/<[^>]*>/g, "").trim();
 
 
 // ─── Field Definition Validators ─────────────────────────────────────────────
@@ -63,7 +66,7 @@ export const validateReorderCategories = (body) => {
 // ─── Product Definition Validators ───────────────────────────────────────────
 
 const validateProductDefinitionExtras = (body) => {
-  const { unit, gstRate, stockAlertThreshold, companyUseOnly } = body;
+  const { unit, gstRate, stockAlertThreshold } = body;
 
   if (unit !== undefined && unit !== null && !UNIT_TYPES_ARRAY.includes(unit))
     throw new Error(`unit must be one of: ${UNIT_TYPES_ARRAY.join(", ")}`);
@@ -77,9 +80,6 @@ const validateProductDefinitionExtras = (body) => {
     (typeof stockAlertThreshold !== "number" || stockAlertThreshold < 0)
   )
     throw new Error("stockAlertThreshold must be a non-negative number");
-
-  if (companyUseOnly !== undefined && typeof companyUseOnly !== "boolean")
-    throw new Error("companyUseOnly must be a boolean");
 };
 
 export const validateCreateProductDefinition = (body) => {
@@ -310,5 +310,43 @@ export const validateDisableVendor = (body) => {
 export const validateRejectPurchaseOrder = (body) => {
   if (body && body.rejectedReason !== undefined && typeof body.rejectedReason !== "string") {
     throw new Error("rejectedReason must be a string");
+  }
+};
+
+// ─── Terms & Conditions Validators ───────────────────────────────────────────
+
+export const validateCreateTermsCondition = (body) => {
+  const { termName, isDefault, applicableVendors, termsContent, status } = body || {};
+
+  if (!termName || !String(termName).trim()) throw new Error("termName is required");
+  if (!stripTags(termsContent)) throw new Error("termsContent is required");
+
+  if (!isDefault) {
+    if (!Array.isArray(applicableVendors) || applicableVendors.length === 0) {
+      throw new Error("applicableVendors is required when Default is No");
+    }
+  }
+
+  if (status !== undefined && !TERMS_STATUS_ARRAY.includes(status)) {
+    throw new Error(`status must be one of: ${TERMS_STATUS_ARRAY.join(", ")}`);
+  }
+};
+
+export const validateUpdateTermsCondition = (body) => {
+  const { termName, isDefault, applicableVendors, termsContent, status } = body || {};
+
+  if (termName !== undefined && !String(termName).trim()) throw new Error("termName cannot be empty");
+  if (termsContent !== undefined && !stripTags(termsContent)) {
+    throw new Error("termsContent cannot be empty");
+  }
+
+  if (isDefault === false) {
+    if (!Array.isArray(applicableVendors) || applicableVendors.length === 0) {
+      throw new Error("applicableVendors is required when Default is No");
+    }
+  }
+
+  if (status !== undefined && !TERMS_STATUS_ARRAY.includes(status)) {
+    throw new Error(`status must be one of: ${TERMS_STATUS_ARRAY.join(", ")}`);
   }
 };

@@ -1,0 +1,207 @@
+import StockTermsConditionModel from "../models/stock.terms.condition.model.js";
+import { TERMS_STATUS, TERMS_SOURCE } from "../constants/stock.enums.js";
+
+const escapeRegex = (str = "") => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Strip <script>/<style> blocks, inline event handlers, and javascript: URLs
+// out of the rich-text HTML before it's ever persisted — this content gets
+// rendered back with dangerouslySetInnerHTML (master preview + PO terms
+// snapshot), so it's sanitized at the write boundary rather than trusted.
+const sanitizeRichText = (html) =>
+  String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
+    .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
+    .replace(/javascript:/gi, "");
+
+export default class StockTermsConditionService {
+  // ─── Create ──────────────────────────────────────────────────────────────
+
+  static async createTermsCondition(body, session) {
+    try {
+      const { termName, isDefault, applicableVendors, termsContent, status } = body;
+      const wantsDefault = !!isDefault;
+
+      // Only one ACTIVE default term at a time — demote whatever currently
+      // holds it rather than making the admin do it as a separate step.
+      if (wantsDefault) {
+        await StockTermsConditionModel.updateMany(
+          { isActive: true, isDefault: true },
+          { $set: { isDefault: false } },
+          { session }
+        );
+      }
+
+      const [term] = await StockTermsConditionModel.create(
+        [
+          {
+            termName: termName.trim(),
+            isDefault: wantsDefault,
+            applicableVendors: wantsDefault ? [] : applicableVendors || [],
+            termsContent: sanitizeRichText(termsContent),
+            status: status || TERMS_STATUS.ACTIVE,
+          },
+        ],
+        { session }
+      );
+      return term;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // ─── List ────────────────────────────────────────────────────────────────
+
+  static async getAllTermsConditions({ skip, limit, search, status, showInactive }) {
+    try {
+      const filter = showInactive ? {} : { isActive: true };
+      if (search) filter.termName = { $regex: escapeRegex(search.trim()), $options: "i" };
+      if (status) filter.status = status;
+
+      const [data, total] = await Promise.all([
+        StockTermsConditionModel.find(filter)
+          .populate("applicableVendors", "name")
+          .sort({ isDefault: -1, createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        StockTermsConditionModel.countDocuments(filter),
+      ]);
+
+      return { data, total };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // ─── Get one ─────────────────────────────────────────────────────────────
+
+  static async getTermsConditionById(id) {
+    try {
+      const term = await StockTermsConditionModel.findOne({ _id: id, isActive: true })
+        .populate("applicableVendors", "name")
+        .lean();
+      if (!term) throw new Error("Terms & Conditions not found");
+      return term;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // ─── Update ──────────────────────────────────────────────────────────────
+
+  static async updateTermsCondition(id, body, session) {
+    try {
+      const term = await StockTermsConditionModel.findOne({ _id: id, isActive: true }).session(session);
+      if (!term) throw new Error("Terms & Conditions not found");
+
+      const { termName, isDefault, applicableVendors, termsContent, status } = body;
+      const nextIsDefault = isDefault !== undefined ? !!isDefault : term.isDefault;
+
+      if (nextIsDefault && !term.isDefault) {
+        await StockTermsConditionModel.updateMany(
+          { isActive: true, isDefault: true, _id: { $ne: term._id } },
+          { $set: { isDefault: false } },
+          { session }
+        );
+      }
+
+      if (termName !== undefined) term.termName = termName.trim();
+      term.isDefault = nextIsDefault;
+      term.applicableVendors = nextIsDefault ? [] : applicableVendors || [];
+      if (termsContent !== undefined) term.termsContent = sanitizeRichText(termsContent);
+      if (status !== undefined) term.status = status;
+
+      await term.save({ session });
+      return term;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // ─── Soft delete ─────────────────────────────────────────────────────────
+  // No special guard against deleting the current default — PO creation
+  // falls back gracefully to TERMS_SOURCE.NONE (empty terms) when neither a
+  // vendor-specific nor a default term is configured; see resolveForVendor.
+
+  static async softDeleteTermsCondition(id, deletedBy, session) {
+    try {
+      const term = await StockTermsConditionModel.findOne({ _id: id, isActive: true }).session(session);
+      if (!term) throw new Error("Terms & Conditions not found");
+
+      term.isActive = false;
+      term.deletedAt = new Date();
+      term.deletedBy = deletedBy ?? null;
+      await term.save({ session });
+      return term;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // ─── Restore ─────────────────────────────────────────────────────────────
+
+  static async restoreTermsCondition(id, session) {
+    try {
+      const term = await StockTermsConditionModel.findOne({ _id: id }).session(session);
+      if (!term) throw new Error("Terms & Conditions not found");
+      if (term.isActive) throw new Error("Terms & Conditions is already active");
+
+      // Restoring a former default must not collide with whatever is the
+      // current default — demote it first, same rule as create/update.
+      if (term.isDefault) {
+        await StockTermsConditionModel.updateMany(
+          { isActive: true, isDefault: true, _id: { $ne: term._id } },
+          { $set: { isDefault: false } },
+          { session }
+        );
+      }
+
+      term.isActive = true;
+      term.deletedAt = null;
+      term.deletedBy = null;
+      await term.save({ session });
+      return term;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // ─── Resolve — used by PO creation (Section: auto-pick terms) ────────────
+  // Vendor-specific ACTIVE term (isDefault: false, applicableVendors
+  // includes vendorId) wins; otherwise fall back to the single ACTIVE
+  // default term; otherwise NONE (caller stores empty terms, non-fatal).
+
+  static async resolveForVendor(vendorId, session) {
+    try {
+      if (vendorId) {
+        const vendorTerm = await StockTermsConditionModel.findOne({
+          isActive: true,
+          status: TERMS_STATUS.ACTIVE,
+          isDefault: false,
+          applicableVendors: vendorId,
+        })
+          .sort({ updatedAt: -1 })
+          .session(session ?? null)
+          .lean();
+
+        if (vendorTerm) return { term: vendorTerm, source: TERMS_SOURCE.VENDOR };
+      }
+
+      const defaultTerm = await StockTermsConditionModel.findOne({
+        isActive: true,
+        status: TERMS_STATUS.ACTIVE,
+        isDefault: true,
+      })
+        .session(session ?? null)
+        .lean();
+
+      if (defaultTerm) return { term: defaultTerm, source: TERMS_SOURCE.DEFAULT };
+
+      return { term: null, source: TERMS_SOURCE.NONE };
+    } catch (error) {
+      throw error;
+    }
+  }
+}

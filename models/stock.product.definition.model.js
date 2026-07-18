@@ -48,10 +48,6 @@ const stockProductDefinitionSchema = new mongoose.Schema(
     },
 
     // ── FIELDS added earlier for billing/GST/unit UI ──
-    companyUseOnly: {
-      type: Boolean,
-      default: false,
-    },
     gstRate: {
       type: String,
       enum: GST_RATES_ARRAY,

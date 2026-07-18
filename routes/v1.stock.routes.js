@@ -7,6 +7,7 @@ import { uploadProductImage } from "../helpers/stock.upload.helper.js";
 import StockVendorController from "../controllers/stock.vendor.controller.js";
 import StockQuotationController from "../controllers/stock.quotation.controller.js";
 import StockPurchaseOrderController from "../controllers/stock.purchase.order.controller.js";
+import StockTermsConditionController from "../controllers/stock.terms.condition.controller.js";
 
 const router = express.Router();
 
@@ -55,6 +56,17 @@ router.get("/vendors/:id", StockVendorController.getVendorById);
 router.put("/vendors/:id", StockVendorController.updateVendor);
 router.delete("/vendors/:id", StockVendorController.softDeleteVendor);
 router.patch("/vendors/:id/restore", StockVendorController.restoreVendor);
+
+// ─── Terms & Conditions ─────────────────────────────────────────────────────
+// /resolve/:vendorId BEFORE /:id — same static-before-dynamic rule as
+// /categories/flat, /quotations/status-summary, etc.
+router.post("/terms-conditions", StockTermsConditionController.createTermsCondition);
+router.get("/terms-conditions", StockTermsConditionController.getAllTermsConditions);
+router.get("/terms-conditions/resolve/:vendorId", StockTermsConditionController.resolveForVendor);
+router.get("/terms-conditions/:id", StockTermsConditionController.getTermsConditionById);
+router.put("/terms-conditions/:id", StockTermsConditionController.updateTermsCondition);
+router.delete("/terms-conditions/:id", StockTermsConditionController.softDeleteTermsCondition);
+router.patch("/terms-conditions/:id/restore", StockTermsConditionController.restoreTermsCondition);
 
 // ─── Inventory Items ──────────────────────────────────────────────────────────
 router.post("/inventory-items/bulk", StockInventoryItemController.bulkCreateInventoryItems);
