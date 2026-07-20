@@ -66,7 +66,7 @@ export const validateReorderCategories = (body) => {
 // ─── Product Definition Validators ───────────────────────────────────────────
 
 const validateProductDefinitionExtras = (body) => {
-  const { unit, gstRate, stockAlertThreshold } = body;
+  const { unit, gstRate, stockAlertThreshold, warrantyYears } = body;
 
   if (unit !== undefined && unit !== null && !UNIT_TYPES_ARRAY.includes(unit))
     throw new Error(`unit must be one of: ${UNIT_TYPES_ARRAY.join(", ")}`);
@@ -80,6 +80,15 @@ const validateProductDefinitionExtras = (body) => {
     (typeof stockAlertThreshold !== "number" || stockAlertThreshold < 0)
   )
     throw new Error("stockAlertThreshold must be a non-negative number");
+
+  if (warrantyYears === undefined || warrantyYears === null)
+    throw new Error("warrantyYears is required");
+  if (
+    typeof warrantyYears !== "number" ||
+    !Number.isInteger(warrantyYears) ||
+    warrantyYears < 1
+  )
+    throw new Error("warrantyYears must be a positive integer");
 };
 
 export const validateCreateProductDefinition = (body) => {
@@ -222,6 +231,12 @@ export const validateCreateQuotation = (body) => {
     }
     if (!isNonNegativeNumber(item.unitPrice)) {
       throw new Error(`${where}: price must be 0 or greater`);
+    }
+    // Soft guard only — the authoritative warrantyYears is resolved
+    // server-side in buildItems() from the vendor assignment/product default,
+    // this just rejects an obviously bad client-sent value if one is present.
+    if (item.warrantyYears !== undefined && !isPositiveNumber(item.warrantyYears)) {
+      throw new Error(`${where}: warrantyYears must be greater than 0`);
     }
   });
 };

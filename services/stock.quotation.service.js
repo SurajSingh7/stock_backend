@@ -147,12 +147,10 @@ export default class StockQuotationService {
       }
       seenPairs.add(pairKey);
 
-      const isAssigned = (vendor.assignedProducts || []).some((ap) =>
-        (ap.productIds || []).some(
-          (pid) => String(pid) === String(raw.productDefinitionId)
-        )
-      );
-      if (!isAssigned) {
+      const assignedEntry = (vendor.assignedProducts || [])
+        .flatMap((ap) => ap.products || [])
+        .find((p) => String(p.productId) === String(raw.productDefinitionId));
+      if (!assignedEntry) {
         throw new Error(
           `${product.name} is not an approved product for vendor ${vendor.name}`
         );
@@ -166,6 +164,12 @@ export default class StockQuotationService {
         typeof product.gstRate === "number"
           ? product.gstRate
           : Number(product.gstRate) || 0;
+
+      // Server-authoritative, same posture as gstRate above — never trust a
+      // client-sent warrantyYears, always resolve from the vendor's override
+      // (falling back to the product default) at snapshot time.
+      const warrantyYears =
+        assignedEntry.overrides?.warrantyYears ?? product.warrantyYears ?? null;
 
       const { baseAmount, gstAmount, lineTotal } =
         StockQuotationService.computeTotals(quantity, unitPrice, gstRate);
@@ -193,6 +197,7 @@ export default class StockQuotationService {
         categoryName: raw.categoryName || "",
         quantity,
         unitPrice,
+        warrantyYears,
         gstRate,
         baseAmount,
         gstAmount,
@@ -370,6 +375,7 @@ export default class StockQuotationService {
             vendorName: item.vendorName,
             quantity: item.quantity,
             unitPrice: item.unitPrice,
+            warrantyYears: item.warrantyYears,
             gstRate: item.gstRate,
             baseAmount: item.baseAmount,
             gstAmount: item.gstAmount,
@@ -428,7 +434,7 @@ export default class StockQuotationService {
 
     const [data, total] = await Promise.all([
       StockQuotationModel.find(filter)
-        .sort({ createdAt: -1 })
+        .sort({ updatedAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -524,16 +530,19 @@ export default class StockQuotationService {
       const entry = (v.assignedProducts || []).find(
         (ap) => String(ap.categoryId) === String(categoryId)
       );
-      const productIds = (entry?.productIds || []).map(String);
-      productIds.forEach((pid) => allProductIds.add(pid));
-      return { vendorId: v._id, vendorName: v.name, productIds };
+      const products = entry?.products || [];
+      const productOverrides = new Map(
+        products.map((p) => [String(p.productId), p.overrides])
+      );
+      products.forEach((p) => allProductIds.add(String(p.productId)));
+      return { vendorId: v._id, vendorName: v.name, productOverrides };
     });
 
     const products = await StockProductDefinitionModel.find({
       _id: { $in: [...allProductIds] },
       isActive: true,
     })
-      .select("name gstRate trackingMethod")
+      .select("name gstRate trackingMethod warrantyYears")
       .lean();
     const productMap = new Map(products.map((p) => [String(p._id), p]));
 
@@ -541,7 +550,7 @@ export default class StockQuotationService {
       .map((vp) => ({
         vendorId: vp.vendorId,
         vendorName: vp.vendorName,
-        products: vp.productIds
+        products: [...vp.productOverrides.keys()]
           .map((pid) => productMap.get(pid))
           .filter(Boolean)
           .map((p) => ({
@@ -549,6 +558,10 @@ export default class StockQuotationService {
             name: p.name,
             gstRate:
               typeof p.gstRate === "number" ? p.gstRate : Number(p.gstRate) || 0,
+            warrantyYears:
+              vp.productOverrides.get(String(p._id))?.warrantyYears ??
+              p.warrantyYears ??
+              null,
           })),
       }))
       .filter((vp) => vp.products.length > 0);

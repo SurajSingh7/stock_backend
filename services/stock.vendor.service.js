@@ -147,7 +147,7 @@ export default class StockVendorService {
         if (!mongoose.Types.ObjectId.isValid(productId)) {
           return paginateReturn([], 0, page, limit);
         }
-        filter["assignedProducts.productIds"] = new mongoose.Types.ObjectId(productId);
+        filter["assignedProducts.products.productId"] = new mongoose.Types.ObjectId(productId);
       }
 
       const [data, total] = await Promise.all([
@@ -165,7 +165,7 @@ export default class StockVendorService {
     try {
       const vendor = await StockVendorModel.findOne({ _id: id, isActive: true })
         .populate("assignedProducts.categoryId", "name type")
-        .populate("assignedProducts.productIds", "name")
+        .populate("assignedProducts.products.productId", "name warrantyYears")
         .lean();
       if (!vendor) throw new Error("Vendor not found");
       return vendor;

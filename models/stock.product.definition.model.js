@@ -63,6 +63,21 @@ const stockProductDefinitionSchema = new mongoose.Schema(
       default: null,
       min: 0,
     },
+    // Default warranty (years) for this product — vendors may override this
+    // per assignment (see Vendor.assignedProducts.overrides.warrantyYears),
+    // and that override is snapshotted onto quotation items.
+    //
+    // Deliberately NOT `required: true` here: Mongoose re-validates the whole
+    // document on every .save() (soft-delete, restore, unrelated field edits
+    // — not just create), so a schema-level `required` would permanently
+    // block those operations on any product saved before this field existed.
+    // "Required" is enforced instead at the API layer for create/update
+    // (validateProductDefinitionExtras in stock.validator.js).
+    warrantyYears: {
+      type: Number,
+      default: null,
+      min: 1,
+    },
     // ───────────────────────────────────────────────────
 
     // ── Product image ──

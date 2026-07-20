@@ -17,6 +17,7 @@ export default class StockProductDefinitionService {
         gstRate,
         unit,
         stockAlertThreshold,
+        warrantyYears,
         image, // NEW — public path set by controller from req.file, or null
       } = body;
 
@@ -46,6 +47,7 @@ export default class StockProductDefinitionService {
         gstRate: gstRate ?? null,
         unit: unit ?? null,
         stockAlertThreshold: stockAlertThreshold ?? null,
+        warrantyYears,
         image: image ?? null,
       });
 
@@ -152,6 +154,7 @@ export default class StockProductDefinitionService {
         "gstRate",
         "unit",
         "stockAlertThreshold",
+        "warrantyYears",
         "image", // NEW
       ];
       allowed.forEach((key) => {

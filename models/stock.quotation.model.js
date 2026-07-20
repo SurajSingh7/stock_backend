@@ -30,6 +30,10 @@ const quotationLineItemSchema = new Schema(
     // priced quantities
     quantity: { type: Number, required: true, min: 1 },
     unitPrice: { type: Number, required: true, min: 0 },
+    // Snapshotted at creation from the vendor's assignment override (falling
+    // back to the product's default) — never re-read live, same posture as
+    // unitPrice/gstRate, so a later vendor edit can't retroactively change it.
+    warrantyYears: { type: Number, default: null, min: 1 },
     gstRate: { type: Number, default: 0, min: 0 },
     baseAmount: { type: Number, default: 0, min: 0 },
     gstAmount: { type: Number, default: 0, min: 0 },
@@ -77,6 +81,7 @@ const categorySelectionSchema = new Schema(
 
     quantity: { type: Number, default: 0 },
     unitPrice: { type: Number, default: 0 },
+    warrantyYears: { type: Number, default: null },
     gstRate: { type: Number, default: 0 },
     baseAmount: { type: Number, default: 0 },
     gstAmount: { type: Number, default: 0 },

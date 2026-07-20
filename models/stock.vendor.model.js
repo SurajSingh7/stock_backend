@@ -72,6 +72,28 @@ const addressSchema = new Schema(
   { _id: false }
 );
 
+// Open-ended per-assignment overrides — vendor-specific values that supersede
+// the product's own defaults (e.g. warrantyYears today, price/leadTime later)
+// without requiring a schema migration each time a new override is added.
+const assignedProductOverrideSchema = new Schema(
+  {
+    warrantyYears: { type: Number, default: null, min: 1 },
+  },
+  { _id: false, strict: false }
+);
+
+const assignedProductEntrySchema = new Schema(
+  {
+    productId: {
+      type: Schema.Types.ObjectId,
+      ref: "product_definitions",
+      required: true,
+    },
+    overrides: { type: assignedProductOverrideSchema, default: () => ({}) },
+  },
+  { _id: false }
+);
+
 const assignedProductSchema = new Schema(
   {
     categoryId: {
@@ -79,12 +101,7 @@ const assignedProductSchema = new Schema(
       ref: "categories", // ← was "StockCategoryModel" / "stock_categories"
       required: true,
     },
-    productIds: [
-      {
-        type: Schema.Types.ObjectId,
-        ref: "product_definitions", // ← was "StockProductDefinitionModel" / "stock_product_definitions"
-      },
-    ],
+    products: { type: [assignedProductEntrySchema], default: [] },
   },
   { _id: false }
 );
@@ -182,7 +199,7 @@ stockVendorSchema.index({ isActive: 1 });
 // applied in StockVendorService.getAllVendors). Without these, every filtered
 // list request is a full collection scan on the vendors master.
 stockVendorSchema.index({ "assignedProducts.categoryId": 1 });
-stockVendorSchema.index({ "assignedProducts.productIds": 1 });
+stockVendorSchema.index({ "assignedProducts.products.productId": 1 });
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.
 // NOTE: "vendors" (correct spelling) — keep it consistent everywhere.
