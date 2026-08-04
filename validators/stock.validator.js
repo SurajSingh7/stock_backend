@@ -7,9 +7,13 @@ import {
   GST_RATES_ARRAY,
   CATEGORY_APPROVAL_STATUS_ARRAY,
   TERMS_STATUS_ARRAY,
+  NOTIFICATION_CHANNEL_ARRAY,
+  NOTIFICATION_CHANNEL,
 } from "../constants/stock.enums.js";
 
 const stripTags = (html) => String(html || "").replace(/<[^>]*>/g, "").trim();
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const isValidEmail = (e) => EMAIL_RE.test(String(e || "").trim());
 
 
 // ─── Field Definition Validators ─────────────────────────────────────────────
@@ -301,10 +305,8 @@ export const validateCreatePurchaseOrder = (body) => {
     throw new Error("vendorId is required");
   if (!Array.isArray(body.quotationItemIds) || body.quotationItemIds.length === 0)
     throw new Error("Select at least one item for the PO");
-  if (!body.buyerEntity || typeof body.buyerEntity !== "object")
-    throw new Error("Entity (buyer) is required");
-  if (!body.buyerEntity.stateCode)
-    throw new Error("Entity state code is required (for GST split)");
+  // buyerEntity is no longer sent by the client — createPurchaseOrder derives
+  // it server-side from the Tracking Order (see StockPurchaseOrderService).
   if (!body.requester || !String(body.requester).trim())
     throw new Error("Requester is required");
   if (body.skippedItems !== undefined) {
@@ -363,5 +365,81 @@ export const validateUpdateTermsCondition = (body) => {
 
   if (status !== undefined && !TERMS_STATUS_ARRAY.includes(status)) {
     throw new Error(`status must be one of: ${TERMS_STATUS_ARRAY.join(", ")}`);
+  }
+};
+
+// ─── Tracking Order Validators ───────────────────────────────────────────────
+
+export const validateAddEntity = (body) => {
+  const { entityId, alias, state, stateCode } = body || {};
+  if (!entityId) throw new Error("entityId is required");
+  if (!alias || !String(alias).trim()) throw new Error("Entity is required");
+  if (!state || !String(state).trim()) throw new Error("State is required");
+  if (!stateCode || !String(stateCode).trim()) throw new Error("State code is required");
+};
+
+export const validateMarkNotRequired = (body) => {
+  if (!body?.reason || !String(body.reason).trim()) throw new Error("A reason is required");
+};
+
+// ─── Notification Validators ─────────────────────────────────────────────────
+
+export const validateCreateNotification = (body) => {
+  const { name, channel, isDefault, applicableVendors, ccEmails } = body || {};
+
+  if (!name || !String(name).trim()) throw new Error("name is required");
+  if (!channel || !NOTIFICATION_CHANNEL_ARRAY.includes(channel)) {
+    throw new Error(`channel must be one of: ${NOTIFICATION_CHANNEL_ARRAY.join(", ")}`);
+  }
+
+  if (!isDefault) {
+    if (!Array.isArray(applicableVendors) || applicableVendors.length === 0) {
+      throw new Error("applicableVendors is required when Default is No");
+    }
+  }
+
+  if (channel === NOTIFICATION_CHANNEL.EMAIL && ccEmails !== undefined) {
+    if (!Array.isArray(ccEmails)) throw new Error("ccEmails must be an array");
+    ccEmails.forEach((e) => {
+      if (!isValidEmail(e)) throw new Error(`Invalid CC email: ${e}`);
+    });
+  }
+};
+
+export const validateUpdateNotification = (body) => {
+  const { name, channel, isDefault, applicableVendors, ccEmails } = body || {};
+
+  if (name !== undefined && !String(name).trim()) throw new Error("name cannot be empty");
+  if (channel !== undefined && !NOTIFICATION_CHANNEL_ARRAY.includes(channel)) {
+    throw new Error(`channel must be one of: ${NOTIFICATION_CHANNEL_ARRAY.join(", ")}`);
+  }
+
+  if (isDefault === false) {
+    if (!Array.isArray(applicableVendors) || applicableVendors.length === 0) {
+      throw new Error("applicableVendors is required when Default is No");
+    }
+  }
+
+  const effectiveChannel = channel || NOTIFICATION_CHANNEL.EMAIL;
+  if (effectiveChannel === NOTIFICATION_CHANNEL.EMAIL && ccEmails !== undefined) {
+    if (!Array.isArray(ccEmails)) throw new Error("ccEmails must be an array");
+    ccEmails.forEach((e) => {
+      if (!isValidEmail(e)) throw new Error(`Invalid CC email: ${e}`);
+    });
+  }
+};
+
+// ─── Send Mail (Purchase Order) Validator ────────────────────────────────────
+
+export const validateSendMail = (body) => {
+  const { sendEmail, to, cc } = body || {};
+  if (sendEmail) {
+    if (!to || !isValidEmail(to)) throw new Error("A valid To email is required");
+    if (cc !== undefined) {
+      if (!Array.isArray(cc)) throw new Error("cc must be an array");
+      cc.forEach((e) => {
+        if (!isValidEmail(e)) throw new Error(`Invalid CC email: ${e}`);
+      });
+    }
   }
 };

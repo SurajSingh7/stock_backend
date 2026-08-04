@@ -7,6 +7,7 @@ import StockProductDefinitionModel from "../models/stock.product.definition.mode
 import "../models/stock.category.model.js";
 import StockVendorPurchaseHistoryModel from "../models/stock.vendor.purchase.history.model.js";
 import StockVendorReviewModel from "../models/stock.vendor.review.model.js";
+import StockTrackingOrderService from "./stock.tracking.order.service.js";
 
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
@@ -393,6 +394,23 @@ export default class StockQuotationService {
     quotation.updatedBy = actorId;
     quotation.updatedByName = actorName;
     await quotation.save({ session });
+
+    // Approved/partially-approved → one Tracking Order per winning vendor,
+    // so Entity/State assignment (and the rest of the workflow) starts there
+    // instead of directly at PO creation.
+    if (
+      quotation.status === QUOTATION_STATUS.APPROVED ||
+      quotation.status === QUOTATION_STATUS.PARTIALLY_APPROVED
+    ) {
+      const vendorIds = [
+        ...new Set(
+          categoryApprovals
+            .filter((ca) => ca.status === CATEGORY_APPROVAL_STATUS.APPROVED)
+            .flatMap((ca) => ca.selections.map((s) => String(s.vendorId)))
+        ),
+      ];
+      await StockTrackingOrderService.createForQuotationVendors(quotation, vendorIds, session);
+    }
 
     log.info(
       `Quotation reviewed: ${quotation.quotationNumber} -> ${quotation.status}`

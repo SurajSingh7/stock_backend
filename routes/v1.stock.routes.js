@@ -8,6 +8,8 @@ import StockVendorController from "../controllers/stock.vendor.controller.js";
 import StockQuotationController from "../controllers/stock.quotation.controller.js";
 import StockPurchaseOrderController from "../controllers/stock.purchase.order.controller.js";
 import StockTermsConditionController from "../controllers/stock.terms.condition.controller.js";
+import StockTrackingOrderController from "../controllers/stock.tracking.order.controller.js";
+import StockNotificationController from "../controllers/stock.notification.controller.js";
 
 const router = express.Router();
 
@@ -106,8 +108,24 @@ router.get("/purchase-orders/:id", StockPurchaseOrderController.getPurchaseOrder
 router.put("/purchase-orders/:id", StockPurchaseOrderController.updatePurchaseOrder);
 router.patch("/purchase-orders/:id/approve", StockPurchaseOrderController.approvePurchaseOrder);
 router.patch("/purchase-orders/:id/reject", StockPurchaseOrderController.rejectPurchaseOrder);
+router.patch("/purchase-orders/:id/send-mail", StockPurchaseOrderController.sendMail);
 router.delete("/purchase-orders/:id", StockPurchaseOrderController.softDeletePurchaseOrder);
- 
+
+// ─── Tracking Orders ──────────────────────────────────────────────────────────
+// Static path BEFORE dynamic /:id-based ones.
+router.get("/tracking-orders/board", StockTrackingOrderController.getBoard);
+router.patch("/tracking-orders/:id/entity", StockTrackingOrderController.addEntity);
+router.patch("/tracking-orders/:id/not-required", StockTrackingOrderController.markNotRequired);
+
+// ─── Notification master ─────────────────────────────────────────────────────
+// /resolve/:vendorId BEFORE /:id — same static-before-dynamic rule as terms-conditions.
+router.post("/notifications", StockNotificationController.createNotification);
+router.get("/notifications", StockNotificationController.getAllNotifications);
+router.get("/notifications/resolve/:vendorId", StockNotificationController.resolveForVendor);
+router.get("/notifications/:id", StockNotificationController.getNotificationById);
+router.put("/notifications/:id", StockNotificationController.updateNotification);
+router.delete("/notifications/:id", StockNotificationController.softDeleteNotification);
+router.patch("/notifications/:id/restore", StockNotificationController.restoreNotification);
 
 export default router;
 

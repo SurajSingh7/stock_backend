@@ -12,6 +12,7 @@ import {
   validateCreatePurchaseOrder,
   validateRejectPurchaseOrder,
   validateDisableVendor,
+  validateSendMail,
 } from "../validators/stock.validator.js";
 
 const log = getLogger(import.meta.url);
@@ -188,6 +189,27 @@ export default class StockPurchaseOrderController {
       );
       await session.commitTransaction();
       successResponseHandler(res, po, "Purchase order rejected");
+    } catch (error) {
+      await session.abortTransaction();
+      errorResponseHandler(res, error);
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  static async sendMail(req, res) {
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction();
+      validateSendMail(req.body);
+      const data = await StockPurchaseOrderService.sendMail(
+        req.params.id,
+        req.body,
+        actingUser(req),
+        session
+      );
+      await session.commitTransaction();
+      successResponseHandler(res, data, "Mail action completed");
     } catch (error) {
       await session.abortTransaction();
       errorResponseHandler(res, error);

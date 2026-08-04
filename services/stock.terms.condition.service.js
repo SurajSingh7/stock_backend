@@ -204,4 +204,23 @@ export default class StockTermsConditionService {
       throw error;
     }
   }
+
+  // ─── Get one ACTIVE term by id — used by PO creation's manual-select      ─
+  // fallback when resolveForVendor finds nothing. Non-fatal on any error
+  // (bad id, etc.) — caller treats a null return the same as "not found".
+
+  static async getActiveById(id, session) {
+    if (!id) return null;
+    try {
+      return await StockTermsConditionModel.findOne({
+        _id: id,
+        isActive: true,
+        status: TERMS_STATUS.ACTIVE,
+      })
+        .session(session ?? null)
+        .lean();
+    } catch {
+      return null;
+    }
+  }
 }

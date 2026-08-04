@@ -122,7 +122,37 @@ export const TERMS_STATUS_ARRAY = Object.values(TERMS_STATUS);
 export const TERMS_SOURCE = {
   VENDOR: "VENDOR",
   DEFAULT: "DEFAULT",
+  MANUAL: "MANUAL",
   NONE: "NONE",
 };
 export const TERMS_SOURCE_ARRAY = Object.values(TERMS_SOURCE);
- 
+
+// ─── Tracking Orders — per (quotation, vendor) lifecycle ───────────────────
+// One doc per vendor-row created when a quotation is Approved/Partially
+// Approved. This is the source of truth for Entity/State + the overall
+// workflow stage shown on both the Tracking Orders and PO Approval pages.
+export const TRACKING_STATUS = {
+  ENTITY_PENDING: "ENTITY_PENDING",     // just created — entity/state not yet assigned
+  PO_PENDING: "PO_PENDING",             // entity assigned — ready for PO creation
+  PO_GENERATED: "PO_GENERATED",         // PO created (mirrors PO_STATUS.GENERATED)
+  PO_APPROVED: "PO_APPROVED",           // PO approved (mirrors PO_STATUS.APPROVED)
+  MATERIAL_PENDING: "MATERIAL_PENDING", // mail sent or marked manual — final stage here
+  REJECTED: "REJECTED",                 // PO rejected (mirrors PO_STATUS.REJECTED)
+  NOT_REQUIRED: "NOT_REQUIRED",         // vendor marked "Not Required"
+};
+export const TRACKING_STATUS_ARRAY = Object.values(TRACKING_STATUS);
+
+// How the PO ended up in MATERIAL_PENDING — actually emailed, or handled
+// outside the system. Stored on the tracking order for the Action-column
+// "Mail Sent"/"Manual" badge.
+export const MAIL_MODE = { SENT: "SENT", MANUAL: "MANUAL" };
+export const MAIL_MODE_ARRAY = Object.values(MAIL_MODE);
+
+// ─── Notification master ───────────────────────────────────────────────────
+export const NOTIFICATION_CHANNEL = {
+  EMAIL: "EMAIL",
+  WHATSAPP: "WHATSAPP",
+  SMS: "SMS",
+  SLACK: "SLACK",
+};
+export const NOTIFICATION_CHANNEL_ARRAY = Object.values(NOTIFICATION_CHANNEL);

@@ -7,10 +7,23 @@ import "../models/stock.category.model.js";
 import "../models/stock.product.definition.model.js";
 
 import StockTermsConditionService from "./stock.terms.condition.service.js";
+import StockTrackingOrderService from "./stock.tracking.order.service.js";
+import StockNotificationService from "./stock.notification.service.js";
+import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import { generatePOPdf } from "../helpers/stock.po.pdf.helper.js";
-import { PO_STATUS, PO_TAX_TYPE, QUOTATION_STATUS } from "../constants/stock.enums.js";
+import { poPdfAbsolutePath } from "../helpers/stock.po.pdf.helper.js";
+import { sendMail as sendMailTransport } from "../helpers/mail.helper.js";
+import {
+  PO_STATUS,
+  PO_TAX_TYPE,
+  QUOTATION_STATUS,
+  TERMS_SOURCE,
+  TRACKING_STATUS,
+  MAIL_MODE,
+  NOTIFICATION_CHANNEL,
+} from "../constants/stock.enums.js";
 
 const log = getLogger(import.meta.url);
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -136,6 +149,24 @@ export default class StockPurchaseOrderService {
     const poByKey = new Map();
     pos.forEach((po) => poByKey.set(`${po.sourceQuotationId}::${po.vendorId}`, po));
 
+    // Entity/State now lives on the Tracking Order, assigned once on the
+    // Tracking Orders page — a vendor row only belongs on THIS board once its
+    // tracking order has moved past ENTITY_PENDING (and isn't NOT_REQUIRED).
+    const trackingOrders = await StockTrackingOrderModel.find({
+      sourceQuotationId: { $in: quotationIds },
+      isActive: true,
+    }).lean();
+    const trackingByKey = new Map(
+      trackingOrders.map((t) => [`${t.sourceQuotationId}::${t.vendorId}`, t])
+    );
+    const VISIBLE_TRACKING_STATUSES = new Set([
+      TRACKING_STATUS.PO_PENDING,
+      TRACKING_STATUS.PO_GENERATED,
+      TRACKING_STATUS.PO_APPROVED,
+      TRACKING_STATUS.MATERIAL_PENDING,
+      TRACKING_STATUS.REJECTED,
+    ]);
+
     // ── build the full board (unfiltered) ────────────────────────────────────
     const fullBoard = [];
     quotations.forEach((q) => {
@@ -161,7 +192,7 @@ export default class StockPurchaseOrderService {
               const d = disabledMap.get(vId);
               byVendor.set(vId, {
                 vendorId: vId, vendorName: sel.vendorName || v.name || "",
-                phone: primary.phone || "", email: primary.email || "",
+                phone: primary.phone || "", email: primary.email || "", contactName: primary.name || "",
                 gstNumber: v.gst?.gstNumber || "", address: v.address?.fullAddress || "",
                 state: v.gst?.state?.name || v.address?.state?.name || "",
                 stateCode: v.gst?.state?.code || v.address?.state?.code || "",
@@ -188,12 +219,16 @@ export default class StockPurchaseOrderService {
 
       const rows = [];
       byVendor.forEach((row, vId) => {
+        const tracking = trackingByKey.get(`${q._id}::${vId}`);
+        if (!tracking || !VISIBLE_TRACKING_STATUSES.has(tracking.status)) return;
+
         const po = poByKey.get(`${q._id}::${vId}`);
-        let statusVal, items, poId = null, poNumber = "", entityAlias = "";
+        let statusVal, items, poId = null, poNumber = "";
+        const entityAlias = tracking.buyerEntity?.alias || "";
         let totalAmount = 0, totalQuantity = 0, rejectedReason = "", filterDate = approvalDate;
 
         if (po) {
-          poId = po._id; poNumber = po.poNumber; statusVal = po.status; entityAlias = po.buyerEntity?.alias || "";
+          poId = po._id; poNumber = po.poNumber; statusVal = po.status;
           items = (po.items || []).map((it) => ({
             quotationItemId: it.quotationItemId, categoryId: it.categoryId, categoryName: it.categoryName,
             productDefinitionId: it.productDefinitionId, productName: it.productName,
@@ -217,12 +252,14 @@ export default class StockPurchaseOrderService {
         const prodIds = [...new Set(items.map((i) => String(i.productDefinitionId)).filter(Boolean))];
 
         rows.push({
-          vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email,
+          vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email, contactName: row.contactName,
           gstNumber: row.gstNumber, address: row.address, state: row.state, stateCode: row.stateCode,
           paymentTerms: row.paymentTerms,
           poId, poNumber, status: statusVal, entityAlias,
+          buyerEntity: tracking.buyerEntity || {},
           items, totalAmount, totalQuantity, skipped: row._skipped, filterDate,
           disabled: row.disabled, disabledReason: row.disabledReason, rejectedReason,
+          mailResult: tracking.mailResult || null,
           _catIds: catIds, _prodIds: prodIds,
         });
       });
@@ -353,14 +390,16 @@ export default class StockPurchaseOrderService {
       vendorId,
       quotationItemIds,
       skippedItems,
-      buyerEntity,
       requester,
       poDate,
       shipmentPreference,
       // NOTE: any `terms` sent by the client is intentionally ignored — the
       // PO's terms snapshot is always auto-resolved server-side below (Terms
       // & Conditions master: vendor-specific match, else the Default term).
+      // `termsConditionId` is the one exception — see the manual-select
+      // fallback below, honored only when resolveForVendor finds nothing.
       notes,
+      termsConditionId,
     } = body;
 
     const quotation = await StockQuotationModel.findOne({
@@ -377,10 +416,32 @@ export default class StockPurchaseOrderService {
       .lean();
     if (!vendor) throw new Error("Vendor not found or inactive");
 
+    // Buyer entity is no longer sent by the client — it's assigned once on
+    // the Tracking Orders page and consumed here read-only.
+    const tracking = await StockTrackingOrderService.getByQuotationAndVendor(
+      sourceQuotationId,
+      vendorId,
+      session
+    );
+    if (!tracking || tracking.status !== TRACKING_STATUS.PO_PENDING || !tracking.buyerEntity?.stateCode) {
+      throw new Error("Entity not assigned yet — add it in Tracking Orders before creating a PO");
+    }
+    const buyerEntity = tracking.buyerEntity;
+
     // Auto-pick terms: a vendor-specific ACTIVE term wins, else the single
     // Default term, else none (graceful — doesn't block PO creation).
-    const { term: resolvedTerm, source: termsSource } =
+    let { term: resolvedTerm, source: termsSource } =
       await StockTermsConditionService.resolveForVendor(vendorId, session);
+
+    // Manual fallback — the PO create screen requires the user to pick a
+    // template by hand when nothing auto-resolves; honor that pick here.
+    if (termsSource === TERMS_SOURCE.NONE && termsConditionId) {
+      const manual = await StockTermsConditionService.getActiveById(termsConditionId, session);
+      if (manual) {
+        resolvedTerm = manual;
+        termsSource = TERMS_SOURCE.MANUAL;
+      }
+    }
 
     // Collect the approved-selection snapshots for the requested item ids.
     const wantIds = new Set((quotationItemIds || []).map(String));
@@ -528,6 +589,10 @@ export default class StockPurchaseOrderService {
     po.pdfPath = pdfPath;
     await po.save({ session });
 
+    tracking.poId = po._id;
+    tracking.status = TRACKING_STATUS.PO_GENERATED;
+    await tracking.save({ session });
+
     log.info(`PO created: ${poNumber} (${items.length} items, ${taxType})`);
     return po;
   }
@@ -581,49 +646,9 @@ export default class StockPurchaseOrderService {
     // free-text field (see createPurchaseOrder).
     if (body.notes !== undefined) po.notes = body.notes;
 
-    // Buyer entity change can flip the GST split → recompute every line.
-    if (body.buyerEntity) {
-      po.buyerEntity = {
-        entityId: body.buyerEntity.entityId || null,
-        name: body.buyerEntity.name || "",
-        alias: body.buyerEntity.alias || "",
-        gstNumber: body.buyerEntity.gstNumber || "",
-        address: body.buyerEntity.address || "",
-        state: body.buyerEntity.state || "",
-        stateCode: String(body.buyerEntity.stateCode || ""),
-      };
-      const taxType =
-        po.buyerEntity.stateCode && po.buyerEntity.stateCode === po.vendorStateCode
-          ? PO_TAX_TYPE.CGST_SGST
-          : PO_TAX_TYPE.IGST;
-      po.taxType = taxType;
-
-      let subTotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0;
-      po.items.forEach((it) => {
-        const taxable = round2(it.quantity * it.unitPrice);
-        const { cgst, sgst, igst, gstAmount } = StockPurchaseOrderService.computeLineTax(
-          taxable,
-          it.gstRate,
-          taxType
-        );
-        it.taxable = taxable;
-        it.cgst = cgst;
-        it.sgst = sgst;
-        it.igst = igst;
-        it.gstAmount = gstAmount;
-        it.lineTotal = round2(taxable + gstAmount);
-        subTotal = round2(subTotal + taxable);
-        cgstTotal = round2(cgstTotal + cgst);
-        sgstTotal = round2(sgstTotal + sgst);
-        igstTotal = round2(igstTotal + igst);
-      });
-      po.subTotal = subTotal;
-      po.cgstTotal = cgstTotal;
-      po.sgstTotal = sgstTotal;
-      po.igstTotal = igstTotal;
-      po.gstTotal = round2(cgstTotal + sgstTotal + igstTotal);
-      po.grandTotal = round2(subTotal + po.gstTotal);
-    }
+    // Buyer entity is no longer editable here — it's a one-time assignment
+    // made on the Tracking Orders page before the PO ever existed (see
+    // createPurchaseOrder) and stays fixed for the life of the PO.
 
     // Editing an approved-then... no: edit only allowed on GENERATED/REJECTED,
     // and after edit it goes back to GENERATED for a fresh review.
@@ -653,6 +678,7 @@ export default class StockPurchaseOrderService {
     po.reviewedByName = user?.name || "";
     po.reviewedAt = new Date();
     await po.save({ session });
+    await StockTrackingOrderService.syncStatusForPo(po._id, TRACKING_STATUS.PO_APPROVED, session);
     return po;
   }
 
@@ -668,7 +694,78 @@ export default class StockPurchaseOrderService {
     po.reviewedByName = user?.name || "";
     po.reviewedAt = new Date();
     await po.save({ session });
+    await StockTrackingOrderService.syncStatusForPo(po._id, TRACKING_STATUS.REJECTED, session);
     return po;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Send Mail — APPROVED only. Either actually emails the PO (via the       */
+  /* resolved Notification's From/CC) or records a Manual hand-off; either   */
+  /* way the linked tracking order auto-advances to MATERIAL_PENDING.        */
+  /* ---------------------------------------------------------------------- */
+
+  static async sendMail(id, body, user, session) {
+    const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!po) throw new Error("Purchase order not found");
+    if (po.status !== PO_STATUS.APPROVED) {
+      throw new Error("Only an approved PO can be sent");
+    }
+
+    const { sendEmail, to, cc, from } = body;
+    const { notification } = await StockNotificationService.resolveForVendor(
+      po.vendorId,
+      NOTIFICATION_CHANNEL.EMAIL,
+      session
+    );
+
+    let mailResult;
+    if (sendEmail) {
+      // No per-notification From address anymore — sending always goes out
+      // as MAIL_FROM_DEFAULT (see mail.helper.js) unless a caller explicitly
+      // passes one.
+      const resolvedFrom = from || undefined;
+      const resolvedCc = Array.isArray(cc) && cc.length ? cc : notification?.ccEmails || [];
+
+      const pdfAbs = po.pdfPath ? poPdfAbsolutePath(po.pdfPath) : null;
+      await sendMailTransport({
+        from: resolvedFrom,
+        to,
+        cc: resolvedCc,
+        subject: `Purchase Order ${po.poNumber}`,
+        html: `<p>Please find attached Purchase Order <strong>${po.poNumber}</strong>.</p>`,
+        attachments: pdfAbs ? [{ filename: `${po.poNumber}.pdf`, path: pdfAbs }] : undefined,
+      });
+
+      // PO status intentionally stays APPROVED — mail delivery is tracked on
+      // the linked Tracking Order (mailResult/MATERIAL_PENDING below), not by
+      // moving the PO out of its real status bucket, so it keeps showing
+      // under the correct tab/count on the PO Approval board.
+      po.emailedTo = to;
+      po.emailedAt = new Date();
+      mailResult = {
+        mode: MAIL_MODE.SENT,
+        channel: NOTIFICATION_CHANNEL.EMAIL,
+        notificationId: notification?._id || null,
+        to,
+        cc: resolvedCc,
+        from: resolvedFrom || "",
+      };
+    } else {
+      // Manual hand-off — no email sent, PO status stays APPROVED (see note above).
+      mailResult = {
+        mode: MAIL_MODE.MANUAL,
+        channel: NOTIFICATION_CHANNEL.EMAIL,
+        notificationId: notification?._id || null,
+        to: to || "",
+        cc: cc || [],
+        from: from || "",
+      };
+    }
+
+    await po.save({ session });
+    await StockTrackingOrderService.recordMailResult(po._id, mailResult, session);
+
+    return { po, mailResult };
   }
 
   /* ---------------------------------------------------------------------- */
