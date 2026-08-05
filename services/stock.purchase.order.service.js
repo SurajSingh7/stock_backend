@@ -163,6 +163,7 @@ export default class StockPurchaseOrderService {
       TRACKING_STATUS.PO_PENDING,
       TRACKING_STATUS.PO_GENERATED,
       TRACKING_STATUS.PO_APPROVED,
+      TRACKING_STATUS.PO_SENT,
       TRACKING_STATUS.MATERIAL_PENDING,
       TRACKING_STATUS.REJECTED,
     ]);
@@ -312,7 +313,7 @@ export default class StockPurchaseOrderService {
     };
 
     // counts: every filter EXCEPT status
-    const counts = { ALL: 0, PO_PENDING: 0, GENERATED: 0, APPROVED: 0, REJECTED: 0 };
+    const counts = { ALL: 0, PO_PENDING: 0, GENERATED: 0, APPROVED: 0, SENT: 0, REJECTED: 0 };
     fullBoard.forEach((q) =>
       q.rows.forEach((r) => {
         if (rowPass(r, q.quotationNumber, true)) {
@@ -701,14 +702,17 @@ export default class StockPurchaseOrderService {
   /* ---------------------------------------------------------------------- */
   /* Send Mail — APPROVED only. Either actually emails the PO (via the       */
   /* resolved Notification's From/CC) or records a Manual hand-off; either   */
-  /* way the linked tracking order auto-advances to MATERIAL_PENDING.        */
+  /* way the PO moves to SENT and the linked tracking order advances to      */
+  /* PO_SENT.                                                                */
   /* ---------------------------------------------------------------------- */
 
   static async sendMail(id, body, user, session) {
     const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!po) throw new Error("Purchase order not found");
-    if (po.status !== PO_STATUS.APPROVED) {
-      throw new Error("Only an approved PO can be sent");
+    // APPROVED = first send. SENT = resend — once sent, the PO stays
+    // resendable indefinitely (see PurchaseOrderPage buildRowActions).
+    if (![PO_STATUS.APPROVED, PO_STATUS.SENT].includes(po.status)) {
+      throw new Error("Only an approved or already-sent PO can be sent");
     }
 
     const { sendEmail, to, cc, from } = body;
@@ -736,10 +740,6 @@ export default class StockPurchaseOrderService {
         attachments: pdfAbs ? [{ filename: `${po.poNumber}.pdf`, path: pdfAbs }] : undefined,
       });
 
-      // PO status intentionally stays APPROVED — mail delivery is tracked on
-      // the linked Tracking Order (mailResult/MATERIAL_PENDING below), not by
-      // moving the PO out of its real status bucket, so it keeps showing
-      // under the correct tab/count on the PO Approval board.
       po.emailedTo = to;
       po.emailedAt = new Date();
       mailResult = {
@@ -751,7 +751,8 @@ export default class StockPurchaseOrderService {
         from: resolvedFrom || "",
       };
     } else {
-      // Manual hand-off — no email sent, PO status stays APPROVED (see note above).
+      // Manual hand-off — no email sent through the ERP, but the PO has still
+      // left the building, so it moves to SENT the same as an emailed one.
       mailResult = {
         mode: MAIL_MODE.MANUAL,
         channel: NOTIFICATION_CHANNEL.EMAIL,
@@ -762,6 +763,7 @@ export default class StockPurchaseOrderService {
       };
     }
 
+    po.status = PO_STATUS.SENT;
     await po.save({ session });
     await StockTrackingOrderService.recordMailResult(po._id, mailResult, session);
 

@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node app.js",
     "seed": "node seeders/stock.field.definition.seeder.js",
-    "dev": "pm2 start app.js --name stock-backend"
+     "dev": "pm2 start app.js --name stock-backend --watch"
   },
   "dependencies": {
     "dotenv": "^16.0.0",

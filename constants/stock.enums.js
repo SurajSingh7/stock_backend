@@ -136,13 +136,14 @@ export const TRACKING_STATUS = {
   PO_PENDING: "PO_PENDING",             // entity assigned — ready for PO creation
   PO_GENERATED: "PO_GENERATED",         // PO created (mirrors PO_STATUS.GENERATED)
   PO_APPROVED: "PO_APPROVED",           // PO approved (mirrors PO_STATUS.APPROVED)
-  MATERIAL_PENDING: "MATERIAL_PENDING", // mail sent or marked manual — final stage here
+  PO_SENT: "PO_SENT",                   // mail sent or marked manual (mirrors PO_STATUS.SENT)
+  MATERIAL_PENDING: "MATERIAL_PENDING", // future — material received from vendor is pending
   REJECTED: "REJECTED",                 // PO rejected (mirrors PO_STATUS.REJECTED)
   NOT_REQUIRED: "NOT_REQUIRED",         // vendor marked "Not Required"
 };
 export const TRACKING_STATUS_ARRAY = Object.values(TRACKING_STATUS);
 
-// How the PO ended up in MATERIAL_PENDING — actually emailed, or handled
+// How the PO ended up in PO_SENT — actually emailed, or handled
 // outside the system. Stored on the tracking order for the Action-column
 // "Mail Sent"/"Manual" badge.
 export const MAIL_MODE = { SENT: "SENT", MANUAL: "MANUAL" };

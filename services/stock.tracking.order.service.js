@@ -200,6 +200,7 @@ export default class StockTrackingOrderService {
       PO_PENDING: 0,
       PO_GENERATED: 0,
       PO_APPROVED: 0,
+      PO_SENT: 0,
       MATERIAL_PENDING: 0,
       REJECTED: 0,
       NOT_REQUIRED: 0,
@@ -298,8 +299,8 @@ export default class StockTrackingOrderService {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Mail result — records the send outcome, then auto-advances to           */
-  /* MATERIAL_PENDING regardless of whether the email actually sent.         */
+  /* Mail result — records the send outcome, then auto-advances to PO_SENT   */
+  /* regardless of whether the email actually sent or was handled manually.  */
   /* ---------------------------------------------------------------------- */
 
   static async recordMailResult(poId, mailResult, session) {
@@ -308,7 +309,7 @@ export default class StockTrackingOrderService {
       {
         $set: {
           mailResult: { ...mailResult, sentAt: new Date() },
-          status: TRACKING_STATUS.MATERIAL_PENDING,
+          status: TRACKING_STATUS.PO_SENT,
         },
       },
       { session }
