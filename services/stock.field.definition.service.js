@@ -32,7 +32,7 @@ export default class StockFieldDefinitionService {
 
   static async createFieldDefinition(body, session) {
     try {
-      const { code, label, inputType, optionsSource, isRequired, isFilterable, order } = body;
+      const { code, label, inputType, optionsSource, isRequired, isFilterable, showList, order } = body;
 
       // 🔒 Duplicate check — code AND label, across active + inactive records
       await StockFieldDefinitionService.assertFieldNotDuplicate({ code, label, session });
@@ -44,6 +44,7 @@ export default class StockFieldDefinitionService {
         optionsSource: optionsSource ?? null,
         isRequired: isRequired ?? false,
         isFilterable: isFilterable ?? false,
+        showList: showList ?? false,
         order: Number.isFinite(Number(order)) ? Number(order) : 0,
       });
 
@@ -107,7 +108,7 @@ export default class StockFieldDefinitionService {
         });
       }
 
-      const allowed = ["label", "inputType", "optionsSource", "isRequired", "isFilterable", "order"];
+      const allowed = ["label", "inputType", "optionsSource", "isRequired", "isFilterable", "showList", "order"];
       allowed.forEach((key) => {
         if (body[key] !== undefined) field[key] = body[key];
       });

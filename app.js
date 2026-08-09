@@ -5,6 +5,8 @@ import cors from "cors";
 import path from "path";
 
 import stockRoutes from "./routes/v1.stock.routes.js";
+import { seedMainWarehouse } from "./seeders/stock.warehouse.seeder.js";
+import { multerErrorHandler } from "./helpers/stock.upload.helper.js";
 
 dotenv.config();
 
@@ -47,6 +49,10 @@ app.get("/", (req, res) =>
 // APIs
 app.use("/api/v1/stock", stockRoutes);
 
+// Multer errors (file too large / wrong type) bypass the controller's
+// try/catch entirely — must be mounted here to turn them into a clean 400
+// instead of Express's default HTML error page.
+app.use(multerErrorHandler);
 
 // 404 always last
 app.use((req, res) =>
@@ -59,8 +65,10 @@ app.use((req, res) =>
 
 mongoose
 .connect(process.env.MONGO_URI)
-.then(() => {
+.then(async () => {
   console.log("✅ MongoDB connected");
+
+  await seedMainWarehouse();
 
   app.listen(process.env.PORT || 5000, () => {
     console.log(

@@ -1,7 +1,17 @@
+import mongoose from "mongoose";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
-import { TRACKING_METHODS, ITEM_STATUS_ARRAY } from "../constants/stock.enums.js";
+import StockCategoryModel from "../models/stock.category.model.js";
+import StockInvoiceModel from "../models/stock.invoice.model.js";
+import StockCategoryService from "./stock.category.service.js";
+import { paginate } from "../helpers/pagination.helper.js";
+import {
+  TRACKING_METHODS,
+  ITEM_STATUS_ARRAY,
+  ITEM_STATUS,
+  ITEM_APPROVAL_STATUS,
+} from "../constants/stock.enums.js";
 
 export default class StockInventoryItemService {
   // ─── Validate fieldValues against productDefinition ──────────────────────────
@@ -23,7 +33,7 @@ export default class StockInventoryItemService {
 
   static async createInventoryItem(body, session) {
     try {
-      const { productDefinitionId, fieldValues, quantity, receivedAt, receivedBy } = body;
+      const { productDefinitionId, fieldValues, quantity, receivedAt, receivedBy, warehouseId, vendorId } = body;
 
       const def = await StockProductDefinitionModel.findOne({
         _id: productDefinitionId,
@@ -38,6 +48,8 @@ export default class StockInventoryItemService {
 
       const item = new StockInventoryItemModel({
         productDefinitionId,
+        vendorId: vendorId ?? null,
+        warehouseId: warehouseId ?? null,
         fieldValues: fieldValues || {},
         quantity: def.trackingMethod === TRACKING_METHODS.QUANTITY ? quantity : null,
         receivedAt,
@@ -55,7 +67,7 @@ export default class StockInventoryItemService {
 
   static async bulkCreateInventoryItems(body, session) {
     try {
-      const { productDefinitionId, items, receivedAt, receivedBy } = body;
+      const { productDefinitionId, items, receivedAt, receivedBy, warehouseId, vendorId } = body;
 
       const def = await StockProductDefinitionModel.findOne({
         _id: productDefinitionId,
@@ -74,6 +86,8 @@ export default class StockInventoryItemService {
           await StockInventoryItemService._validateFieldValues(def, items[i].fieldValues || {});
           docs.push({
             productDefinitionId,
+            vendorId: vendorId ?? null,
+            warehouseId: warehouseId ?? null,
             fieldValues: items[i].fieldValues || {},
             quantity: null,
             receivedAt,
@@ -98,28 +112,62 @@ export default class StockInventoryItemService {
 
   // ─── List items ───────────────────────────────────────────────────────────────
 
-  static async getAllInventoryItems({ skip, limit, productDefinitionId, status, search, showInactive }) {
+  static async getAllInventoryItems({
+    skip,
+    limit,
+    productDefinitionId,
+    categoryId,
+    warehouseId,
+    status,
+    approvalStatus,
+    search,
+    showInactive,
+  }) {
     try {
       const filter = showInactive ? {} : { isActive: true };
       if (productDefinitionId) filter.productDefinitionId = productDefinitionId;
+      if (warehouseId) filter.warehouseId = warehouseId;
       if (status) filter.status = status;
+      if (approvalStatus) filter.approvalStatus = approvalStatus;
+
+      if (categoryId) {
+        const defIds = await StockProductDefinitionModel.find({ categoryId, isActive: true }).distinct("_id");
+        filter.productDefinitionId = filter.productDefinitionId
+          ? filter.productDefinitionId
+          : { $in: defIds };
+      }
+
       if (search) {
-        filter.$or = [
-          { "fieldValues.imei": { $regex: search, $options: "i" } },
-          { "fieldValues.serial_no": { $regex: search, $options: "i" } },
-        ];
+        // Generalized beyond the original hardcoded imei/serial_no: any field
+        // definition marked isFilterable or showList is searchable, since
+        // that's exactly the set of columns the Item Inventory list renders.
+        const searchableFields = await StockFieldDefinitionModel.find({
+          isActive: true,
+          $or: [{ isFilterable: true }, { showList: true }],
+        })
+          .select("code")
+          .lean();
+        const codes = new Set(searchableFields.map((f) => f.code));
+        codes.add("imei");
+        codes.add("serial_no");
+        filter.$or = [...codes].map((code) => ({
+          [`fieldValues.${code}`]: { $regex: search, $options: "i" },
+        }));
       }
 
       const [data, total] = await Promise.all([
         StockInventoryItemModel.find(filter)
           .populate({
             path: "productDefinitionId",
-            select: "name trackingMethod selectedFields",
+            select: "name trackingMethod selectedFields categoryId",
             populate: {
               path: "selectedFields.fieldDefId",
-              select: "code label inputType optionsSource",
+              select: "code label inputType optionsSource showList isFilterable",
             },
           })
+          .populate({ path: "warehouseId", select: "name code" })
+          .populate({ path: "vendorId", select: "name" })
+          .populate({ path: "invoiceId", select: "invoiceNumber receivedByName" })
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limit)
@@ -127,10 +175,151 @@ export default class StockInventoryItemService {
         StockInventoryItemModel.countDocuments(filter),
       ]);
 
+      // Full category breadcrumb (e.g. "Electronics / Mobile / Poco") — the
+      // populated productDefinitionId only carries categoryId, so resolve it
+      // here the same way Product Inventory does, once per distinct category.
+      const categoryIds = [...new Set(data.map((d) => String(d.productDefinitionId?.categoryId)).filter(Boolean))];
+      const categoryDocs = await StockCategoryModel.find({ _id: { $in: categoryIds } }).select("path").lean();
+      const pathByCategoryId = new Map(categoryDocs.map((c) => [String(c._id), c.path]));
+      const displayPathCache = new Map();
+      for (const item of data) {
+        const catId = String(item.productDefinitionId?.categoryId || "");
+        if (!catId) continue;
+        if (!displayPathCache.has(catId)) {
+          const path = pathByCategoryId.get(catId);
+          displayPathCache.set(catId, path ? await StockCategoryService.buildDisplayPath(path) : "");
+        }
+        if (item.productDefinitionId) item.productDefinitionId.categoryPath = displayPathCache.get(catId);
+      }
+
       return { data, total };
     } catch (error) {
       throw error;
     }
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Product Inventory — one row per product, aggregated available quantity  */
+  /* (individual-tracked: count of AVAILABLE+APPROVED docs; quantity-tracked: */
+  /* sum of their `quantity`). Powers Feature 3 (Product Inventory page).    */
+  /* ---------------------------------------------------------------------- */
+
+  static async getProductInventorySummary({
+    skip,
+    limit,
+    search,
+    categoryId,
+    productDefinitionId,
+    warehouseId,
+    stockStatus,
+  }) {
+    const productMatch = { isActive: true };
+    if (categoryId) productMatch.categoryId = new mongoose.Types.ObjectId(categoryId);
+    if (productDefinitionId) productMatch._id = new mongoose.Types.ObjectId(productDefinitionId);
+    if (search) productMatch.name = { $regex: search, $options: "i" };
+
+    const stockMatchExpr = [
+      { $eq: ["$productDefinitionId", "$$pid"] },
+      { $eq: ["$isActive", true] },
+      { $eq: ["$status", ITEM_STATUS.AVAILABLE] },
+      { $eq: ["$approvalStatus", ITEM_APPROVAL_STATUS.APPROVED] },
+    ];
+    if (warehouseId) {
+      stockMatchExpr.push({ $eq: ["$warehouseId", new mongoose.Types.ObjectId(warehouseId)] });
+    }
+
+    const pipeline = [
+      { $match: productMatch },
+      {
+        $lookup: {
+          from: "inventory_items",
+          let: { pid: "$_id" },
+          pipeline: [
+            { $match: { $expr: { $and: stockMatchExpr } } },
+            { $group: { _id: null, qty: { $sum: { $ifNull: ["$quantity", 1] } } } },
+          ],
+          as: "stock",
+        },
+      },
+      {
+        $addFields: {
+          availableQty: { $ifNull: [{ $arrayElemAt: ["$stock.qty", 0] }, 0] },
+        },
+      },
+    ];
+
+    if (stockStatus === "OUT_OF_STOCK") pipeline.push({ $match: { availableQty: { $lte: 0 } } });
+    if (stockStatus === "IN_STOCK") pipeline.push({ $match: { availableQty: { $gt: 0 } } });
+
+    pipeline.push({ $sort: { name: 1 } });
+    pipeline.push({ $project: { name: 1, categoryId: 1, availableQty: 1 } });
+
+    const [countResult, rows] = await Promise.all([
+      StockProductDefinitionModel.aggregate([...pipeline, { $count: "total" }]),
+      StockProductDefinitionModel.aggregate([...pipeline, { $skip: skip }, { $limit: limit }]),
+    ]);
+    const total = countResult[0]?.total || 0;
+
+    const categories = await StockCategoryModel.find({
+      _id: { $in: rows.map((r) => r.categoryId) },
+    })
+      .select("path")
+      .lean();
+    const pathByCategoryId = new Map(categories.map((c) => [String(c._id), c.path]));
+    const displayPathCache = new Map();
+    const data = [];
+    for (const r of rows) {
+      const catId = String(r.categoryId);
+      if (!displayPathCache.has(catId)) {
+        const path = pathByCategoryId.get(catId);
+        displayPathCache.set(catId, path ? await StockCategoryService.buildDisplayPath(path) : "");
+      }
+      data.push({
+        productDefinitionId: r._id,
+        productName: r.name,
+        categoryId: r.categoryId,
+        categoryPath: displayPathCache.get(catId),
+        availableQty: r.availableQty,
+      });
+    }
+
+    return { data, total };
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Receiving history — one row per invoice that contributed approved stock */
+  /* for this product. Powers Feature 3's History screen.                    */
+  /* ---------------------------------------------------------------------- */
+
+  static async getReceivingHistory(productDefinitionId, { warehouseId } = {}) {
+    const match = {
+      productDefinitionId: new mongoose.Types.ObjectId(productDefinitionId),
+      isActive: true,
+      status: ITEM_STATUS.AVAILABLE,
+      approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
+      invoiceId: { $ne: null },
+    };
+    if (warehouseId) match.warehouseId = new mongoose.Types.ObjectId(warehouseId);
+
+    const grouped = await StockInventoryItemModel.aggregate([
+      { $match: match },
+      { $group: { _id: "$invoiceId", qty: { $sum: { $ifNull: ["$quantity", 1] } } } },
+    ]);
+
+    const invoiceIds = grouped.map((g) => g._id);
+    const invoices = await StockInvoiceModel.find({ _id: { $in: invoiceIds } })
+      .select("invoiceNumber invoiceDate")
+      .lean();
+    const invoiceMap = new Map(invoices.map((inv) => [String(inv._id), inv]));
+
+    return grouped
+      .map((g) => ({
+        invoiceId: g._id,
+        invoiceNumber: invoiceMap.get(String(g._id))?.invoiceNumber || "",
+        invoiceDate: invoiceMap.get(String(g._id))?.invoiceDate || null,
+        quantity: g.qty,
+      }))
+      .sort((a, b) => new Date(b.invoiceDate || 0) - new Date(a.invoiceDate || 0));
   }
 
   // ─── Get single item ──────────────────────────────────────────────────────────

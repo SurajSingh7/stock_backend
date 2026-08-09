@@ -382,6 +382,67 @@ export const validateMarkNotRequired = (body) => {
   if (!body?.reason || !String(body.reason).trim()) throw new Error("A reason is required");
 };
 
+// ─── Warehouse Validators ─────────────────────────────────────────────────────
+
+export const validateCreateWarehouse = (body) => {
+  const { name, code } = body || {};
+  if (!name || !String(name).trim()) throw new Error("name is required");
+  if (!code || !String(code).trim()) throw new Error("code is required");
+};
+
+export const validateUpdateWarehouse = (body) => {
+  const { name, code } = body || {};
+  if (name !== undefined && !String(name).trim()) throw new Error("name cannot be empty");
+  if (code !== undefined && !String(code).trim()) throw new Error("code cannot be empty");
+};
+
+// ─── Invoice (goods receiving) Validators ────────────────────────────────────
+
+export const validateCreateInvoice = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+
+  const { invoiceNumber, invoiceDate, lines, extraCharges } = body;
+  if (!invoiceNumber || !String(invoiceNumber).trim()) throw new Error("Invoice number is required");
+  if (!invoiceDate) throw new Error("Invoice date is required");
+
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw new Error("At least one product line must be received");
+  }
+  lines.forEach((line, idx) => {
+    const where = `Line ${idx + 1}`;
+    if (!isNonEmptyString(line.quotationItemId)) {
+      throw new Error(`${where}: quotationItemId is required`);
+    }
+    if (!isPositiveNumber(line.receivedQuantity)) {
+      throw new Error(`${where}: received quantity must be greater than 0`);
+    }
+    if (line.rows !== undefined && !Array.isArray(line.rows)) {
+      throw new Error(`${where}: rows must be an array`);
+    }
+    if (line.rating !== undefined && line.rating !== null) {
+      const r = line.rating.rating;
+      if (r !== undefined && r !== null && (typeof r !== "number" || r < 0 || r > 5)) {
+        throw new Error(`${where}: rating must be between 0 and 5`);
+      }
+    }
+  });
+
+  if (extraCharges !== undefined) {
+    if (!Array.isArray(extraCharges)) throw new Error("extraCharges must be an array");
+    extraCharges.forEach((c, idx) => {
+      if (!isNonNegativeNumber(c.amount)) {
+        throw new Error(`Extra charge ${idx + 1}: amount must be 0 or greater`);
+      }
+    });
+  }
+};
+
+export const validateUpdateInvoice = (body) => validateCreateInvoice(body);
+
+export const validateRejectInvoice = (body) => {
+  if (!body?.reason || !String(body.reason).trim()) throw new Error("A reason is required");
+};
+
 // ─── Notification Validators ─────────────────────────────────────────────────
 
 export const validateCreateNotification = (body) => {

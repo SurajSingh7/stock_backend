@@ -4,6 +4,7 @@
 /.claude
 CLAUDE.md
 API_DOCUMENTATION.md
+BackendOwnStyle.html
 
 # user-uploaded runtime files (product images, PO PDFs) — not source, don't version
 /uploads

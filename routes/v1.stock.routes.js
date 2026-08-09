@@ -10,6 +10,9 @@ import StockPurchaseOrderController from "../controllers/stock.purchase.order.co
 import StockTermsConditionController from "../controllers/stock.terms.condition.controller.js";
 import StockTrackingOrderController from "../controllers/stock.tracking.order.controller.js";
 import StockNotificationController from "../controllers/stock.notification.controller.js";
+import StockWarehouseController from "../controllers/stock.warehouse.controller.js";
+import StockInvoiceController from "../controllers/stock.invoice.controller.js";
+import { uploadInvoiceFile } from "../helpers/stock.invoice.upload.helper.js";
 
 const router = express.Router();
 
@@ -74,6 +77,9 @@ router.patch("/terms-conditions/:id/restore", StockTermsConditionController.rest
 router.post("/inventory-items/bulk", StockInventoryItemController.bulkCreateInventoryItems);
 router.post("/inventory-items", StockInventoryItemController.createInventoryItem);
 router.get("/inventory-items", StockInventoryItemController.getAllInventoryItems);
+// Static segments before "/:id" — same rule as everywhere else in this file.
+router.get("/inventory-items/product-summary", StockInventoryItemController.getProductInventorySummary);
+router.get("/inventory-items/history/:defId", StockInventoryItemController.getReceivingHistory);
 router.get("/inventory-items/summary/:defId", StockInventoryItemController.getStockSummary);
 router.get("/inventory-items/:id", StockInventoryItemController.getInventoryItemById);
 router.put("/inventory-items/:id", StockInventoryItemController.updateInventoryItem);
@@ -116,6 +122,34 @@ router.delete("/purchase-orders/:id", StockPurchaseOrderController.softDeletePur
 router.get("/tracking-orders/board", StockTrackingOrderController.getBoard);
 router.patch("/tracking-orders/:id/entity", StockTrackingOrderController.addEntity);
 router.patch("/tracking-orders/:id/not-required", StockTrackingOrderController.markNotRequired);
+router.post(
+  "/tracking-orders/:id/invoices",
+  uploadInvoiceFile.single("invoiceFile"),
+  StockInvoiceController.createInvoice
+);
+router.get("/tracking-orders/:id", StockTrackingOrderController.getDetail);
+
+// ─── Invoices (goods receiving / Invoice Approval) ───────────────────────────
+// /board BEFORE /:id — same static-before-dynamic rule as everywhere else.
+router.get("/invoices/board", StockInvoiceController.getBoard);
+router.get("/invoices/:id", StockInvoiceController.getInvoiceById);
+router.put(
+  "/invoices/:id",
+  uploadInvoiceFile.single("invoiceFile"),
+  StockInvoiceController.updateInvoice
+);
+router.patch("/invoices/:id/approve", StockInvoiceController.approveInvoice);
+router.patch("/invoices/:id/reject", StockInvoiceController.rejectInvoice);
+
+// ─── Warehouses ───────────────────────────────────────────────────────────────
+// /active BEFORE /:id — same static-before-dynamic rule as everywhere else.
+router.get("/warehouses/active", StockWarehouseController.getActiveWarehouses);
+router.post("/warehouses", StockWarehouseController.createWarehouse);
+router.get("/warehouses", StockWarehouseController.getAllWarehouses);
+router.get("/warehouses/:id", StockWarehouseController.getWarehouseById);
+router.put("/warehouses/:id", StockWarehouseController.updateWarehouse);
+router.delete("/warehouses/:id", StockWarehouseController.softDeleteWarehouse);
+router.patch("/warehouses/:id/restore", StockWarehouseController.restoreWarehouse);
 
 // ─── Notification master ─────────────────────────────────────────────────────
 // /resolve/:vendorId BEFORE /:id — same static-before-dynamic rule as terms-conditions.

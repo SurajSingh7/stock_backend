@@ -36,6 +36,12 @@ const stockFieldDefinitionSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Whether this field should render as a column on the Item Inventory
+    // list (dynamic, per-product — see stock.inventory.item.service.js).
+    showList: {
+      type: Boolean,
+      default: false,
+    },
     isActive: {
       type: Boolean,
       default: true,

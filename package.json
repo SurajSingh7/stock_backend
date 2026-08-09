@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node app.js",
     "seed": "node seeders/stock.field.definition.seeder.js",
+    "seed:warehouse": "node seeders/stock.warehouse.seeder.js",
      "dev": "pm2 start app.js --name stock-backend --watch"
   },
   "dependencies": {

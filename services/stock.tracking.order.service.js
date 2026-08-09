@@ -2,10 +2,11 @@ import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
 import StockQuotationModel from "../models/stock.quotation.model.js";
 import StockVendorModel from "../models/stock.vendor.model.js";
 import StockPurchaseOrderModel from "../models/stock.purchase.order.model.js";
+import StockInvoiceModel from "../models/stock.invoice.model.js";
 
 import { paginate } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
-import { QUOTATION_STATUS, TRACKING_STATUS } from "../constants/stock.enums.js";
+import { QUOTATION_STATUS, TRACKING_STATUS, INVOICE_STATUS } from "../constants/stock.enums.js";
 
 const log = getLogger(import.meta.url);
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -78,6 +79,23 @@ export default class StockTrackingOrderService {
       .lean();
     const poByKey = new Map(pos.map((po) => [`${po.sourceQuotationId}::${po.vendorId}`, po]));
 
+    // Received qty (approved invoices only) per tracking order — powers the
+    // card's Ordered/Received/Pending summary without a separate round-trip.
+    const trackingIds = trackingOrders.map((t) => t._id);
+    const approvedInvoices = await StockInvoiceModel.find({
+      trackingOrderId: { $in: trackingIds },
+      status: INVOICE_STATUS.APPROVED,
+      isActive: true,
+    })
+      .select("trackingOrderId lines.receivedQuantity")
+      .lean();
+    const receivedByTracking = new Map();
+    approvedInvoices.forEach((inv) => {
+      const sum = (inv.lines || []).reduce((s, l) => s + (l.receivedQuantity || 0), 0);
+      const key = String(inv.trackingOrderId);
+      receivedByTracking.set(key, (receivedByTracking.get(key) || 0) + sum);
+    });
+
     const fullBoard = [];
     quotations.forEach((q) => {
       const itemById = new Map((q.items || []).map((it) => [String(it._id), it]));
@@ -141,16 +159,21 @@ export default class StockTrackingOrderService {
           totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
         }
 
+        const receivedQuantity = receivedByTracking.get(String(tracking._id)) || 0;
+        const pendingQuantity = Math.max(0, totalQuantity - receivedQuantity);
+        const poDate = po?.poDate || po?.createdAt || null;
+
         rows.push({
           trackingOrderId: tracking._id,
           vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email, contactName: row.contactName,
           vendorStateCode: row.stateCode || "",
-          poId: po?._id || null, poNumber: po?.poNumber || "",
+          poId: po?._id || null, poNumber: po?.poNumber || "", poDate,
           status: tracking.status,
           entityAlias: tracking.buyerEntity?.alias || "",
           entityState: tracking.buyerEntity?.state || "",
           buyerEntity: tracking.buyerEntity || {},
           items, totalAmount, totalQuantity,
+          receivedQuantity, pendingQuantity,
           notRequiredReason: tracking.notRequiredReason || "",
           mailResult: tracking.mailResult || null,
           filterDate: po?.createdAt || approvalDate,
@@ -201,7 +224,9 @@ export default class StockTrackingOrderService {
       PO_GENERATED: 0,
       PO_APPROVED: 0,
       PO_SENT: 0,
-      MATERIAL_PENDING: 0,
+      IN_PROGRESS: 0,
+      PARTIAL: 0,
+      COMPLETED: 0,
       REJECTED: 0,
       NOT_REQUIRED: 0,
     };
@@ -276,6 +301,86 @@ export default class StockTrackingOrderService {
 
   static async getById(id, session) {
     return StockTrackingOrderModel.findOne({ _id: id, isActive: true }).session(session ?? null);
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Detail — tracking + its PO + vendor, for the "Add Items" screen header  */
+  /* (read-only PO Number/Vendor) and product tabs (one per PO line item).   */
+  /* ---------------------------------------------------------------------- */
+
+  static async getDetail(id) {
+    const tracking = await StockTrackingOrderModel.findOne({ _id: id, isActive: true }).lean();
+    if (!tracking) throw new Error("Tracking order not found");
+
+    const [po, vendor] = await Promise.all([
+      tracking.poId
+        ? StockPurchaseOrderModel.findOne({ _id: tracking.poId, isActive: true }).lean()
+        : null,
+      StockVendorModel.findOne({ _id: tracking.vendorId }).lean(),
+    ]);
+
+    return { tracking, po, vendor };
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Recalculate status from approved-invoice received quantities, per PO    */
+  /* line (quotationItemId). Called after invoice create/approve/reject —    */
+  /* never set directly by a route. Only touches tracking orders already in  */
+  /* the receiving flow (PO_SENT/IN_PROGRESS/PARTIAL/COMPLETED).             */
+  /* ---------------------------------------------------------------------- */
+
+  static async recalculateStatus(trackingOrderId, session) {
+    const tracking = await StockTrackingOrderModel.findOne({
+      _id: trackingOrderId,
+      isActive: true,
+    }).session(session);
+    if (!tracking) return null;
+
+    const RECEIVING_STATUSES = new Set([
+      TRACKING_STATUS.PO_SENT,
+      TRACKING_STATUS.IN_PROGRESS,
+      TRACKING_STATUS.PARTIAL,
+      TRACKING_STATUS.COMPLETED,
+    ]);
+    if (!RECEIVING_STATUSES.has(tracking.status)) return tracking;
+
+    const po = await StockPurchaseOrderModel.findOne({ _id: tracking.poId, isActive: true })
+      .session(session)
+      .lean();
+    if (!po) return tracking;
+
+    const approvedInvoices = await StockInvoiceModel.find({
+      trackingOrderId,
+      status: INVOICE_STATUS.APPROVED,
+      isActive: true,
+    })
+      .session(session)
+      .lean();
+
+    const approvedByLine = new Map(); // quotationItemId -> sum(receivedQuantity)
+    approvedInvoices.forEach((inv) =>
+      (inv.lines || []).forEach((line) => {
+        const key = String(line.quotationItemId);
+        approvedByLine.set(key, (approvedByLine.get(key) || 0) + (line.receivedQuantity || 0));
+      })
+    );
+
+    let allComplete = true;
+    let anyReceived = false;
+    (po.items || []).forEach((poLine) => {
+      const received = approvedByLine.get(String(poLine.quotationItemId)) || 0;
+      if (received > 0) anyReceived = true;
+      if (received < poLine.quantity) allComplete = false;
+    });
+
+    tracking.status = allComplete
+      ? TRACKING_STATUS.COMPLETED
+      : anyReceived
+      ? TRACKING_STATUS.PARTIAL
+      : TRACKING_STATUS.IN_PROGRESS;
+
+    await tracking.save({ session });
+    return tracking;
   }
 
   static async getByQuotationAndVendor(sourceQuotationId, vendorId, session) {

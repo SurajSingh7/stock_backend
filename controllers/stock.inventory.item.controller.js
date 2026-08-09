@@ -59,12 +59,16 @@ export default class StockInventoryItemController {
   static async getAllInventoryItems(req, res) {
     try {
       const { skip, limit, page } = paginate(req.query);
-      const { productDefinitionId, status, search, showInactive } = req.query;
+      const { productDefinitionId, categoryId, warehouseId, status, approvalStatus, search, showInactive } =
+        req.query;
       const { data, total } = await StockInventoryItemService.getAllInventoryItems({
         skip,
         limit,
         productDefinitionId,
+        categoryId,
+        warehouseId,
         status,
+        approvalStatus,
         search,
         showInactive: showInactive === "true",
       });
@@ -75,6 +79,41 @@ export default class StockInventoryItemController {
       );
     } catch (error) {
       log.error("Error fetching inventory items", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
+  static async getProductInventorySummary(req, res) {
+    try {
+      const { skip, limit, page } = paginate(req.query);
+      const { search, categoryId, productDefinitionId, warehouseId, stockStatus } = req.query;
+      const { data, total } = await StockInventoryItemService.getProductInventorySummary({
+        skip,
+        limit,
+        search,
+        categoryId,
+        productDefinitionId,
+        warehouseId,
+        stockStatus,
+      });
+      successResponseHandler(
+        res,
+        paginateReturn(data, total, page, limit),
+        "Product inventory summary fetched successfully"
+      );
+    } catch (error) {
+      log.error("Error fetching product inventory summary", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
+  static async getReceivingHistory(req, res) {
+    try {
+      const { warehouseId } = req.query;
+      const data = await StockInventoryItemService.getReceivingHistory(req.params.defId, { warehouseId });
+      successResponseHandler(res, data, "Receiving history fetched successfully");
+    } catch (error) {
+      log.error("Error fetching receiving history", error);
       errorResponseHandler(res, error);
     }
   }

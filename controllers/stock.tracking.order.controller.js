@@ -17,6 +17,16 @@ export default class StockTrackingOrderController {
     }
   }
 
+  static async getDetail(req, res) {
+    try {
+      const data = await StockTrackingOrderService.getDetail(req.params.id);
+      successResponseHandler(res, data, "Tracking order fetched");
+    } catch (error) {
+      log.error("Error fetching tracking order", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
   static async addEntity(req, res) {
     const session = await mongoose.startSession();
     try {

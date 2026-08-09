@@ -137,11 +137,48 @@ export const TRACKING_STATUS = {
   PO_GENERATED: "PO_GENERATED",         // PO created (mirrors PO_STATUS.GENERATED)
   PO_APPROVED: "PO_APPROVED",           // PO approved (mirrors PO_STATUS.APPROVED)
   PO_SENT: "PO_SENT",                   // mail sent or marked manual (mirrors PO_STATUS.SENT)
-  MATERIAL_PENDING: "MATERIAL_PENDING", // future — material received from vendor is pending
+  IN_PROGRESS: "IN_PROGRESS",           // an invoice submitted, none approved yet
+  PARTIAL: "PARTIAL",                   // >=1 invoice approved, 0 < received < ordered
+  COMPLETED: "COMPLETED",               // received == ordered on every PO line
   REJECTED: "REJECTED",                 // PO rejected (mirrors PO_STATUS.REJECTED)
   NOT_REQUIRED: "NOT_REQUIRED",         // vendor marked "Not Required"
 };
 export const TRACKING_STATUS_ARRAY = Object.values(TRACKING_STATUS);
+
+// ─── Invoice (goods receiving) — ADD to constants/stock.enums.js ──────────────
+export const INVOICE_STATUS = {
+  PENDING: "PENDING",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+};
+export const INVOICE_STATUS_ARRAY = Object.values(INVOICE_STATUS);
+
+// Approval state of a received inventory item — independent of its physical
+// ITEM_STATUS. Only APPROVED items count toward "available quantity".
+export const ITEM_APPROVAL_STATUS = {
+  PENDING: "PENDING",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+};
+export const ITEM_APPROVAL_STATUS_ARRAY = Object.values(ITEM_APPROVAL_STATUS);
+
+// ─── Warehouse — ADD to constants/stock.enums.js ──────────────────────────────
+// Future-ready scaffold only (see stock.warehouse.transfer.model.js /
+// stock.inventory.consumption.model.js) — not wired to any service/route yet.
+export const TRANSFER_STATUS = {
+  PENDING: "PENDING",
+  IN_TRANSIT: "IN_TRANSIT",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
+};
+export const TRANSFER_STATUS_ARRAY = Object.values(TRANSFER_STATUS);
+
+export const CONSUMPTION_REF_TYPE = {
+  PROJECT: "PROJECT",
+  JOB: "JOB",
+  WORK_ORDER: "WORK_ORDER",
+};
+export const CONSUMPTION_REF_TYPE_ARRAY = Object.values(CONSUMPTION_REF_TYPE);
 
 // How the PO ended up in PO_SENT — actually emailed, or handled
 // outside the system. Stored on the tracking order for the Action-column
