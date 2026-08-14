@@ -7,11 +7,6 @@ import {
 
 const { Schema } = mongoose;
 
-/*
-  items[] is the priced OFFER POOL: one row per (product, vendor) with its price
-  and snapshots. The approval screen groups these by category -> product ->
-  vendors. The decision itself is NOT stored here — it lives in categoryApprovals.
-*/
 const quotationLineItemSchema = new Schema(
   {
     productDefinitionId: {
@@ -56,17 +51,9 @@ const quotationLineItemSchema = new Schema(
     poSkippedBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
     poSkippedAt: { type: Date, default: null },
   },
-  { _id: true } // each offer keeps its own _id so a selection can point at it
+  { _id: true } 
 );
 
-/*
-  A single winning offer inside an approved category. Stored as an array so the
-  SAME structure supports the future "multiple products / multiple vendors per
-  category" requirement with zero migration — today the array length is 1.
-
-  The priced fields are SNAPSHOTTED here so PO Management reads an approved-item
-  snapshot, never the raw quotation (prevents future migration issues).
-*/
 const categorySelectionSchema = new Schema(
   {
     itemId: { type: Schema.Types.ObjectId, default: null }, // -> items[]._id
@@ -90,12 +77,7 @@ const categorySelectionSchema = new Schema(
   { _id: false }
 );
 
-/*
-  One decision per LEAF category on the quotation. Written all at once when the
-  approver submits (every category must be decided). A future "edit rejected
-  category and resend" flow can flip a single entry back to pending without
-  touching the others.
-*/
+
 const categoryApprovalSchema = new Schema(
   {
     categoryId: { type: Schema.Types.ObjectId, ref: "categories", required: true },

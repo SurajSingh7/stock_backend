@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { INPUT_TYPES_ARRAY } from "../constants/stock.enums.js";
+import { INPUT_TYPES_ARRAY, TRACKING_METHODS_ARRAY } from "../constants/stock.enums.js";
 
 const stockFieldDefinitionSchema = new mongoose.Schema(
   {
@@ -41,6 +41,18 @@ const stockFieldDefinitionSchema = new mongoose.Schema(
     showList: {
       type: Boolean,
       default: false,
+    },
+    // Which tracking method(s) this field is offered for on the Product
+    // Definition "Applicable Fields" picker (see
+    // stock.product.definition.service.js). Defaults to both.
+    applicableTrackingMethods: {
+      type: [String],
+      enum: TRACKING_METHODS_ARRAY,
+      default: TRACKING_METHODS_ARRAY,
+      validate: {
+        validator: (arr) => Array.isArray(arr) && arr.length > 0,
+        message: "applicableTrackingMethods must have at least one value",
+      },
     },
     isActive: {
       type: Boolean,

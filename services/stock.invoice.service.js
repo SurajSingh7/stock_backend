@@ -80,7 +80,11 @@ export default class StockInvoiceService {
         productName: poLine.productName,
         unitPrice: poLine.unitPrice,
         receivedQuantity: requested,
-        rows: Array.isArray(bl.rows) ? bl.rows : [],
+        // Free-of-cost — never validated against poLine.quantity above.
+        focQuantity: Math.max(0, Number(bl.focQuantity) || 0),
+        rows: Array.isArray(bl.rows)
+          ? bl.rows.map((r) => ({ fieldValues: r.fieldValues || {}, isFoc: !!r.isFoc }))
+          : [],
         rating:
           bl.rating && (bl.rating.rating !== undefined || bl.rating.notes !== undefined)
             ? { rating: bl.rating.rating ?? null, notes: bl.rating.notes || "" }
@@ -116,6 +120,7 @@ export default class StockInvoiceService {
             warehouseId,
             invoiceId: invoice._id,
             approvalStatus: ITEM_APPROVAL_STATUS.PENDING,
+            isFoc: !!row.isFoc,
             fieldValues: row.fieldValues || {},
             quantity: null,
             receivedAt: invoice.invoiceDate,
@@ -127,23 +132,33 @@ export default class StockInvoiceService {
           created.forEach((d) => createdIds.push(d._id));
         }
       } else {
-        const [created] = await StockInventoryItemModel.create(
-          [
-            {
-              productDefinitionId: line.productDefinitionId,
-              vendorId,
-              warehouseId,
-              invoiceId: invoice._id,
-              approvalStatus: ITEM_APPROVAL_STATUS.PENDING,
-              fieldValues: {},
-              quantity: line.receivedQuantity,
-              receivedAt: invoice.invoiceDate,
-              receivedBy: receivedBy ?? null,
-            },
-          ],
-          { session }
-        );
-        createdIds.push(created._id);
+        const qtyDocs = [];
+        if (line.receivedQuantity > 0) {
+          qtyDocs.push({ quantity: line.receivedQuantity, isFoc: false });
+        }
+        if (line.focQuantity > 0) {
+          qtyDocs.push({ quantity: line.focQuantity, isFoc: true });
+        }
+        for (const qd of qtyDocs) {
+          const [created] = await StockInventoryItemModel.create(
+            [
+              {
+                productDefinitionId: line.productDefinitionId,
+                vendorId,
+                warehouseId,
+                invoiceId: invoice._id,
+                approvalStatus: ITEM_APPROVAL_STATUS.PENDING,
+                isFoc: qd.isFoc,
+                fieldValues: {},
+                quantity: qd.quantity,
+                receivedAt: invoice.invoiceDate,
+                receivedBy: receivedBy ?? null,
+              },
+            ],
+            { session }
+          );
+          createdIds.push(created._id);
+        }
       }
 
       line.createdInventoryItemIds = createdIds;
@@ -168,6 +183,37 @@ export default class StockInvoiceService {
         );
       }
     }
+  }
+
+  // Basic/CGST/SGST/IGST/extraCharges/grandTotal for one invoice — shared by
+  // getBoard (list rows) and getInvoiceById (Review page's Invoice Details).
+  // `po` may be null (invoice without a linked PO); taxType then defaults to
+  // CGST_SGST so the split still renders something sane.
+  static _computeInvoiceTotals(inv, po) {
+    const poLineByKey = new Map((po?.items || []).map((it) => [String(it.quotationItemId), it]));
+    const taxType = po?.taxType || "CGST_SGST";
+
+    let basicAmount = 0, cgstAmount = 0, sgstAmount = 0, igstAmount = 0;
+    (inv.lines || []).forEach((l) => {
+      const lineBasic = (l.receivedQuantity || 0) * (l.unitPrice || 0);
+      const gstRate = poLineByKey.get(String(l.quotationItemId))?.gstRate || 0;
+      basicAmount += lineBasic;
+      if (taxType === "IGST") {
+        igstAmount += round2((lineBasic * gstRate) / 100);
+      } else {
+        const half = round2((lineBasic * gstRate) / 200);
+        cgstAmount += half;
+        sgstAmount += half;
+      }
+    });
+    const gstAmount = round2(cgstAmount + sgstAmount + igstAmount);
+    const extraChargesTotal = round2((inv.extraCharges || []).reduce((s, c) => s + (c.amount || 0), 0));
+
+    return {
+      taxType, basicAmount: round2(basicAmount),
+      cgstAmount: round2(cgstAmount), sgstAmount: round2(sgstAmount), igstAmount: round2(igstAmount),
+      gstAmount, extraChargesTotal, grandTotal: round2((inv.amount || 0) + gstAmount),
+    };
   }
 
   static _computeAmount(lines, extraCharges) {
@@ -385,10 +431,45 @@ export default class StockInvoiceService {
   /* Read                                                                    */
   /* ---------------------------------------------------------------------- */
 
+  // Enriched with read-only, non-snapshotted display data (PO number/tax
+  // type/pdf, per-line GST rate, product tracking method) for the Invoice
+  // Approval "Review" full page — same "resolve at read-time, no schema
+  // change" posture as getBoard's poNumber/orderedQty.
   static async getInvoiceById(id) {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).lean();
     if (!invoice) throw new Error("Invoice not found");
-    return invoice;
+
+    const po = invoice.poId
+      ? await StockPurchaseOrderModel.findOne({ _id: invoice.poId })
+          .select("poNumber taxType pdfPath items.quotationItemId items.gstRate")
+          .lean()
+      : null;
+    const poLineByKey = new Map((po?.items || []).map((it) => [String(it.quotationItemId), it]));
+    const totals = StockInvoiceService._computeInvoiceTotals(invoice, po);
+
+    const productDefIds = [...new Set((invoice.lines || []).map((l) => String(l.productDefinitionId)))];
+    const productDefs = await StockProductDefinitionModel.find({ _id: { $in: productDefIds } })
+      .select("trackingMethod")
+      .lean();
+    const productDefById = new Map(productDefs.map((p) => [String(p._id), p]));
+
+    const lines = (invoice.lines || []).map((l) => {
+      const poLine = poLineByKey.get(String(l.quotationItemId));
+      const productDef = productDefById.get(String(l.productDefinitionId));
+      return {
+        ...l,
+        gstRate: poLine?.gstRate || 0,
+        trackingMethod: productDef?.trackingMethod || "quantity",
+      };
+    });
+
+    return {
+      ...invoice,
+      poNumber: po?.poNumber || "",
+      poPdfPath: po?.pdfPath || "",
+      lines,
+      ...totals,
+    };
   }
 
   // Serves both the Tracking Order card's invoice table (pass trackingOrderId,
@@ -429,10 +510,12 @@ export default class StockInvoiceService {
     const total = filteredRows.length;
     const pageSlice = filteredRows.slice(skip, skip + limit);
 
-    // poNumber/orderedQty aren't snapshotted on the invoice — resolve them for
-    // just this page's rows (display-only, read path, no schema change).
+    // poNumber/orderedQty/GST aren't snapshotted on the invoice — resolve them
+    // for just this page's rows (display-only, read path, no schema change).
     const poIds = [...new Set(pageSlice.map((inv) => String(inv.poId)).filter(Boolean))];
-    const pos = await StockPurchaseOrderModel.find({ _id: { $in: poIds } }).select("poNumber items.quantity").lean();
+    const pos = await StockPurchaseOrderModel.find({ _id: { $in: poIds } })
+      .select("poNumber taxType items.quantity items.quotationItemId items.gstRate")
+      .lean();
     const poById = new Map(pos.map((po) => [String(po._id), po]));
 
     const paged = pageSlice.map((inv) => {
@@ -443,6 +526,8 @@ export default class StockInvoiceService {
         orderedQty: (po?.items || []).reduce((s, it) => s + (it.quantity || 0), 0),
         itemsSummary: (inv.lines || []).map((l) => l.productName).join(", "),
         qtyReceived: (inv.lines || []).reduce((s, l) => s + (l.receivedQuantity || 0), 0),
+        focQtyReceived: (inv.lines || []).reduce((s, l) => s + (l.focQuantity || 0), 0),
+        ...StockInvoiceService._computeInvoiceTotals(inv, po),
       };
     });
 

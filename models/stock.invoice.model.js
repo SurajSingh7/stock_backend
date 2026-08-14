@@ -40,10 +40,19 @@ const invoiceLineSchema = new Schema(
 
     receivedQuantity: { type: Number, required: true, min: 0 },
 
+    // Free-of-cost units received alongside the paid receivedQuantity —
+    // never counted against the PO line's ordered quantity (that guard only
+    // ever looks at receivedQuantity) and never priced into `amount`.
+    focQuantity: { type: Number, default: 0, min: 0 },
+
     // One entry per generated Serial/MAC row (individual-tracked products
     // only; empty for quantity-tracked products, which just set
-    // receivedQuantity directly).
-    rows: { type: [{ fieldValues: Schema.Types.Mixed }], default: [] },
+    // receivedQuantity/focQuantity directly). `isFoc` splits paid vs free
+    // rows within the same array so the UI/order stays stable.
+    rows: {
+      type: [{ fieldValues: Schema.Types.Mixed, isFoc: { type: Boolean, default: false } }],
+      default: [],
+    },
 
     createdInventoryItemIds: { type: [Schema.Types.ObjectId], ref: "inventory_items", default: [] },
 

@@ -2,10 +2,40 @@ import mongoose from "mongoose";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockCategoryModel from "../models/stock.category.model.js";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
+import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
 import { CATEGORY_TYPES, GST_RATES_ARRAY } from "../constants/stock.enums.js";
 import { deleteProductImageFile } from "../helpers/stock.upload.helper.js";
 
 export default class StockProductDefinitionService {
+  // 🔒 A field definition can be restricted to Individual-only or
+  // Group-only tracking (see stock.field.definition.model.js
+  // `applicableTrackingMethods`). Reject any selection that isn't offered
+  // for the product's tracking method, mirroring what the picker UI already
+  // filters out client-side.
+  static async assertSelectedFieldsApplicable(trackingMethod, selectedFields, session) {
+    if (!trackingMethod || !Array.isArray(selectedFields) || selectedFields.length === 0) return;
+
+    const fieldDefIds = selectedFields.map((f) => f.fieldDefId);
+    const fieldDefs = await StockFieldDefinitionModel.find({ _id: { $in: fieldDefIds } })
+      .select("label applicableTrackingMethods")
+      .lean()
+      .session(session ?? null);
+
+    const byId = new Map(fieldDefs.map((f) => [String(f._id), f]));
+    const invalid = fieldDefIds
+      .map((id) => byId.get(String(id)))
+      // Legacy field-definition docs saved before applicableTrackingMethods
+      // existed have no value stored (lean() won't backfill the schema
+      // default) — treat "not set" the same as "applies to both".
+      .filter((f) => f && f.applicableTrackingMethods?.length && !f.applicableTrackingMethods.includes(trackingMethod));
+
+    if (invalid.length > 0) {
+      throw new Error(
+        `These fields are not applicable to the selected tracking method: ${invalid.map((f) => f.label).join(", ")}`
+      );
+    }
+  }
+
   static async createProductDefinition(body, session) {
     try {
       const {
@@ -37,6 +67,8 @@ export default class StockProductDefinitionService {
         .collation({ locale: "en", strength: 2 })
         .session(session);
       if (exists) throw new Error("A product with this name already exists in this category");
+
+      await StockProductDefinitionService.assertSelectedFieldsApplicable(trackingMethod, selectedFields, session);
 
       const def = new StockProductDefinitionModel({
         categoryId,
@@ -145,6 +177,14 @@ export default class StockProductDefinitionService {
       // safely persisted, or a failed save would leave the product with no image.
       const previousImage = def.image;
       const replacingImage = body.image !== undefined && body.image !== previousImage;
+
+      const effectiveTrackingMethod = body.trackingMethod !== undefined ? body.trackingMethod : def.trackingMethod;
+      const effectiveSelectedFields = body.selectedFields !== undefined ? body.selectedFields : def.selectedFields;
+      await StockProductDefinitionService.assertSelectedFieldsApplicable(
+        effectiveTrackingMethod,
+        effectiveSelectedFields,
+        session
+      );
 
       const allowed = [
         "name",

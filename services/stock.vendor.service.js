@@ -5,17 +5,11 @@ import { getLogger } from "../helpers/logger.helper.js";
 
 const log = getLogger(import.meta.url);
 
-// Ported from StockCategoryService.escapeRegex — keep this identical across
-// modules rather than reinventing it per Rule 21/24. If the category service
-// exports it, import that one instead of duplicating here.
+
 const escapeRegex = (str = "") => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export default class StockVendorService {
-  /**
-   * Active-only, case-insensitive, regex-escaped duplicate check on
-   * name + gst.gstNumber — identical pattern to
-   * StockCategoryService.assertNameNotDuplicate (Rule 21/24).
-   */
+
   static async assertVendorNotDuplicate({ name, gstNumber, excludeId, session }) {
     if (name) {
       const nameFilter = {
@@ -38,12 +32,7 @@ export default class StockVendorService {
     }
   }
 
-  /**
-   * Server-generated, auto-incrementing vendor code — "VEN0001", "VEN0002"...
-   * Never trust vendorCode from the client; it's derived purely from the
-   * highest existing code matching the prefix. Padded to 4 digits so plain
-   * string sort ({ vendorCode: -1 }) also sorts numerically correctly.
-   */
+
   static async generateNextVendorCode(session) {
     const PREFIX = "VEN";
     const PAD = 4;
@@ -83,13 +72,6 @@ export default class StockVendorService {
         bankAccounts: body.bankAccounts || [],
       };
 
-      // vendorCode is ALWAYS server-generated (ignore anything the client
-      // sends for it — it's create-only + immutable anyway, see
-      // updateVendor). generateNextVendorCode() is a read-then-use pattern,
-      // not atomic, so under concurrent creates two requests could compute
-      // the same next number — the partial unique index on vendorCode will
-      // reject the second insert with E11000, and we just retry with a
-      // freshly computed number until one lands.
       const MAX_ATTEMPTS = 5;
       let lastErr = null;
 

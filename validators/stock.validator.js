@@ -18,8 +18,18 @@ const isValidEmail = (e) => EMAIL_RE.test(String(e || "").trim());
 
 // ─── Field Definition Validators ─────────────────────────────────────────────
 
+const validateApplicableTrackingMethods = (applicableTrackingMethods) => {
+  if (applicableTrackingMethods === undefined) return;
+  if (!Array.isArray(applicableTrackingMethods) || applicableTrackingMethods.length === 0)
+    throw new Error("applicableTrackingMethods must be a non-empty array");
+  applicableTrackingMethods.forEach((m) => {
+    if (!TRACKING_METHODS_ARRAY.includes(m))
+      throw new Error(`applicableTrackingMethods must contain only: ${TRACKING_METHODS_ARRAY.join(", ")}`);
+  });
+};
+
 export const validateCreateFieldDefinition = (body) => {
-  const { code, label, inputType } = body;
+  const { code, label, inputType, applicableTrackingMethods } = body;
   if (!code) throw new Error("code is required");
   if (!/^[a-z0-9_]+$/.test(code))
     throw new Error("code must be snake_case lowercase only (letters, numbers, underscores)");
@@ -27,14 +37,16 @@ export const validateCreateFieldDefinition = (body) => {
   if (!inputType) throw new Error("inputType is required");
   if (!INPUT_TYPES_ARRAY.includes(inputType))
     throw new Error(`inputType must be one of: ${INPUT_TYPES_ARRAY.join(", ")}`);
+  validateApplicableTrackingMethods(applicableTrackingMethods);
 };
 
 export const validateUpdateFieldDefinition = (body) => {
   if (body.code !== undefined) throw new Error("code is immutable and cannot be updated");
-  const { label, inputType } = body;
+  const { label, inputType, applicableTrackingMethods } = body;
   if (label !== undefined && !label.trim()) throw new Error("label cannot be empty");
   if (inputType !== undefined && !INPUT_TYPES_ARRAY.includes(inputType))
     throw new Error(`inputType must be one of: ${INPUT_TYPES_ARRAY.join(", ")}`);
+  validateApplicableTrackingMethods(applicableTrackingMethods);
 };
 
 // ─── Category Validators ──────────────────────────────────────────────────────
@@ -413,8 +425,14 @@ export const validateCreateInvoice = (body) => {
     if (!isNonEmptyString(line.quotationItemId)) {
       throw new Error(`${where}: quotationItemId is required`);
     }
-    if (!isPositiveNumber(line.receivedQuantity)) {
-      throw new Error(`${where}: received quantity must be greater than 0`);
+    if (!isNonNegativeNumber(line.receivedQuantity)) {
+      throw new Error(`${where}: received quantity must be 0 or greater`);
+    }
+    if (line.focQuantity !== undefined && !isNonNegativeNumber(line.focQuantity)) {
+      throw new Error(`${where}: FOC quantity must be 0 or greater`);
+    }
+    if ((line.receivedQuantity || 0) <= 0 && (line.focQuantity || 0) <= 0) {
+      throw new Error(`${where}: received or FOC quantity must be greater than 0`);
     }
     if (line.rows !== undefined && !Array.isArray(line.rows)) {
       throw new Error(`${where}: rows must be an array`);

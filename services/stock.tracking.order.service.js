@@ -75,7 +75,7 @@ export default class StockTrackingOrderService {
     const trackingByKey = new Map(trackingOrders.map((t) => [`${t.sourceQuotationId}::${t.vendorId}`, t]));
 
     const pos = await StockPurchaseOrderModel.find({ sourceQuotationId: { $in: quotationIds }, isActive: true })
-      .select("poNumber status grandTotal vendorId sourceQuotationId items createdAt")
+      .select("poNumber status grandTotal subTotal vendorId sourceQuotationId items createdAt poDate taxType cgstTotal sgstTotal igstTotal pdfPath")
       .lean();
     const poByKey = new Map(pos.map((po) => [`${po.sourceQuotationId}::${po.vendorId}`, po]));
 
@@ -150,11 +150,20 @@ export default class StockTrackingOrderService {
             quotationItemId: it.quotationItemId, categoryId: it.categoryId, categoryName: it.categoryName,
             productDefinitionId: it.productDefinitionId, productName: it.productName,
             quantity: it.quantity, unitPrice: it.unitPrice, gstRate: it.gstRate,
-            taxable: it.taxable, gstAmount: it.gstAmount, lineTotal: it.lineTotal,
+            taxable: it.taxable, cgst: it.cgst, sgst: it.sgst, igst: it.igst,
+            gstAmount: it.gstAmount, lineTotal: it.lineTotal,
           }));
           totalAmount = po.grandTotal;
           totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
         } else {
+          // Pre-PO (quotation-selection) items have no cgst/sgst split yet —
+          // approximate as an even same-state split until a PO/entity exists.
+          items = items.map((it) => ({
+            ...it,
+            cgst: round2((it.gstAmount || 0) / 2),
+            sgst: round2((it.gstAmount || 0) / 2),
+            igst: 0,
+          }));
           totalAmount = round2(items.reduce((s, i) => s + (i.lineTotal || 0), 0));
           totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
         }
@@ -162,12 +171,18 @@ export default class StockTrackingOrderService {
         const receivedQuantity = receivedByTracking.get(String(tracking._id)) || 0;
         const pendingQuantity = Math.max(0, totalQuantity - receivedQuantity);
         const poDate = po?.poDate || po?.createdAt || null;
+        const subTotal = po ? po.subTotal : round2(items.reduce((s, i) => s + (i.taxable || 0), 0));
+        const cgstTotal = po ? po.cgstTotal : round2(items.reduce((s, i) => s + (i.cgst || 0), 0));
+        const sgstTotal = po ? po.sgstTotal : round2(items.reduce((s, i) => s + (i.sgst || 0), 0));
+        const igstTotal = po ? po.igstTotal : round2(items.reduce((s, i) => s + (i.igst || 0), 0));
 
         rows.push({
           trackingOrderId: tracking._id,
           vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email, contactName: row.contactName,
           vendorStateCode: row.stateCode || "",
           poId: po?._id || null, poNumber: po?.poNumber || "", poDate,
+          taxType: po?.taxType || "CGST_SGST", subTotal, cgstTotal, sgstTotal,
+          igstTotal, poPdfPath: po?.pdfPath || "",
           status: tracking.status,
           entityAlias: tracking.buyerEntity?.alias || "",
           entityState: tracking.buyerEntity?.state || "",

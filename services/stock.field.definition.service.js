@@ -1,5 +1,6 @@
 import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
+import { TRACKING_METHODS_ARRAY } from "../constants/stock.enums.js";
 
 export default class StockFieldDefinitionService {
   // ─── Helper: checks code/label uniqueness against BOTH active AND inactive
@@ -32,7 +33,10 @@ export default class StockFieldDefinitionService {
 
   static async createFieldDefinition(body, session) {
     try {
-      const { code, label, inputType, optionsSource, isRequired, isFilterable, showList, order } = body;
+      const {
+        code, label, inputType, optionsSource, isRequired, isFilterable, showList, order,
+        applicableTrackingMethods,
+      } = body;
 
       // 🔒 Duplicate check — code AND label, across active + inactive records
       await StockFieldDefinitionService.assertFieldNotDuplicate({ code, label, session });
@@ -46,6 +50,10 @@ export default class StockFieldDefinitionService {
         isFilterable: isFilterable ?? false,
         showList: showList ?? false,
         order: Number.isFinite(Number(order)) ? Number(order) : 0,
+        applicableTrackingMethods:
+          Array.isArray(applicableTrackingMethods) && applicableTrackingMethods.length > 0
+            ? applicableTrackingMethods
+            : TRACKING_METHODS_ARRAY,
       });
 
       await field.save({ session });
@@ -108,7 +116,10 @@ export default class StockFieldDefinitionService {
         });
       }
 
-      const allowed = ["label", "inputType", "optionsSource", "isRequired", "isFilterable", "showList", "order"];
+      const allowed = [
+        "label", "inputType", "optionsSource", "isRequired", "isFilterable", "showList", "order",
+        "applicableTrackingMethods",
+      ];
       allowed.forEach((key) => {
         if (body[key] !== undefined) field[key] = body[key];
       });

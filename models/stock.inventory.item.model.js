@@ -45,6 +45,12 @@ const stockInventoryItemSchema = new mongoose.Schema(
       enum: ITEM_APPROVAL_STATUS_ARRAY,
       default: ITEM_APPROVAL_STATUS.APPROVED,
     },
+    // True when this unit arrived free-of-cost on an invoice line (never
+    // priced, never counted toward that line's ordered-quantity cap).
+    isFoc: {
+      type: Boolean,
+      default: false,
+    },
     fieldValues: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
