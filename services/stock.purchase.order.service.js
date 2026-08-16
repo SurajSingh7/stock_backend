@@ -396,11 +396,6 @@ export default class StockPurchaseOrderService {
       requester,
       poDate,
       shipmentPreference,
-      // NOTE: any `terms` sent by the client is intentionally ignored — the
-      // PO's terms snapshot is always auto-resolved server-side below (Terms
-      // & Conditions master: vendor-specific match, else the Default term).
-      // `termsConditionId` is the one exception — see the manual-select
-      // fallback below, honored only when resolveForVendor finds nothing.
       notes,
       termsConditionId,
     } = body;

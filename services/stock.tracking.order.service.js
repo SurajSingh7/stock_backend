@@ -52,6 +52,7 @@ export default class StockTrackingOrderService {
       isActive: true,
       status: { $in: [QUOTATION_STATUS.APPROVED, QUOTATION_STATUS.PARTIALLY_APPROVED] },
     };
+    
     if (query.sourceQuotationId) qFilter._id = query.sourceQuotationId;
 
     const quotations = await StockQuotationModel.find(qFilter)
