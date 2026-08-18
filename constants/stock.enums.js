@@ -162,16 +162,29 @@ export const ITEM_APPROVAL_STATUS = {
 };
 export const ITEM_APPROVAL_STATUS_ARRAY = Object.values(ITEM_APPROVAL_STATUS);
 
-// ─── Warehouse — ADD to constants/stock.enums.js ──────────────────────────────
-// Future-ready scaffold only (see stock.warehouse.transfer.model.js /
-// stock.inventory.consumption.model.js) — not wired to any service/route yet.
-export const TRANSFER_STATUS = {
-  PENDING: "PENDING",
-  IN_TRANSIT: "IN_TRANSIT",
-  COMPLETED: "COMPLETED",
-  CANCELLED: "CANCELLED",
+// ─── Warehouse / Location role ─────────────────────────────────────────────
+// Descriptive only (reporting/filtering) — does not restrict which locations
+// can transfer with which. Any location can send/receive stock to/from any
+// other, regardless of role.
+export const LOCATION_ROLE = {
+  CENTRAL: "CENTRAL",
+  REGIONAL: "REGIONAL",
+  NORMAL: "NORMAL",
 };
-export const TRANSFER_STATUS_ARRAY = Object.values(TRANSFER_STATUS);
+export const LOCATION_ROLE_ARRAY = Object.values(LOCATION_ROLE);
+
+// ─── Inventory Transfer Request — one-shot request/fulfil workflow ─────────
+// A request is PENDING until the source location acts on it exactly once:
+//   - process (full or partial transfer) -> COMPLETED, any shortfall auto-closed
+//   - reject (nothing transferred)       -> REJECTED
+// There is no further action once a request leaves PENDING — a still-needed
+// remainder must be raised as a brand-new request.
+export const TRANSFER_REQUEST_STATUS = {
+  PENDING: "PENDING",
+  COMPLETED: "COMPLETED",
+  REJECTED: "REJECTED",
+};
+export const TRANSFER_REQUEST_STATUS_ARRAY = Object.values(TRANSFER_REQUEST_STATUS);
 
 export const CONSUMPTION_REF_TYPE = {
   PROJECT: "PROJECT",

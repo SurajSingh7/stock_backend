@@ -13,6 +13,7 @@ import StockNotificationController from "../controllers/stock.notification.contr
 import StockWarehouseController from "../controllers/stock.warehouse.controller.js";
 import StockInvoiceController from "../controllers/stock.invoice.controller.js";
 import { uploadInvoiceFile } from "../helpers/stock.invoice.upload.helper.js";
+import StockTransferRequestController from "../controllers/stock.transfer.request.controller.js";
 
 const router = express.Router();
 
@@ -150,6 +151,14 @@ router.get("/warehouses/:id", StockWarehouseController.getWarehouseById);
 router.put("/warehouses/:id", StockWarehouseController.updateWarehouse);
 router.delete("/warehouses/:id", StockWarehouseController.softDeleteWarehouse);
 router.patch("/warehouses/:id/restore", StockWarehouseController.restoreWarehouse);
+
+// ─── Inventory Transfer Requests ──────────────────────────────────────────────
+// /board BEFORE /:id — same static-before-dynamic rule as everywhere else.
+router.post("/transfer-requests", StockTransferRequestController.createTransferRequest);
+router.get("/transfer-requests/board", StockTransferRequestController.getBoard);
+router.get("/transfer-requests/:id", StockTransferRequestController.getTransferRequestById);
+router.patch("/transfer-requests/:id/process", StockTransferRequestController.processTransferRequest);
+router.patch("/transfer-requests/:id/reject", StockTransferRequestController.rejectTransferRequest);
 
 // ─── Notification master ─────────────────────────────────────────────────────
 // /resolve/:vendorId BEFORE /:id — same static-before-dynamic rule as terms-conditions.

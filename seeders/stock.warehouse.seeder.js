@@ -15,6 +15,7 @@ export const seedMainWarehouse = async () => {
       code: "MAIN",
       address: "",
       description: "Default warehouse — auto-seeded",
+      locationRole: "CENTRAL",
     });
     console.info("Main Warehouse seeded");
     return { seeded: true, warehouse };

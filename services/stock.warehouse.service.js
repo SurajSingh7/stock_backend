@@ -16,7 +16,7 @@ export default class StockWarehouseService {
   }
 
   static async createWarehouse(body, session) {
-    const { name, code, address, description } = body;
+    const { name, code, address, description, city, state, locationRole } = body;
     await StockWarehouseService.assertCodeNotDuplicate({ code, session });
 
     const warehouse = new StockWarehouseModel({
@@ -24,6 +24,9 @@ export default class StockWarehouseService {
       code: String(code).trim(),
       address: address || "",
       description: description || "",
+      city: city || "",
+      state: state || "",
+      locationRole: locationRole || undefined,
     });
     await warehouse.save({ session });
     return warehouse;
@@ -68,7 +71,7 @@ export default class StockWarehouseService {
       });
     }
 
-    const allowed = ["name", "code", "address", "description"];
+    const allowed = ["name", "code", "address", "description", "city", "state", "locationRole"];
     allowed.forEach((key) => {
       if (body[key] !== undefined) warehouse[key] = body[key];
     });

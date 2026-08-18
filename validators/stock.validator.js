@@ -9,6 +9,7 @@ import {
   TERMS_STATUS_ARRAY,
   NOTIFICATION_CHANNEL_ARRAY,
   NOTIFICATION_CHANNEL,
+  LOCATION_ROLE_ARRAY,
 } from "../constants/stock.enums.js";
 
 const stripTags = (html) => String(html || "").replace(/<[^>]*>/g, "").trim();
@@ -397,15 +398,64 @@ export const validateMarkNotRequired = (body) => {
 // ─── Warehouse Validators ─────────────────────────────────────────────────────
 
 export const validateCreateWarehouse = (body) => {
-  const { name, code } = body || {};
+  const { name, code, locationRole } = body || {};
   if (!name || !String(name).trim()) throw new Error("name is required");
   if (!code || !String(code).trim()) throw new Error("code is required");
+  if (locationRole !== undefined && locationRole !== null && !LOCATION_ROLE_ARRAY.includes(locationRole))
+    throw new Error(`locationRole must be one of: ${LOCATION_ROLE_ARRAY.join(", ")}`);
 };
 
 export const validateUpdateWarehouse = (body) => {
-  const { name, code } = body || {};
+  const { name, code, locationRole } = body || {};
   if (name !== undefined && !String(name).trim()) throw new Error("name cannot be empty");
   if (code !== undefined && !String(code).trim()) throw new Error("code cannot be empty");
+  if (locationRole !== undefined && locationRole !== null && !LOCATION_ROLE_ARRAY.includes(locationRole))
+    throw new Error(`locationRole must be one of: ${LOCATION_ROLE_ARRAY.join(", ")}`);
+};
+
+// ─── Inventory Transfer Request Validators ───────────────────────────────────
+
+export const validateCreateTransferRequest = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  const { requestingLocationId, sourceLocationId, lines } = body;
+
+  if (!requestingLocationId) throw new Error("requestingLocationId is required");
+  if (!sourceLocationId) throw new Error("sourceLocationId is required");
+  if (String(requestingLocationId) === String(sourceLocationId))
+    throw new Error("Requesting location and source location must be different");
+
+  if (!Array.isArray(lines) || lines.length === 0)
+    throw new Error("At least one product line is required");
+  lines.forEach((l, idx) => {
+    const where = `Line ${idx + 1}`;
+    if (!isNonEmptyString(l?.productDefinitionId))
+      throw new Error(`${where}: productDefinitionId is required`);
+    if (!isPositiveNumber(l?.requestedQty))
+      throw new Error(`${where}: requested quantity must be greater than 0`);
+  });
+};
+
+export const validateProcessTransferRequest = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  const { lines } = body;
+  if (!Array.isArray(lines) || lines.length === 0) throw new Error("lines is required");
+
+  let anyTransferred = false;
+  lines.forEach((l, idx) => {
+    const where = `Line ${idx + 1}`;
+    if (!isNonEmptyString(l?.lineId)) throw new Error(`${where}: lineId is required`);
+    if (typeof l?.transferQty !== "number" || l.transferQty < 0)
+      throw new Error(`${where}: transfer quantity must be 0 or greater`);
+    if (l.transferQty > 0) anyTransferred = true;
+    if (l.inventoryItemIds !== undefined && !Array.isArray(l.inventoryItemIds))
+      throw new Error(`${where}: inventoryItemIds must be an array`);
+  });
+  if (!anyTransferred)
+    throw new Error("At least one line must have a transfer quantity greater than 0 — use reject instead");
+};
+
+export const validateRejectTransferRequest = (body) => {
+  if (!body?.reason || !String(body.reason).trim()) throw new Error("A reason is required");
 };
 
 // ─── Invoice (goods receiving) Validators ────────────────────────────────────
