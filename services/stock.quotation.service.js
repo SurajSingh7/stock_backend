@@ -483,7 +483,7 @@ export default class StockQuotationService {
 
   static async getQuotationById(id) {
     const quotation = await StockQuotationModel.findOne({ _id: id, isActive: true })
-      .populate("items.productDefinitionId", "name trackingMethod")
+      .populate("items.productDefinitionId", "name trackingMethod unit")
       .populate("items.vendorId", "name")
       .populate("items.categoryId", "name")
       .lean();
@@ -560,7 +560,7 @@ export default class StockQuotationService {
       _id: { $in: [...allProductIds] },
       isActive: true,
     })
-      .select("name gstRate trackingMethod warrantyYears")
+      .select("name gstRate trackingMethod unit warrantyYears")
       .lean();
     const productMap = new Map(products.map((p) => [String(p._id), p]));
 
@@ -574,6 +574,8 @@ export default class StockQuotationService {
           .map((p) => ({
             productDefinitionId: p._id,
             name: p.name,
+            trackingMethod: p.trackingMethod,
+            unit: p.unit,
             gstRate:
               typeof p.gstRate === "number" ? p.gstRate : Number(p.gstRate) || 0,
             warrantyYears:

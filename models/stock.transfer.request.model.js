@@ -1,5 +1,10 @@
 import mongoose from "mongoose";
-import { TRACKING_METHODS_ARRAY, TRANSFER_REQUEST_STATUS, TRANSFER_REQUEST_STATUS_ARRAY } from "../constants/stock.enums.js";
+import {
+  TRACKING_METHODS_ARRAY,
+  UNIT_TYPES_ARRAY,
+  TRANSFER_REQUEST_STATUS,
+  TRANSFER_REQUEST_STATUS_ARRAY,
+} from "../constants/stock.enums.js";
 
 const { Schema } = mongoose;
 
@@ -7,14 +12,15 @@ const transferRequestLineSchema = new Schema(
   {
     productDefinitionId: { type: Schema.Types.ObjectId, ref: "product_definitions", required: true },
     // Snapshots — survive product edits/deletes, same convention as invoice lines.
+    // trackingMethod and unit are independent (see constants/stock.enums.js).
     productName: { type: String, trim: true, default: "" },
     trackingMethod: { type: String, enum: TRACKING_METHODS_ARRAY, required: true },
+    unit: { type: String, enum: UNIT_TYPES_ARRAY, default: null },
 
     requestedQty: { type: Number, required: true, min: 1 },
     transferredQty: { type: Number, default: 0, min: 0 },
     rejectedQty: { type: Number, default: 0, min: 0 },
 
-  
     transferredInventoryItemIds: { type: [Schema.Types.ObjectId], ref: "inventory_items", default: [] },
   },
   { _id: true }

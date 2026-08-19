@@ -4,7 +4,7 @@ import StockPurchaseOrderModel from "../models/stock.purchase.order.model.js";
 import StockQuotationModel from "../models/stock.quotation.model.js";
 import StockVendorModel from "../models/stock.vendor.model.js";
 import "../models/stock.category.model.js";
-import "../models/stock.product.definition.model.js";
+import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 
 import StockTermsConditionService from "./stock.terms.condition.service.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
@@ -340,6 +340,30 @@ export default class StockPurchaseOrderService {
     const total = filteredBoard.length;
     const board = filteredBoard.slice(skip, skip + limit);
 
+    // trackingMethod/unit aren't snapshotted on quotation/PO line items —
+    // resolve them for just this page's rows (display-only, read path, no
+    // schema change), so the board can show the actual saved unit next to
+    // every quantity.
+    const boardProductDefIds = [
+      ...new Set(
+        board.flatMap((q) => q.rows.flatMap((r) => [...r.items, ...(r.skipped || [])].map((it) => String(it.productDefinitionId))))
+      ),
+    ];
+    const boardProductDefs = await StockProductDefinitionModel.find({ _id: { $in: boardProductDefIds } })
+      .select("trackingMethod unit")
+      .lean();
+    const boardProductDefById = new Map(boardProductDefs.map((p) => [String(p._id), p]));
+    board.forEach((q) => {
+      q.rows.forEach((r) => {
+        const attachProductMeta = (it) => {
+          const pd = boardProductDefById.get(String(it.productDefinitionId));
+          return { ...it, trackingMethod: pd?.trackingMethod || "quantity", unit: pd?.unit || null };
+        };
+        r.items = r.items.map(attachProductMeta);
+        if (r.skipped) r.skipped = r.skipped.map(attachProductMeta);
+      });
+    });
+
     // successResponseHandler flattens `.pagination` to the top level and sets
     // response.data to `.data` — so board + counts must live inside `data`,
     // else they get dropped.
@@ -622,6 +646,20 @@ export default class StockPurchaseOrderService {
   static async getPurchaseOrderById(id) {
     const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).lean();
     if (!po) throw new Error("Purchase order not found");
+
+    // trackingMethod/unit aren't snapshotted on the PO line item — resolve
+    // them so the view/edit screens can show the actual saved unit next to
+    // every quantity.
+    const productDefIds = [...new Set((po.items || []).map((it) => String(it.productDefinitionId)))];
+    const productDefs = await StockProductDefinitionModel.find({ _id: { $in: productDefIds } })
+      .select("trackingMethod unit")
+      .lean();
+    const productDefById = new Map(productDefs.map((p) => [String(p._id), p]));
+    po.items = (po.items || []).map((it) => {
+      const pd = productDefById.get(String(it.productDefinitionId));
+      return { ...it, trackingMethod: pd?.trackingMethod || "quantity", unit: pd?.unit || null };
+    });
+
     return po;
   }
 

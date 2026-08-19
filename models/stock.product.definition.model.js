@@ -53,10 +53,13 @@ const stockProductDefinitionSchema = new mongoose.Schema(
       enum: GST_RATES_ARRAY,
       default: null,
     },
+    // Independent of trackingMethod — both are explicit client choices
+    // (e.g. Group+Pieces for bottles, Individual+Meter for a serialized
+    // reel are both valid). Never derive one from the other.
     unit: {
       type: String,
       enum: UNIT_TYPES_ARRAY,
-      default: null,
+      required: true,
     },
     stockAlertThreshold: {
       type: Number,

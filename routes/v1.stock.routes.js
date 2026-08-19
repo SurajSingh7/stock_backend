@@ -79,6 +79,7 @@ router.post("/inventory-items/bulk", StockInventoryItemController.bulkCreateInve
 router.post("/inventory-items", StockInventoryItemController.createInventoryItem);
 router.get("/inventory-items", StockInventoryItemController.getAllInventoryItems);
 // Static segments before "/:id" — same rule as everywhere else in this file.
+router.get("/inventory-items/cards", StockInventoryItemController.getInventoryCards);
 router.get("/inventory-items/product-summary", StockInventoryItemController.getProductInventorySummary);
 router.get("/inventory-items/history/:defId", StockInventoryItemController.getReceivingHistory);
 router.get("/inventory-items/summary/:defId", StockInventoryItemController.getStockSummary);

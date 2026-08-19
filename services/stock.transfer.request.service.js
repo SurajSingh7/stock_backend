@@ -55,6 +55,7 @@ export default class StockTransferRequestService {
         productDefinitionId: def._id,
         productName: def.name,
         trackingMethod: def.trackingMethod,
+        unit: def.unit,
         requestedQty: l.requestedQty,
       });
     }

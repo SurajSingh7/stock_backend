@@ -159,7 +159,7 @@ export default class StockInventoryItemService {
         StockInventoryItemModel.find(filter)
           .populate({
             path: "productDefinitionId",
-            select: "name trackingMethod selectedFields categoryId",
+            select: "name trackingMethod unit selectedFields categoryId",
             populate: {
               path: "selectedFields.fieldDefId",
               select: "code label inputType optionsSource showList isFilterable",
@@ -196,6 +196,121 @@ export default class StockInventoryItemService {
     } catch (error) {
       throw error;
     }
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Item Inventory (card view) — one card per PHYSICAL UNIT for individual- */
+  /* tracked products, but exactly one card per (product, warehouse) for     */
+  /* group-tracked products — batches are summed, never shown as separate    */
+  /* rows. Fetches broadly (this system's inventory volumes are small) and   */
+  /* merges + paginates in memory so a group card's total is never split     */
+  /* across pages.                                                           */
+  /* ---------------------------------------------------------------------- */
+
+  static async getInventoryCards({ skip, limit, search, categoryId, productDefinitionId, warehouseId }) {
+    const filter = { isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED };
+    if (warehouseId) filter.warehouseId = warehouseId;
+    if (productDefinitionId) filter.productDefinitionId = productDefinitionId;
+
+    if (categoryId) {
+      const defIds = await StockProductDefinitionModel.find({ categoryId, isActive: true }).distinct("_id");
+      filter.productDefinitionId = filter.productDefinitionId ? filter.productDefinitionId : { $in: defIds };
+    }
+
+    if (search) {
+      const searchableFields = await StockFieldDefinitionModel.find({
+        isActive: true,
+        $or: [{ isFilterable: true }, { showList: true }],
+      })
+        .select("code")
+        .lean();
+      const codes = new Set(searchableFields.map((f) => f.code));
+      codes.add("imei");
+      codes.add("serial_no");
+      filter.$or = [...codes].map((code) => ({ [`fieldValues.${code}`]: { $regex: search, $options: "i" } }));
+    }
+
+    const items = await StockInventoryItemModel.find(filter)
+      .populate({
+        path: "productDefinitionId",
+        select: "name trackingMethod unit selectedFields categoryId",
+        populate: { path: "selectedFields.fieldDefId", select: "code label inputType optionsSource showList isFilterable" },
+      })
+      .populate({ path: "warehouseId", select: "name code" })
+      .populate({ path: "vendorId", select: "name" })
+      .populate({ path: "invoiceId", select: "invoiceNumber receivedByName" })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const categoryIds = [...new Set(items.map((it) => String(it.productDefinitionId?.categoryId)).filter(Boolean))];
+    const categoryDocs = await StockCategoryModel.find({ _id: { $in: categoryIds } }).select("path").lean();
+    const pathByCategoryId = new Map(categoryDocs.map((c) => [String(c._id), c.path]));
+    const displayPathCache = new Map();
+    const categoryPathFor = async (catId) => {
+      const key = String(catId || "");
+      if (!key) return "";
+      if (!displayPathCache.has(key)) {
+        const path = pathByCategoryId.get(key);
+        displayPathCache.set(key, path ? await StockCategoryService.buildDisplayPath(path) : "");
+      }
+      return displayPathCache.get(key);
+    };
+
+    const individualCards = [];
+    const groupCardByKey = new Map();
+
+    for (const item of items) {
+      const def = item.productDefinitionId;
+      if (!def) continue;
+      const categoryPath = await categoryPathFor(def.categoryId);
+
+      if (def.trackingMethod === TRACKING_METHODS.INDIVIDUAL) {
+        individualCards.push({
+          cardType: "individual",
+          _id: item._id,
+          productDefinitionId: { ...def, categoryPath },
+          warehouseId: item.warehouseId,
+          vendorId: item.vendorId,
+          invoiceId: item.invoiceId,
+          fieldValues: item.fieldValues,
+          status: item.status,
+          approvalStatus: item.approvalStatus,
+          receivedAt: item.receivedAt,
+          createdAt: item.createdAt,
+          sortAt: item.createdAt || item.receivedAt,
+        });
+      } else {
+        const key = `${def._id}::${item.warehouseId?._id || "none"}`;
+        if (!groupCardByKey.has(key)) {
+          groupCardByKey.set(key, {
+            cardType: "group",
+            _id: key,
+            productDefinitionId: { ...def, categoryPath },
+            warehouseId: item.warehouseId,
+            totalQty: 0,
+            batchCount: 0,
+            latestReceivedAt: null,
+            sortAt: null,
+          });
+        }
+        const card = groupCardByKey.get(key);
+        card.totalQty += item.quantity || 0;
+        card.batchCount += 1;
+        const at = item.receivedAt || item.createdAt;
+        if (!card.latestReceivedAt || new Date(at) > new Date(card.latestReceivedAt)) {
+          card.latestReceivedAt = at;
+          card.sortAt = item.createdAt || item.receivedAt;
+        }
+      }
+    }
+
+    const combined = [...individualCards, ...groupCardByKey.values()].sort(
+      (a, b) => new Date(b.sortAt || 0) - new Date(a.sortAt || 0)
+    );
+
+    const total = combined.length;
+    const data = combined.slice(skip, skip + limit);
+    return { data, total };
   }
 
   /* ---------------------------------------------------------------------- */
@@ -252,7 +367,7 @@ export default class StockInventoryItemService {
     if (stockStatus === "IN_STOCK") pipeline.push({ $match: { availableQty: { $gt: 0 } } });
 
     pipeline.push({ $sort: { name: 1 } });
-    pipeline.push({ $project: { name: 1, categoryId: 1, availableQty: 1 } });
+    pipeline.push({ $project: { name: 1, categoryId: 1, availableQty: 1, trackingMethod: 1, unit: 1 } });
 
     const [countResult, rows] = await Promise.all([
       StockProductDefinitionModel.aggregate([...pipeline, { $count: "total" }]),
@@ -280,6 +395,8 @@ export default class StockInventoryItemService {
         categoryId: r.categoryId,
         categoryPath: displayPathCache.get(catId),
         availableQty: r.availableQty,
+        trackingMethod: r.trackingMethod,
+        unit: r.unit,
       });
     }
 
@@ -332,7 +449,7 @@ export default class StockInventoryItemService {
       })
         .populate({
           path: "productDefinitionId",
-          select: "name trackingMethod selectedFields categoryId",
+          select: "name trackingMethod unit selectedFields categoryId",
           populate: {
             path: "selectedFields.fieldDefId",
             select: "code label inputType optionsSource",

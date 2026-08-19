@@ -85,7 +85,11 @@ export const validateReorderCategories = (body) => {
 const validateProductDefinitionExtras = (body) => {
   const { unit, gstRate, stockAlertThreshold, warrantyYears } = body;
 
-  if (unit !== undefined && unit !== null && !UNIT_TYPES_ARRAY.includes(unit))
+  // Independent of trackingMethod — the client always picks both explicitly
+  // (e.g. Group+Pieces for bottles, Individual+Meter for a serialized reel
+  // are both valid combinations). Required, same as warrantyYears below.
+  if (!unit) throw new Error("unit is required");
+  if (!UNIT_TYPES_ARRAY.includes(unit))
     throw new Error(`unit must be one of: ${UNIT_TYPES_ARRAY.join(", ")}`);
 
   if (gstRate !== undefined && gstRate !== null && !GST_RATES_ARRAY.includes(String(gstRate)))

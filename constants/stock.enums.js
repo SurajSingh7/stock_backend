@@ -45,13 +45,13 @@ export const PRODUCT_DEF_STATUS = {
 
 export const PRODUCT_DEF_STATUS_ARRAY = Object.values(PRODUCT_DEF_STATUS);
 
+// Only two units exist. Unit and trackingMethod are independent — the
+// client picks both explicitly (e.g. Group+Pieces for bottles, Individual+
+// Meter for a serialized cable reel are both valid). Never derive one from
+// the other.
 export const UNIT_TYPES = {
   PIECES: "pieces",
   METER: "meter",
-  KG: "kg",
-  BOX: "box",
-  LITRE: "litre",
-  DOZEN: "dozen",
 };
 
 export const UNIT_TYPES_ARRAY = Object.values(UNIT_TYPES);

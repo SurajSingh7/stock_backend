@@ -449,7 +449,7 @@ export default class StockInvoiceService {
 
     const productDefIds = [...new Set((invoice.lines || []).map((l) => String(l.productDefinitionId)))];
     const productDefs = await StockProductDefinitionModel.find({ _id: { $in: productDefIds } })
-      .select("trackingMethod")
+      .select("trackingMethod unit")
       .lean();
     const productDefById = new Map(productDefs.map((p) => [String(p._id), p]));
 
@@ -460,6 +460,7 @@ export default class StockInvoiceService {
         ...l,
         gstRate: poLine?.gstRate || 0,
         trackingMethod: productDef?.trackingMethod || "quantity",
+        unit: productDef?.unit || null,
       };
     });
 
@@ -518,15 +519,31 @@ export default class StockInvoiceService {
       .lean();
     const poById = new Map(pos.map((po) => [String(po._id), po]));
 
+    // trackingMethod/unit aren't snapshotted on the invoice line either —
+    // resolve them the same way getInvoiceById does, so the board can show
+    // the actual saved unit next to every quantity without a schema change.
+    const productDefIds = [
+      ...new Set(pageSlice.flatMap((inv) => (inv.lines || []).map((l) => String(l.productDefinitionId)))),
+    ];
+    const productDefs = await StockProductDefinitionModel.find({ _id: { $in: productDefIds } })
+      .select("trackingMethod unit")
+      .lean();
+    const productDefById = new Map(productDefs.map((p) => [String(p._id), p]));
+
     const paged = pageSlice.map((inv) => {
       const po = poById.get(String(inv.poId));
+      const lines = (inv.lines || []).map((l) => {
+        const pd = productDefById.get(String(l.productDefinitionId));
+        return { ...l, trackingMethod: pd?.trackingMethod || "quantity", unit: pd?.unit || null };
+      });
       return {
         ...inv,
+        lines,
         poNumber: po?.poNumber || "",
         orderedQty: (po?.items || []).reduce((s, it) => s + (it.quantity || 0), 0),
-        itemsSummary: (inv.lines || []).map((l) => l.productName).join(", "),
-        qtyReceived: (inv.lines || []).reduce((s, l) => s + (l.receivedQuantity || 0), 0),
-        focQtyReceived: (inv.lines || []).reduce((s, l) => s + (l.focQuantity || 0), 0),
+        itemsSummary: lines.map((l) => l.productName).join(", "),
+        qtyReceived: lines.reduce((s, l) => s + (l.receivedQuantity || 0), 0),
+        focQtyReceived: lines.reduce((s, l) => s + (l.focQuantity || 0), 0),
         ...StockInvoiceService._computeInvoiceTotals(inv, po),
       };
     });

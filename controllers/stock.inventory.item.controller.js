@@ -83,6 +83,29 @@ export default class StockInventoryItemController {
     }
   }
 
+  static async getInventoryCards(req, res) {
+    try {
+      const { skip, limit, page } = paginate(req.query);
+      const { search, categoryId, productDefinitionId, warehouseId } = req.query;
+      const { data, total } = await StockInventoryItemService.getInventoryCards({
+        skip,
+        limit,
+        search,
+        categoryId,
+        productDefinitionId,
+        warehouseId,
+      });
+      successResponseHandler(
+        res,
+        paginateReturn(data, total, page, limit),
+        "Inventory cards fetched successfully"
+      );
+    } catch (error) {
+      log.error("Error fetching inventory cards", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
   static async getProductInventorySummary(req, res) {
     try {
       const { skip, limit, page } = paginate(req.query);

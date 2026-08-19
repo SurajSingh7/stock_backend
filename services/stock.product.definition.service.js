@@ -77,7 +77,9 @@ export default class StockProductDefinitionService {
         selectedFields,
         status: status ?? "ACTIVE",
         gstRate: gstRate ?? null,
-        unit: unit ?? null,
+        // Independent of trackingMethod — validated (required, pieces/meter)
+        // in validateCreateProductDefinition.
+        unit,
         stockAlertThreshold: stockAlertThreshold ?? null,
         warrantyYears,
         image: image ?? null,
