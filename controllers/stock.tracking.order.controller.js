@@ -32,7 +32,7 @@ export default class StockTrackingOrderController {
     try {
       session.startTransaction();
       validateAddEntity(req.body);
-      const data = await StockTrackingOrderService.addEntity(req.params.id, req.body, session);
+      const data = await StockTrackingOrderService.addEntity(req.params.id, req.body, req.user, session);
       await session.commitTransaction();
       log.info("Entity assigned to tracking order");
       successResponseHandler(res, data, "Entity assigned successfully");
@@ -50,7 +50,7 @@ export default class StockTrackingOrderController {
     try {
       session.startTransaction();
       validateMarkNotRequired(req.body);
-      const data = await StockTrackingOrderService.markNotRequired(req.params.id, req.body.reason, session);
+      const data = await StockTrackingOrderService.markNotRequired(req.params.id, req.body.reason, req.user, session);
       await session.commitTransaction();
       log.info("Tracking order marked Not Required");
       successResponseHandler(res, data, "Marked as Not Required");

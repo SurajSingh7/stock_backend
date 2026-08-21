@@ -18,7 +18,7 @@ export default class StockCategoryController {
     try {
       session.startTransaction();
       validateCreateCategory(req.body);
-      const data = await StockCategoryService.createCategory(req.body, session);
+      const data = await StockCategoryService.createCategory(req.body, req.user, session);
       await session.commitTransaction();
       log.info("Stock category created");
       successResponseHandler(res, data, "Category created successfully");
@@ -80,7 +80,7 @@ export default class StockCategoryController {
     try {
       session.startTransaction();
       validateUpdateCategory(req.body);
-      const data = await StockCategoryService.updateCategory(req.params.id, req.body, session);
+      const data = await StockCategoryService.updateCategory(req.params.id, req.body, req.user, session);
       await session.commitTransaction();
       log.info("Stock category updated");
       successResponseHandler(res, data, "Category updated successfully");
@@ -102,7 +102,7 @@ export default class StockCategoryController {
       session.startTransaction();
       const { type } = req.body;
       if (!type) throw new Error("type is required");
-      const data = await StockCategoryService.toggleCategoryType(req.params.id, type, session);
+      const data = await StockCategoryService.toggleCategoryType(req.params.id, type, req.user, session);
       await session.commitTransaction();
       log.info("Stock category type toggled");
       successResponseHandler(res, data, "Category type updated successfully");
@@ -123,6 +123,7 @@ export default class StockCategoryController {
       const data = await StockCategoryService.moveCategory(
         req.params.id,
         req.body.newParentId,
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -141,10 +142,9 @@ export default class StockCategoryController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const deletedBy = req.user?._id ?? req.userId ?? null;
       const data = await StockCategoryService.softDeleteCategory(
         req.params.id,
-        deletedBy,
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -163,7 +163,7 @@ export default class StockCategoryController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const data = await StockCategoryService.restoreCategory(req.params.id, session);
+      const data = await StockCategoryService.restoreCategory(req.params.id, req.user, session);
       await session.commitTransaction();
       log.info("Stock category restored");
       successResponseHandler(res, data, "Category restored successfully");

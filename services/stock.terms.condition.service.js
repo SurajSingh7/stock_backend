@@ -1,5 +1,8 @@
 import StockTermsConditionModel from "../models/stock.terms.condition.model.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
 import { TERMS_STATUS, TERMS_SOURCE } from "../constants/stock.enums.js";
+
+const ENTITY_TYPE = "terms-conditions";
 
 const escapeRegex = (str = "") => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -18,7 +21,7 @@ const sanitizeRichText = (html) =>
 export default class StockTermsConditionService {
   // ─── Create ──────────────────────────────────────────────────────────────
 
-  static async createTermsCondition(body, session) {
+  static async createTermsCondition(body, actor, session) {
     try {
       const { termName, isDefault, applicableVendors, termsContent, status } = body;
       const wantsDefault = !!isDefault;
@@ -45,6 +48,9 @@ export default class StockTermsConditionService {
         ],
         { session }
       );
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: term._id, action: "CREATE", actor, before: null, after: term.toObject(),
+      });
       return term;
     } catch (error) {
       throw error;
@@ -91,10 +97,11 @@ export default class StockTermsConditionService {
 
   // ─── Update ──────────────────────────────────────────────────────────────
 
-  static async updateTermsCondition(id, body, session) {
+  static async updateTermsCondition(id, body, actor, session) {
     try {
       const term = await StockTermsConditionModel.findOne({ _id: id, isActive: true }).session(session);
       if (!term) throw new Error("Terms & Conditions not found");
+      const before = term.toObject();
 
       const { termName, isDefault, applicableVendors, termsContent, status } = body;
       const nextIsDefault = isDefault !== undefined ? !!isDefault : term.isDefault;
@@ -114,6 +121,9 @@ export default class StockTermsConditionService {
       if (status !== undefined) term.status = status;
 
       await term.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: term._id, action: "UPDATE", actor, before, after: term.toObject(),
+      });
       return term;
     } catch (error) {
       throw error;
@@ -125,15 +135,19 @@ export default class StockTermsConditionService {
   // falls back gracefully to TERMS_SOURCE.NONE (empty terms) when neither a
   // vendor-specific nor a default term is configured; see resolveForVendor.
 
-  static async softDeleteTermsCondition(id, deletedBy, session) {
+  static async softDeleteTermsCondition(id, actor, session) {
     try {
       const term = await StockTermsConditionModel.findOne({ _id: id, isActive: true }).session(session);
       if (!term) throw new Error("Terms & Conditions not found");
+      const before = term.toObject();
 
       term.isActive = false;
       term.deletedAt = new Date();
-      term.deletedBy = deletedBy ?? null;
+      term.deletedBy = actor?._id ?? null;
       await term.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: term._id, action: "DELETE", actor, before, after: term.toObject(),
+      });
       return term;
     } catch (error) {
       throw error;
@@ -142,11 +156,12 @@ export default class StockTermsConditionService {
 
   // ─── Restore ─────────────────────────────────────────────────────────────
 
-  static async restoreTermsCondition(id, session) {
+  static async restoreTermsCondition(id, actor, session) {
     try {
       const term = await StockTermsConditionModel.findOne({ _id: id }).session(session);
       if (!term) throw new Error("Terms & Conditions not found");
       if (term.isActive) throw new Error("Terms & Conditions is already active");
+      const before = term.toObject();
 
       // Restoring a former default must not collide with whatever is the
       // current default — demote it first, same rule as create/update.
@@ -162,6 +177,9 @@ export default class StockTermsConditionService {
       term.deletedAt = null;
       term.deletedBy = null;
       await term.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: term._id, action: "RESTORE", actor, before, after: term.toObject(),
+      });
       return term;
     } catch (error) {
       throw error;

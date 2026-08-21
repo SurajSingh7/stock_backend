@@ -5,6 +5,9 @@ import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
 import { CATEGORY_TYPES, GST_RATES_ARRAY } from "../constants/stock.enums.js";
 import { deleteProductImageFile } from "../helpers/stock.upload.helper.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
+
+const ENTITY_TYPE = "product-definitions";
 
 export default class StockProductDefinitionService {
   // 🔒 A field definition can be restricted to Individual-only or
@@ -36,7 +39,7 @@ export default class StockProductDefinitionService {
     }
   }
 
-  static async createProductDefinition(body, session) {
+  static async createProductDefinition(body, actor, session) {
     try {
       const {
         categoryId,
@@ -86,6 +89,9 @@ export default class StockProductDefinitionService {
       });
 
       await def.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: def._id, action: "CREATE", actor, before: null, after: def.toObject(),
+      });
       return def;
     } catch (error) {
       throw error;
@@ -163,7 +169,7 @@ export default class StockProductDefinitionService {
     }
   }
 
-  static async updateProductDefinition(id, body, session) {
+  static async updateProductDefinition(id, body, actor, session) {
     try {
       if (body.categoryId !== undefined)
         throw new Error("categoryId cannot be changed after creation");
@@ -173,6 +179,7 @@ export default class StockProductDefinitionService {
         isActive: true,
       }).session(session);
       if (!def) throw new Error("Product definition not found");
+      const before = def.toObject();
 
       // Track the previous image so it can be cleaned up from disk AFTER the
       // save succeeds — never delete the old file before the new document is
@@ -204,6 +211,9 @@ export default class StockProductDefinitionService {
       });
 
       await def.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: def._id, action: "UPDATE", actor, before, after: def.toObject(),
+      });
 
       if (replacingImage && previousImage) {
         deleteProductImageFile(previousImage);
@@ -215,13 +225,14 @@ export default class StockProductDefinitionService {
     }
   }
 
-  static async softDeleteProductDefinition(id, deletedBy, session) {
+  static async softDeleteProductDefinition(id, actor, session) {
     try {
       const def = await StockProductDefinitionModel.findOne({
         _id: id,
         isActive: true,
       }).session(session);
       if (!def) throw new Error("Product definition not found");
+      const before = def.toObject();
 
       const activeItems = await StockInventoryItemModel.countDocuments({
         productDefinitionId: id,
@@ -234,8 +245,11 @@ export default class StockProductDefinitionService {
 
       def.isActive = false;
       def.deletedAt = new Date();
-      def.deletedBy = deletedBy ?? null;
+      def.deletedBy = actor?._id ?? null;
       await def.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: def._id, action: "DELETE", actor, before, after: def.toObject(),
+      });
       // NOTE: the image file is intentionally NOT deleted on soft delete —
       // soft delete is reversible (restore), so the image must survive it.
       // Only a real replace (updateProductDefinition) or a future hard-delete
@@ -246,16 +260,20 @@ export default class StockProductDefinitionService {
     }
   }
 
-  static async restoreProductDefinition(id, session) {
+  static async restoreProductDefinition(id, actor, session) {
     try {
       const def = await StockProductDefinitionModel.findOne({ _id: id }).session(session);
       if (!def) throw new Error("Product definition not found");
       if (def.isActive) throw new Error("Product definition is already active");
+      const before = def.toObject();
 
       def.isActive = true;
       def.deletedAt = null;
       def.deletedBy = null;
       await def.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: def._id, action: "RESTORE", actor, before, after: def.toObject(),
+      });
       return def;
     } catch (error) {
       throw error;

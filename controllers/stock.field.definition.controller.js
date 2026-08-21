@@ -16,7 +16,7 @@ export default class StockFieldDefinitionController {
     try {
       session.startTransaction();
       validateCreateFieldDefinition(req.body);
-      const data = await StockFieldDefinitionService.createFieldDefinition(req.body, session);
+      const data = await StockFieldDefinitionService.createFieldDefinition(req.body, req.user, session);
       await session.commitTransaction();
       log.info("Stock field definition created");
       successResponseHandler(res, data, "Field definition created successfully");
@@ -69,6 +69,7 @@ export default class StockFieldDefinitionController {
       const data = await StockFieldDefinitionService.updateFieldDefinition(
         req.params.id,
         req.body,
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -87,10 +88,9 @@ export default class StockFieldDefinitionController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const deletedBy = req.user?._id ?? req.userId ?? null;
       const data = await StockFieldDefinitionService.softDeleteFieldDefinition(
         req.params.id,
-        deletedBy,
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -111,6 +111,7 @@ export default class StockFieldDefinitionController {
       session.startTransaction();
       const data = await StockFieldDefinitionService.restoreFieldDefinition(
         req.params.id,
+        req.user,
         session
       );
       await session.commitTransaction();

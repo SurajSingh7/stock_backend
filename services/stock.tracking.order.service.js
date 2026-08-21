@@ -6,10 +6,12 @@ import StockInvoiceModel from "../models/stock.invoice.model.js";
 
 import { paginate } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
 import { QUOTATION_STATUS, TRACKING_STATUS, INVOICE_STATUS } from "../constants/stock.enums.js";
 
 const log = getLogger(import.meta.url);
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const ENTITY_TYPE = "tracking-orders";
 
 export default class StockTrackingOrderService {
   /* ---------------------------------------------------------------------- */
@@ -273,12 +275,13 @@ export default class StockTrackingOrderService {
   /* + Add Entity — ENTITY_PENDING → PO_PENDING                              */
   /* ---------------------------------------------------------------------- */
 
-  static async addEntity(id, payload, session) {
+  static async addEntity(id, payload, actor, session) {
     const tracking = await StockTrackingOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!tracking) throw new Error("Tracking order not found");
     if (tracking.status !== TRACKING_STATUS.ENTITY_PENDING) {
       throw new Error("Entity has already been assigned for this vendor");
     }
+    const before = tracking.toObject();
 
     tracking.buyerEntity = {
       entityId: payload.entityId || null,
@@ -291,6 +294,9 @@ export default class StockTrackingOrderService {
     };
     tracking.status = TRACKING_STATUS.PO_PENDING;
     await tracking.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: tracking._id, action: "ADD_ENTITY", actor, before, after: tracking.toObject(),
+    });
     return tracking;
   }
 
@@ -298,16 +304,20 @@ export default class StockTrackingOrderService {
   /* Not Required                                                            */
   /* ---------------------------------------------------------------------- */
 
-  static async markNotRequired(id, reason, session) {
+  static async markNotRequired(id, reason, actor, session) {
     const tracking = await StockTrackingOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!tracking) throw new Error("Tracking order not found");
     if (![TRACKING_STATUS.ENTITY_PENDING, TRACKING_STATUS.PO_PENDING].includes(tracking.status)) {
       throw new Error("This vendor order can no longer be marked Not Required");
     }
+    const before = tracking.toObject();
     tracking.status = TRACKING_STATUS.NOT_REQUIRED;
     tracking.notRequiredReason = String(reason || "").trim();
     tracking.disabledAt = new Date();
     await tracking.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: tracking._id, action: "MARK_NOT_REQUIRED", actor, before, after: tracking.toObject(), reason,
+    });
     return tracking;
   }
 

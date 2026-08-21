@@ -1,6 +1,9 @@
 import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
 import { TRACKING_METHODS_ARRAY } from "../constants/stock.enums.js";
+
+const ENTITY_TYPE = "field-definitions";
 
 export default class StockFieldDefinitionService {
   // ─── Helper: checks code/label uniqueness against BOTH active AND inactive
@@ -31,7 +34,7 @@ export default class StockFieldDefinitionService {
     }
   }
 
-  static async createFieldDefinition(body, session) {
+  static async createFieldDefinition(body, actor, session) {
     try {
       const {
         code, label, inputType, optionsSource, isRequired, isFilterable, showList, order,
@@ -57,6 +60,9 @@ export default class StockFieldDefinitionService {
       });
 
       await field.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: field._id, action: "CREATE", actor, before: null, after: field.toObject(),
+      });
       return field;
     } catch (error) {
       throw error;
@@ -97,7 +103,7 @@ export default class StockFieldDefinitionService {
     }
   }
 
-  static async updateFieldDefinition(id, body, session) {
+  static async updateFieldDefinition(id, body, actor, session) {
     try {
       if (body.code !== undefined) throw new Error("code is immutable and cannot be updated");
 
@@ -106,6 +112,7 @@ export default class StockFieldDefinitionService {
         isActive: true,
       }).session(session);
       if (!field) throw new Error("Field definition not found");
+      const before = field.toObject();
 
       // 🔒 Duplicate check — label only (code is immutable), excluding self
       if (body.label !== undefined && body.label.trim().toLowerCase() !== field.label.trim().toLowerCase()) {
@@ -125,19 +132,23 @@ export default class StockFieldDefinitionService {
       });
 
       await field.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: field._id, action: "UPDATE", actor, before, after: field.toObject(),
+      });
       return field;
     } catch (error) {
       throw error;
     }
   }
 
-  static async softDeleteFieldDefinition(id, deletedBy, session) {
+  static async softDeleteFieldDefinition(id, actor, session) {
     try {
       const field = await StockFieldDefinitionModel.findOne({
         _id: id,
         isActive: true,
       }).session(session);
       if (!field) throw new Error("Field definition not found");
+      const before = field.toObject();
 
       // 🔒 Block delete if this field is used in any product definition
       const usageCount = await StockProductDefinitionModel.countDocuments({
@@ -150,24 +161,31 @@ export default class StockFieldDefinitionService {
 
       field.isActive = false;
       field.deletedAt = new Date();
-      field.deletedBy = deletedBy ?? null;
+      field.deletedBy = actor?._id ?? null;
       await field.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: field._id, action: "DELETE", actor, before, after: field.toObject(),
+      });
       return field;
     } catch (error) {
       throw error;
     }
   }
 
-  static async restoreFieldDefinition(id, session) {
+  static async restoreFieldDefinition(id, actor, session) {
     try {
       const field = await StockFieldDefinitionModel.findOne({ _id: id }).session(session);
       if (!field) throw new Error("Field definition not found");
       if (field.isActive) throw new Error("Field definition is already active");
+      const before = field.toObject();
 
       field.isActive = true;
       field.deletedAt = null;
       field.deletedBy = null;
       await field.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: field._id, action: "RESTORE", actor, before, after: field.toObject(),
+      });
       return field;
     } catch (error) {
       throw error;

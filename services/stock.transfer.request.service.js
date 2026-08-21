@@ -4,6 +4,8 @@ import StockWarehouseModel from "../models/stock.warehouse.model.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import { paginate } from "../helpers/pagination.helper.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
+import { resolveBranchIds, isWithinBranchScope } from "../helpers/branch.scope.helper.js";
 import {
   TRACKING_METHODS,
   TRANSFER_REQUEST_STATUS,
@@ -12,6 +14,7 @@ import {
 } from "../constants/stock.enums.js";
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const ENTITY_TYPE = "transfer-requests";
 
 export default class StockTransferRequestService {
   static async generateRequestNumber(session) {
@@ -78,6 +81,9 @@ export default class StockTransferRequestService {
       ],
       { session }
     );
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: request._id, action: "CREATE", actor: user, before: null, after: request.toObject(),
+    });
     return request;
   }
 
@@ -85,11 +91,26 @@ export default class StockTransferRequestService {
   /* List — powers "My Requests" / "Requests to Me" / "All" tabs             */
   /* ---------------------------------------------------------------------- */
 
-  static async getBoard(query = {}) {
+  static async getBoard(query = {}, scopeCtx) {
     const { locationId, role, status, search } = query;
 
     const filter = { isActive: true };
     const and = [];
+
+    // A transfer request touches two locations — in scope if either side is
+    // one of the caller's allowed branches. Explicit ObjectId cast: this
+    // filter also feeds the counts .aggregate() below, which — unlike
+    // .find() — never auto-casts string ids (see locObjId above).
+    const scopedBranchIds = resolveBranchIds(scopeCtx);
+    if (scopedBranchIds !== null) {
+      const scopedObjIds = scopedBranchIds.map((id) => new mongoose.Types.ObjectId(id));
+      and.push({
+        $or: [
+          { requestingLocationId: { $in: scopedObjIds } },
+          { sourceLocationId: { $in: scopedObjIds } },
+        ],
+      });
+    }
 
     // Cast explicitly — .aggregate()'s $match (used below for status counts)
     // does not auto-cast query strings to ObjectId the way .find() does, so
@@ -144,13 +165,15 @@ export default class StockTransferRequestService {
     };
   }
 
-  static async getTransferRequestById(id) {
+  static async getTransferRequestById(id, scopeCtx) {
     const request = await StockTransferRequestModel.findOne({ _id: id, isActive: true })
       .populate({ path: "requestingLocationId", select: "name code city state locationRole" })
       .populate({ path: "sourceLocationId", select: "name code city state locationRole" })
       .populate({ path: "lines.transferredInventoryItemIds", select: "fieldValues quantity" })
       .lean();
-    if (!request) throw new Error("Transfer request not found");
+    if (!request || !isWithinBranchScope(request, scopeCtx, ["requestingLocationId", "sourceLocationId"])) {
+      throw new Error("Transfer request not found");
+    }
     return request;
   }
 
@@ -238,6 +261,7 @@ export default class StockTransferRequestService {
     if (!request) throw new Error("Transfer request not found");
     if (request.status !== TRANSFER_REQUEST_STATUS.PENDING)
       throw new Error("Only pending requests can be processed");
+    const before = request.toObject();
 
     const lineById = new Map(request.lines.map((l) => [String(l._id), l]));
     let anyShortfall = false;
@@ -290,6 +314,9 @@ export default class StockTransferRequestService {
     request.processedAt = new Date();
 
     await request.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: request._id, action: "PROCESS", actor: user, before, after: request.toObject(),
+    });
     return request;
   }
 
@@ -302,6 +329,7 @@ export default class StockTransferRequestService {
     if (!request) throw new Error("Transfer request not found");
     if (request.status !== TRANSFER_REQUEST_STATUS.PENDING)
       throw new Error("Only pending requests can be rejected");
+    const before = request.toObject();
 
     request.lines.forEach((line) => {
       line.transferredQty = 0;
@@ -314,6 +342,10 @@ export default class StockTransferRequestService {
     request.processedAt = new Date();
 
     await request.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: request._id, action: "REJECT", actor: user, before, after: request.toObject(),
+      reason: request.reason,
+    });
     return request;
   }
 }

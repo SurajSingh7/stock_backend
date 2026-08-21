@@ -8,6 +8,7 @@ import {
   validateBulkCreateInventoryItems,
   validateUpdateItemStatus,
 } from "../validators/stock.validator.js";
+import { scopeCtxFromReq } from "../helpers/branch.scope.helper.js";
 
 const log = getLogger(import.meta.url);
 
@@ -20,6 +21,7 @@ export default class StockInventoryItemController {
       const receivedBy = req.user?._id ?? req.userId ?? null;
       const data = await StockInventoryItemService.createInventoryItem(
         { ...req.body, receivedBy },
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -42,6 +44,7 @@ export default class StockInventoryItemController {
       const receivedBy = req.user?._id ?? req.userId ?? null;
       const data = await StockInventoryItemService.bulkCreateInventoryItems(
         { ...req.body, receivedBy },
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -61,17 +64,20 @@ export default class StockInventoryItemController {
       const { skip, limit, page } = paginate(req.query);
       const { productDefinitionId, categoryId, warehouseId, status, approvalStatus, search, showInactive } =
         req.query;
-      const { data, total } = await StockInventoryItemService.getAllInventoryItems({
-        skip,
-        limit,
-        productDefinitionId,
-        categoryId,
-        warehouseId,
-        status,
-        approvalStatus,
-        search,
-        showInactive: showInactive === "true",
-      });
+      const { data, total } = await StockInventoryItemService.getAllInventoryItems(
+        {
+          skip,
+          limit,
+          productDefinitionId,
+          categoryId,
+          warehouseId,
+          status,
+          approvalStatus,
+          search,
+          showInactive: showInactive === "true",
+        },
+        scopeCtxFromReq(req)
+      );
       successResponseHandler(
         res,
         paginateReturn(data, total, page, limit),
@@ -87,14 +93,17 @@ export default class StockInventoryItemController {
     try {
       const { skip, limit, page } = paginate(req.query);
       const { search, categoryId, productDefinitionId, warehouseId } = req.query;
-      const { data, total } = await StockInventoryItemService.getInventoryCards({
-        skip,
-        limit,
-        search,
-        categoryId,
-        productDefinitionId,
-        warehouseId,
-      });
+      const { data, total } = await StockInventoryItemService.getInventoryCards(
+        {
+          skip,
+          limit,
+          search,
+          categoryId,
+          productDefinitionId,
+          warehouseId,
+        },
+        scopeCtxFromReq(req)
+      );
       successResponseHandler(
         res,
         paginateReturn(data, total, page, limit),
@@ -110,15 +119,18 @@ export default class StockInventoryItemController {
     try {
       const { skip, limit, page } = paginate(req.query);
       const { search, categoryId, productDefinitionId, warehouseId, stockStatus } = req.query;
-      const { data, total } = await StockInventoryItemService.getProductInventorySummary({
-        skip,
-        limit,
-        search,
-        categoryId,
-        productDefinitionId,
-        warehouseId,
-        stockStatus,
-      });
+      const { data, total } = await StockInventoryItemService.getProductInventorySummary(
+        {
+          skip,
+          limit,
+          search,
+          categoryId,
+          productDefinitionId,
+          warehouseId,
+          stockStatus,
+        },
+        scopeCtxFromReq(req)
+      );
       successResponseHandler(
         res,
         paginateReturn(data, total, page, limit),
@@ -143,7 +155,7 @@ export default class StockInventoryItemController {
 
   static async getInventoryItemById(req, res) {
     try {
-      const data = await StockInventoryItemService.getInventoryItemById(req.params.id);
+      const data = await StockInventoryItemService.getInventoryItemById(req.params.id, scopeCtxFromReq(req));
       successResponseHandler(res, data, "Inventory item fetched successfully");
     } catch (error) {
       log.error("Error fetching inventory item", error);
@@ -168,6 +180,7 @@ export default class StockInventoryItemController {
       const data = await StockInventoryItemService.updateInventoryItem(
         req.params.id,
         req.body,
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -190,6 +203,7 @@ export default class StockInventoryItemController {
       const data = await StockInventoryItemService.updateItemStatus(
         req.params.id,
         req.body.status,
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -208,10 +222,9 @@ export default class StockInventoryItemController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const deletedBy = req.user?._id ?? req.userId ?? null;
       const data = await StockInventoryItemService.softDeleteInventoryItem(
         req.params.id,
-        deletedBy,
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -230,7 +243,7 @@ export default class StockInventoryItemController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const data = await StockInventoryItemService.restoreInventoryItem(req.params.id, session);
+      const data = await StockInventoryItemService.restoreInventoryItem(req.params.id, req.user, session);
       await session.commitTransaction();
       log.info("Stock inventory item restored");
       successResponseHandler(res, data, "Inventory item restored successfully");

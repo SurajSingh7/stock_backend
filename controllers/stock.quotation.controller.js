@@ -148,6 +148,7 @@ export default class StockQuotationController {
       session.startTransaction();
       const quotation = await StockQuotationService.restoreQuotation(
         req.params.id,
+        actingUser(req),
         session
       );
       await session.commitTransaction();

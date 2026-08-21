@@ -8,6 +8,7 @@ import "../models/stock.category.model.js";
 import StockVendorPurchaseHistoryModel from "../models/stock.vendor.purchase.history.model.js";
 import StockVendorReviewModel from "../models/stock.vendor.review.model.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
 
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
@@ -17,6 +18,7 @@ import {
 } from "../constants/stock.enums.js";
 
 const log = getLogger(import.meta.url);
+const ENTITY_TYPE = "quotations";
 
 const escapeRegex = (str = "") =>
   String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -242,6 +244,9 @@ export default class StockQuotationService {
     );
 
     log.info(`Quotation created: ${quotationNumber}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: quotation._id, action: "CREATE", actor: user, before: null, after: quotation.toObject(),
+    });
     return quotation;
   }
 
@@ -251,6 +256,7 @@ export default class StockQuotationService {
       isActive: true,
     }).session(session);
     if (!quotation) throw new Error("Quotation not found");
+    const before = quotation.toObject();
 
     if (quotation.status !== QUOTATION_STATUS.PENDING) {
       throw new Error("Only pending quotations can be edited");
@@ -275,6 +281,9 @@ export default class StockQuotationService {
     quotation.updatedBy = user?.id || user?._id || null;
     quotation.updatedByName = user?.name || "";
     await quotation.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: quotation._id, action: "UPDATE", actor: user, before, after: quotation.toObject(),
+    });
     return quotation;
   }
 
@@ -288,6 +297,7 @@ export default class StockQuotationService {
       isActive: true,
     }).session(session);
     if (!quotation) throw new Error("Quotation not found");
+    const before = quotation.toObject();
 
     if (quotation.status !== QUOTATION_STATUS.PENDING) {
       throw new Error("This quotation has already been reviewed");
@@ -394,6 +404,10 @@ export default class StockQuotationService {
     quotation.updatedBy = actorId;
     quotation.updatedByName = actorName;
     await quotation.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: quotation._id, action: "REVIEW", actor: user, before, after: quotation.toObject(),
+      reason: `-> ${quotation.status}`,
+    });
 
     // Approved/partially-approved → one Tracking Order per winning vendor,
     // so Entity/State assignment (and the rest of the workflow) starts there
@@ -501,6 +515,7 @@ export default class StockQuotationService {
       isActive: true,
     }).session(session);
     if (!quotation) throw new Error("Quotation not found");
+    const before = quotation.toObject();
 
     // Protect the financial trail — block once anything has been approved.
     if (
@@ -514,20 +529,27 @@ export default class StockQuotationService {
     quotation.deletedAt = new Date();
     quotation.deletedBy = user?.id || user?._id || null;
     await quotation.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: quotation._id, action: "DELETE", actor: user, before, after: quotation.toObject(),
+    });
     return quotation;
   }
 
-  static async restoreQuotation(id, session) {
+  static async restoreQuotation(id, actor, session) {
     const quotation = await StockQuotationModel.findOne({
       _id: id,
       isActive: false,
     }).session(session);
     if (!quotation) throw new Error("Inactive quotation not found");
+    const before = quotation.toObject();
 
     quotation.isActive = true;
     quotation.deletedAt = null;
     quotation.deletedBy = null;
     await quotation.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: quotation._id, action: "RESTORE", actor, before, after: quotation.toObject(),
+    });
     return quotation;
   }
 

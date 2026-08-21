@@ -2,8 +2,10 @@ import mongoose from "mongoose";
 import StockVendorModel from "../models/stock.vendor.model.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
 
 const log = getLogger(import.meta.url);
+const ENTITY_TYPE = "vendors";
 
 
 const escapeRegex = (str = "") => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -51,7 +53,7 @@ export default class StockVendorService {
     return `${PREFIX}${String(nextNum).padStart(PAD, "0")}`;
   }
 
-  static async createVendor(body, userId, session) {
+  static async createVendor(body, actor, session) {
     try {
       await StockVendorService.assertVendorNotDuplicate({
         name: body.name,
@@ -79,6 +81,9 @@ export default class StockVendorService {
         const vendorCode = await StockVendorService.generateNextVendorCode(session);
         try {
           const [vendor] = await StockVendorModel.create([{ ...docData, vendorCode }], { session });
+          await StockAuditLogService.recordAudit({
+            entityType: ENTITY_TYPE, entityId: vendor._id, action: "CREATE", actor, before: null, after: vendor.toObject(),
+          });
           return vendor;
         } catch (err) {
           if (err?.code === 11000 && err?.keyPattern?.vendorCode) {
@@ -156,7 +161,7 @@ export default class StockVendorService {
     }
   }
 
-  static async updateVendor(id, body, session) {
+  static async updateVendor(id, body, actor, session) {
     try {
       if (Object.prototype.hasOwnProperty.call(body, "vendorCode")) {
         throw new Error("vendorCode cannot be updated once set");
@@ -164,6 +169,7 @@ export default class StockVendorService {
 
       const vendor = await StockVendorModel.findOne({ _id: id, isActive: true }).session(session);
       if (!vendor) throw new Error("Vendor not found");
+      const before = vendor.toObject();
 
       await StockVendorService.assertVendorNotDuplicate({
         name: body.name,
@@ -191,16 +197,20 @@ export default class StockVendorService {
       });
 
       await vendor.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: vendor._id, action: "UPDATE", actor, before, after: vendor.toObject(),
+      });
       return vendor;
     } catch (error) {
       throw error;
     }
   }
 
-  static async softDeleteVendor(id, userId, session) {
+  static async softDeleteVendor(id, actor, session) {
     try {
       const vendor = await StockVendorModel.findOne({ _id: id, isActive: true }).session(session);
       if (!vendor) throw new Error("Vendor not found");
+      const before = vendor.toObject();
 
       // NOTE: stock_inventory_items is not built yet (spec Section 8.5).
       // Once it exists, uncomment this block so delete is blocked exactly
@@ -217,23 +227,30 @@ export default class StockVendorService {
 
       vendor.isActive = false;
       vendor.deletedAt = new Date();
-      vendor.deletedBy = userId || null;
+      vendor.deletedBy = actor?._id ?? null;
       await vendor.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: vendor._id, action: "DELETE", actor, before, after: vendor.toObject(),
+      });
       return vendor;
     } catch (error) {
       throw error;
     }
   }
 
-  static async restoreVendor(id, session) {
+  static async restoreVendor(id, actor, session) {
     try {
       const vendor = await StockVendorModel.findOne({ _id: id, isActive: false }).session(session);
       if (!vendor) throw new Error("Inactive vendor not found");
+      const before = vendor.toObject();
 
       vendor.isActive = true;
       vendor.deletedAt = null;
       vendor.deletedBy = null;
       await vendor.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: vendor._id, action: "RESTORE", actor, before, after: vendor.toObject(),
+      });
       return vendor;
     } catch (error) {
       throw error;

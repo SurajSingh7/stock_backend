@@ -1,7 +1,10 @@
 import mongoose from "mongoose";
 import StockCategoryModel from "../models/stock.category.model.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
 import { CATEGORY_TYPES } from "../constants/stock.enums.js";
+
+const ENTITY_TYPE = "categories";
 
 export default class StockCategoryService {
   // ─── Helper: escape user input before using in a $regex query ─────────────────
@@ -50,7 +53,7 @@ export default class StockCategoryService {
 
   // ─── Create ──────────────────────────────────────────────────────────────────
 
-  static async createCategory(body, session) {
+  static async createCategory(body, actor, session) {
     try {
       const { name, description, type, parentId, sortOrder } = body;
 
@@ -69,6 +72,9 @@ export default class StockCategoryService {
         await category.save({ session });
         category.path = `/${category._id}/`;
         await category.save({ session });
+        await StockAuditLogService.recordAudit({
+          entityType: ENTITY_TYPE, entityId: category._id, action: "CREATE", actor, before: null, after: category.toObject(),
+        });
         return category;
       }
 
@@ -95,6 +101,9 @@ export default class StockCategoryService {
       await category.save({ session });
       category.path = `${parent.path}${category._id}/`;
       await category.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: category._id, action: "CREATE", actor, before: null, after: category.toObject(),
+      });
       return category;
     } catch (error) {
       throw error;
@@ -226,13 +235,14 @@ export default class StockCategoryService {
 
   // ─── Update (rename / description only — type is immutable here) ─────────────
 
-  static async updateCategory(id, body, session) {
+  static async updateCategory(id, body, actor, session) {
     try {
       const category = await StockCategoryModel.findOne({
         _id: id,
         isActive: true,
       }).session(session);
       if (!category) throw new Error("Category not found");
+      const before = category.toObject();
 
       if (body.type !== undefined) throw new Error("type is immutable");
 
@@ -244,6 +254,9 @@ export default class StockCategoryService {
 
       if (body.description !== undefined) category.description = body.description;
       await category.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: category._id, action: "UPDATE", actor, before, after: category.toObject(),
+      });
       return category;
     } catch (error) {
       throw error;
@@ -252,7 +265,7 @@ export default class StockCategoryService {
 
   // ─── Toggle type (GROUP <-> LEAF) ──────────────────────────────────────────────
 
-  static async toggleCategoryType(id, nextType, session) {
+  static async toggleCategoryType(id, nextType, actor, session) {
     try {
       if (![CATEGORY_TYPES.GROUP, CATEGORY_TYPES.LEAF].includes(nextType)) {
         throw new Error("Invalid category type");
@@ -263,6 +276,7 @@ export default class StockCategoryService {
         isActive: true,
       }).session(session);
       if (!category) throw new Error("Category not found");
+      const before = category.toObject();
 
       if (category.type === nextType) {
         throw new Error(`Category is already ${nextType}`);
@@ -288,6 +302,9 @@ export default class StockCategoryService {
 
       category.type = nextType;
       await category.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: category._id, action: "TOGGLE_TYPE", actor, before, after: category.toObject(),
+      });
       return category;
     } catch (error) {
       throw error;
@@ -296,13 +313,14 @@ export default class StockCategoryService {
 
   // ─── Move ─────────────────────────────────────────────────────────────────────
 
-  static async moveCategory(id, newParentId, session) {
+  static async moveCategory(id, newParentId, actor, session) {
     try {
       const category = await StockCategoryModel.findOne({
         _id: id,
         isActive: true,
       }).session(session);
       if (!category) throw new Error("Category not found");
+      const before = category.toObject();
 
       const oldPath = category.path;
       let newPath;
@@ -346,6 +364,9 @@ export default class StockCategoryService {
         );
       }
 
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: category._id, action: "MOVE", actor, before, after: category.toObject(),
+      });
       return category;
     } catch (error) {
       throw error;
@@ -363,13 +384,14 @@ export default class StockCategoryService {
   //   To delete a>b>c>d>e (e = LEAF): move e out first, then delete d, then
   //   c, then b, then a — bottom-up, one empty GROUP at a time.
 
-  static async softDeleteCategory(id, deletedBy, session) {
+  static async softDeleteCategory(id, actor, session) {
     try {
       const category = await StockCategoryModel.findOne({
         _id: id,
         isActive: true,
       }).session(session);
       if (!category) throw new Error("Category not found");
+      const before = category.toObject();
 
       if (category.type === CATEGORY_TYPES.LEAF) {
         throw new Error(
@@ -391,8 +413,11 @@ export default class StockCategoryService {
       const now = new Date();
       category.isActive = false;
       category.deletedAt = now;
-      category.deletedBy = deletedBy ?? null;
+      category.deletedBy = actor?._id ?? null;
       await category.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: category._id, action: "DELETE", actor, before, after: category.toObject(),
+      });
 
       return category;
     } catch (error) {
@@ -402,16 +427,20 @@ export default class StockCategoryService {
 
   // ─── Restore ──────────────────────────────────────────────────────────────────
 
-  static async restoreCategory(id, session) {
+  static async restoreCategory(id, actor, session) {
     try {
       const category = await StockCategoryModel.findOne({ _id: id }).session(session);
       if (!category) throw new Error("Category not found");
       if (category.isActive) throw new Error("Category is already active");
+      const before = category.toObject();
 
       category.isActive = true;
       category.deletedAt = null;
       category.deletedBy = null;
       await category.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: category._id, action: "RESTORE", actor, before, after: category.toObject(),
+      });
       return category;
     } catch (error) {
       throw error;

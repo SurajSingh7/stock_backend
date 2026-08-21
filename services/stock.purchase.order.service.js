@@ -9,6 +9,7 @@ import StockProductDefinitionModel from "../models/stock.product.definition.mode
 import StockTermsConditionService from "./stock.terms.condition.service.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
 import StockNotificationService from "./stock.notification.service.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
 import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
@@ -27,6 +28,8 @@ import {
 
 const log = getLogger(import.meta.url);
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const ENTITY_TYPE = "purchase-orders";
+const QUOTATION_ENTITY_TYPE = "quotations";
 
 export default class StockPurchaseOrderService {
   static async generatePONumber(session) {
@@ -383,6 +386,7 @@ export default class StockPurchaseOrderService {
 
     const exists = (quotation.disabledVendors || []).some((d) => String(d.vendorId) === String(vendorId));
     if (!exists) {
+      const before = quotation.toObject();
       const item = quotation.items.find((it) => String(it.vendorId) === String(vendorId));
       quotation.disabledVendors.push({
         vendorId,
@@ -393,6 +397,10 @@ export default class StockPurchaseOrderService {
         disabledAt: new Date(),
       });
       await quotation.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: QUOTATION_ENTITY_TYPE, entityId: quotation._id, action: "DISABLE_VENDOR", actor: user, before, after: quotation.toObject(),
+        reason: `vendor=${vendorId}: ${reason}`,
+      });
     }
     return quotation;
   }
@@ -400,10 +408,15 @@ export default class StockPurchaseOrderService {
   static async enableVendor(quotationId, vendorId, user, session) {
     const quotation = await StockQuotationModel.findOne({ _id: quotationId, isActive: true }).session(session);
     if (!quotation) throw new Error("Quotation not found");
+    const before = quotation.toObject();
     quotation.disabledVendors = (quotation.disabledVendors || []).filter(
       (d) => String(d.vendorId) !== String(vendorId)
     );
     await quotation.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: QUOTATION_ENTITY_TYPE, entityId: quotation._id, action: "ENABLE_VENDOR", actor: user, before, after: quotation.toObject(),
+      reason: `vendor=${vendorId}`,
+    });
     return quotation;
   }
 
@@ -616,6 +629,9 @@ export default class StockPurchaseOrderService {
     await tracking.save({ session });
 
     log.info(`PO created: ${poNumber} (${items.length} items, ${taxType})`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: po._id, action: "CREATE", actor: user, before: null, after: po.toObject(),
+    });
     return po;
   }
 
@@ -673,6 +689,7 @@ export default class StockPurchaseOrderService {
     if (![PO_STATUS.GENERATED, PO_STATUS.REJECTED].includes(po.status)) {
       throw new Error("Only a generated or rejected PO can be edited");
     }
+    const before = po.toObject();
 
     if (body.requester !== undefined) po.requester = body.requester;
     if (body.poDate !== undefined) po.poDate = body.poDate;
@@ -695,6 +712,9 @@ export default class StockPurchaseOrderService {
 
     po.pdfPath = await generatePOPdf(po.toObject());
     await po.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: po._id, action: "UPDATE", actor: user, before, after: po.toObject(),
+    });
     return po;
   }
 
@@ -708,12 +728,16 @@ export default class StockPurchaseOrderService {
     if (![PO_STATUS.GENERATED, PO_STATUS.REJECTED].includes(po.status)) {
       throw new Error("Only a generated or rejected PO can be approved");
     }
+    const before = po.toObject();
     po.status = PO_STATUS.APPROVED;
     po.rejectedReason = "";
     po.reviewedBy = user?.id || user?._id || null;
     po.reviewedByName = user?.name || "";
     po.reviewedAt = new Date();
     await po.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: po._id, action: "APPROVE", actor: user, before, after: po.toObject(),
+    });
     await StockTrackingOrderService.syncStatusForPo(po._id, TRACKING_STATUS.PO_APPROVED, session);
     return po;
   }
@@ -724,12 +748,16 @@ export default class StockPurchaseOrderService {
     if (po.status !== PO_STATUS.GENERATED) {
       throw new Error("Only a generated PO can be rejected");
     }
+    const before = po.toObject();
     po.status = PO_STATUS.REJECTED;
     po.rejectedReason = typeof reason === "string" ? reason : "";
     po.reviewedBy = user?.id || user?._id || null;
     po.reviewedByName = user?.name || "";
     po.reviewedAt = new Date();
     await po.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: po._id, action: "REJECT", actor: user, before, after: po.toObject(), reason,
+    });
     await StockTrackingOrderService.syncStatusForPo(po._id, TRACKING_STATUS.REJECTED, session);
     return po;
   }
@@ -749,6 +777,7 @@ export default class StockPurchaseOrderService {
     if (![PO_STATUS.APPROVED, PO_STATUS.SENT].includes(po.status)) {
       throw new Error("Only an approved or already-sent PO can be sent");
     }
+    const before = po.toObject();
 
     const { sendEmail, to, cc, from } = body;
     const { notification } = await StockNotificationService.resolveForVendor(
@@ -800,6 +829,10 @@ export default class StockPurchaseOrderService {
 
     po.status = PO_STATUS.SENT;
     await po.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: po._id, action: "SEND_MAIL", actor: user, before, after: po.toObject(),
+      reason: mailResult.mode,
+    });
     await StockTrackingOrderService.recordMailResult(po._id, mailResult, session);
 
     return { po, mailResult };
@@ -815,6 +848,7 @@ export default class StockPurchaseOrderService {
     if (po.status === PO_STATUS.SENT) {
       throw new Error("Cannot delete — this PO has already been sent to the vendor");
     }
+    const before = po.toObject();
 
     // Free the locked quotation items so they can be PO'd again.
     const quotation = await StockQuotationModel.findOne({
@@ -835,6 +869,9 @@ export default class StockPurchaseOrderService {
     po.deletedAt = new Date();
     po.deletedBy = user?.id || user?._id || null;
     await po.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: po._id, action: "DELETE", actor: user, before, after: po.toObject(),
+    });
     return po;
   }
 }

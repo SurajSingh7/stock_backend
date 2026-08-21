@@ -8,6 +8,7 @@ import {
   validateUpdateInvoice,
   validateRejectInvoice,
 } from "../validators/stock.validator.js";
+import { scopeCtxFromReq } from "../helpers/branch.scope.helper.js";
 
 const log = getLogger(import.meta.url);
 
@@ -56,7 +57,7 @@ export default class StockInvoiceController {
 
   static async getBoard(req, res) {
     try {
-      const data = await StockInvoiceService.getBoard(req.query);
+      const data = await StockInvoiceService.getBoard(req.query, scopeCtxFromReq(req));
       successResponseHandler(res, data, "Invoices fetched successfully");
     } catch (error) {
       log.error("Error fetching invoices board", error);
@@ -66,7 +67,7 @@ export default class StockInvoiceController {
 
   static async getInvoiceById(req, res) {
     try {
-      const data = await StockInvoiceService.getInvoiceById(req.params.id);
+      const data = await StockInvoiceService.getInvoiceById(req.params.id, scopeCtxFromReq(req));
       successResponseHandler(res, data, "Invoice fetched successfully");
     } catch (error) {
       log.error("Error fetching invoice", error);

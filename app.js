@@ -2,10 +2,12 @@ import express from "express";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import path from "path";
 
 import stockRoutes from "./routes/v1.stock.routes.js";
-import { seedMainWarehouse } from "./seeders/stock.warehouse.seeder.js";
+import internalRoutes from "./routes/internal.routes.js";
+import { seedModules } from "./seeders/stock.module.seeder.js";
 import { multerErrorHandler } from "./helpers/stock.upload.helper.js";
 
 dotenv.config();
@@ -27,6 +29,7 @@ app.use(
 
 
 app.use(express.json());
+app.use(cookieParser());
 
 
 // ✅ ADD THIS BEFORE ROUTES
@@ -49,6 +52,9 @@ app.get("/", (req, res) =>
 // APIs
 app.use("/api/v1/stock", stockRoutes);
 
+// Service-to-service only — never hit from a browser (see verifyInternalServiceKey).
+app.use("/internal", internalRoutes);
+
 // Multer errors (file too large / wrong type) bypass the controller's
 // try/catch entirely — must be mounted here to turn them into a clean 400
 // instead of Express's default HTML error page.
@@ -68,7 +74,7 @@ mongoose
 .then(async () => {
   console.log("✅ MongoDB connected");
 
-  await seedMainWarehouse();
+  await seedModules();
 
   app.listen(process.env.PORT || 5000, () => {
     console.log(

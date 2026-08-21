@@ -7,6 +7,7 @@ import {
   validateProcessTransferRequest,
   validateRejectTransferRequest,
 } from "../validators/stock.validator.js";
+import { scopeCtxFromReq } from "../helpers/branch.scope.helper.js";
 
 const log = getLogger(import.meta.url);
 
@@ -36,7 +37,7 @@ export default class StockTransferRequestController {
 
   static async getBoard(req, res) {
     try {
-      const data = await StockTransferRequestService.getBoard(req.query);
+      const data = await StockTransferRequestService.getBoard(req.query, scopeCtxFromReq(req));
       successResponseHandler(res, data, "Transfer requests fetched successfully");
     } catch (error) {
       log.error("Error fetching transfer requests board", error);
@@ -46,7 +47,7 @@ export default class StockTransferRequestController {
 
   static async getTransferRequestById(req, res) {
     try {
-      const data = await StockTransferRequestService.getTransferRequestById(req.params.id);
+      const data = await StockTransferRequestService.getTransferRequestById(req.params.id, scopeCtxFromReq(req));
       successResponseHandler(res, data, "Transfer request fetched successfully");
     } catch (error) {
       log.error("Error fetching transfer request", error);

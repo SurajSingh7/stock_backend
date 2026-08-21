@@ -5,6 +5,8 @@ import StockFieldDefinitionModel from "../models/stock.field.definition.model.js
 import StockCategoryModel from "../models/stock.category.model.js";
 import StockInvoiceModel from "../models/stock.invoice.model.js";
 import StockCategoryService from "./stock.category.service.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
+import { applyBranchScopeToFilter, isWithinBranchScope, resolveBranchIds } from "../helpers/branch.scope.helper.js";
 import { paginate } from "../helpers/pagination.helper.js";
 import {
   TRACKING_METHODS,
@@ -12,6 +14,8 @@ import {
   ITEM_STATUS,
   ITEM_APPROVAL_STATUS,
 } from "../constants/stock.enums.js";
+
+const ENTITY_TYPE = "inventory-items";
 
 export default class StockInventoryItemService {
   // ─── Validate fieldValues against productDefinition ──────────────────────────
@@ -31,7 +35,7 @@ export default class StockInventoryItemService {
 
   // ─── Create single item ───────────────────────────────────────────────────────
 
-  static async createInventoryItem(body, session) {
+  static async createInventoryItem(body, actor, session) {
     try {
       const { productDefinitionId, fieldValues, quantity, receivedAt, receivedBy, warehouseId, vendorId } = body;
 
@@ -57,6 +61,9 @@ export default class StockInventoryItemService {
       });
 
       await item.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: item._id, action: "CREATE", actor, before: null, after: item.toObject(),
+      });
       return item;
     } catch (error) {
       throw error;
@@ -65,7 +72,7 @@ export default class StockInventoryItemService {
 
   // ─── Bulk create (individual mode) ───────────────────────────────────────────
 
-  static async bulkCreateInventoryItems(body, session) {
+  static async bulkCreateInventoryItems(body, actor, session) {
     try {
       const { productDefinitionId, items, receivedAt, receivedBy, warehouseId, vendorId } = body;
 
@@ -102,6 +109,13 @@ export default class StockInventoryItemService {
       if (docs.length > 0) {
         const result = await StockInventoryItemModel.insertMany(docs, { session });
         created = result.length;
+        await Promise.all(
+          result.map((doc) =>
+            StockAuditLogService.recordAudit({
+              entityType: ENTITY_TYPE, entityId: doc._id, action: "BULK_CREATE", actor, before: null, after: doc.toObject(),
+            })
+          )
+        );
       }
 
       return { created, errors };
@@ -122,13 +136,14 @@ export default class StockInventoryItemService {
     approvalStatus,
     search,
     showInactive,
-  }) {
+  }, scopeCtx) {
     try {
       const filter = showInactive ? {} : { isActive: true };
       if (productDefinitionId) filter.productDefinitionId = productDefinitionId;
       if (warehouseId) filter.warehouseId = warehouseId;
       if (status) filter.status = status;
       if (approvalStatus) filter.approvalStatus = approvalStatus;
+      applyBranchScopeToFilter(filter, scopeCtx, "warehouseId");
 
       if (categoryId) {
         const defIds = await StockProductDefinitionModel.find({ categoryId, isActive: true }).distinct("_id");
@@ -207,10 +222,11 @@ export default class StockInventoryItemService {
   /* across pages.                                                           */
   /* ---------------------------------------------------------------------- */
 
-  static async getInventoryCards({ skip, limit, search, categoryId, productDefinitionId, warehouseId }) {
+  static async getInventoryCards({ skip, limit, search, categoryId, productDefinitionId, warehouseId }, scopeCtx) {
     const filter = { isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED };
     if (warehouseId) filter.warehouseId = warehouseId;
     if (productDefinitionId) filter.productDefinitionId = productDefinitionId;
+    applyBranchScopeToFilter(filter, scopeCtx, "warehouseId");
 
     if (categoryId) {
       const defIds = await StockProductDefinitionModel.find({ categoryId, isActive: true }).distinct("_id");
@@ -327,7 +343,7 @@ export default class StockInventoryItemService {
     productDefinitionId,
     warehouseId,
     stockStatus,
-  }) {
+  }, scopeCtx) {
     const productMatch = { isActive: true };
     if (categoryId) productMatch.categoryId = new mongoose.Types.ObjectId(categoryId);
     if (productDefinitionId) productMatch._id = new mongoose.Types.ObjectId(productDefinitionId);
@@ -341,6 +357,10 @@ export default class StockInventoryItemService {
     ];
     if (warehouseId) {
       stockMatchExpr.push({ $eq: ["$warehouseId", new mongoose.Types.ObjectId(warehouseId)] });
+    }
+    const scopedBranchIds = resolveBranchIds(scopeCtx);
+    if (scopedBranchIds !== null) {
+      stockMatchExpr.push({ $in: ["$warehouseId", scopedBranchIds.map((id) => new mongoose.Types.ObjectId(id))] });
     }
 
     const pipeline = [
@@ -441,7 +461,7 @@ export default class StockInventoryItemService {
 
   // ─── Get single item ──────────────────────────────────────────────────────────
 
-  static async getInventoryItemById(id) {
+  static async getInventoryItemById(id, scopeCtx) {
     try {
       const item = await StockInventoryItemModel.findOne({
         _id: id,
@@ -456,7 +476,9 @@ export default class StockInventoryItemService {
           },
         })
         .lean();
-      if (!item) throw new Error("Inventory item not found");
+      if (!item || !isWithinBranchScope(item, scopeCtx, "warehouseId")) {
+        throw new Error("Inventory item not found");
+      }
       return item;
     } catch (error) {
       throw error;
@@ -526,18 +548,22 @@ export default class StockInventoryItemService {
 
   // ─── Update field values ──────────────────────────────────────────────────────
 
-  static async updateInventoryItem(id, body, session) {
+  static async updateInventoryItem(id, body, actor, session) {
     try {
       const item = await StockInventoryItemModel.findOne({
         _id: id,
         isActive: true,
       }).session(session);
       if (!item) throw new Error("Inventory item not found");
+      const before = item.toObject();
 
       if (body.fieldValues !== undefined) item.fieldValues = body.fieldValues;
       if (body.quantity !== undefined) item.quantity = body.quantity;
 
       await item.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: item._id, action: "UPDATE", actor, before, after: item.toObject(),
+      });
       return item;
     } catch (error) {
       throw error;
@@ -546,7 +572,7 @@ export default class StockInventoryItemService {
 
   // ─── Update status ────────────────────────────────────────────────────────────
 
-  static async updateItemStatus(id, status, session) {
+  static async updateItemStatus(id, status, actor, session) {
     try {
       if (!ITEM_STATUS_ARRAY.includes(status))
         throw new Error(`Invalid status: ${status}`);
@@ -556,9 +582,13 @@ export default class StockInventoryItemService {
         isActive: true,
       }).session(session);
       if (!item) throw new Error("Inventory item not found");
+      const before = item.toObject();
 
       item.status = status;
       await item.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: item._id, action: "UPDATE_STATUS", actor, before, after: item.toObject(),
+      });
       return item;
     } catch (error) {
       throw error;
@@ -567,18 +597,22 @@ export default class StockInventoryItemService {
 
   // ─── Soft delete ──────────────────────────────────────────────────────────────
 
-  static async softDeleteInventoryItem(id, deletedBy, session) {
+  static async softDeleteInventoryItem(id, actor, session) {
     try {
       const item = await StockInventoryItemModel.findOne({
         _id: id,
         isActive: true,
       }).session(session);
       if (!item) throw new Error("Inventory item not found");
+      const before = item.toObject();
 
       item.isActive = false;
       item.deletedAt = new Date();
-      item.deletedBy = deletedBy ?? null;
+      item.deletedBy = actor?._id ?? null;
       await item.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: item._id, action: "DELETE", actor, before, after: item.toObject(),
+      });
       return item;
     } catch (error) {
       throw error;
@@ -587,16 +621,20 @@ export default class StockInventoryItemService {
 
   // ─── Restore ──────────────────────────────────────────────────────────────────
 
-  static async restoreInventoryItem(id, session) {
+  static async restoreInventoryItem(id, actor, session) {
     try {
       const item = await StockInventoryItemModel.findOne({ _id: id }).session(session);
       if (!item) throw new Error("Inventory item not found");
       if (item.isActive) throw new Error("Inventory item is already active");
+      const before = item.toObject();
 
       item.isActive = true;
       item.deletedAt = null;
       item.deletedBy = null;
       await item.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: item._id, action: "RESTORE", actor, before, after: item.toObject(),
+      });
       return item;
     } catch (error) {
       throw error;

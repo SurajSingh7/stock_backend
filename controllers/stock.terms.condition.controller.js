@@ -16,7 +16,7 @@ export default class StockTermsConditionController {
     try {
       session.startTransaction();
       validateCreateTermsCondition(req.body);
-      const data = await StockTermsConditionService.createTermsCondition(req.body, session);
+      const data = await StockTermsConditionService.createTermsCondition(req.body, req.user, session);
       await session.commitTransaction();
       log.info("Terms & Conditions created");
       successResponseHandler(res, data, "Terms & Conditions created successfully");
@@ -66,7 +66,7 @@ export default class StockTermsConditionController {
     try {
       session.startTransaction();
       validateUpdateTermsCondition(req.body);
-      const data = await StockTermsConditionService.updateTermsCondition(req.params.id, req.body, session);
+      const data = await StockTermsConditionService.updateTermsCondition(req.params.id, req.body, req.user, session);
       await session.commitTransaction();
       log.info("Terms & Conditions updated");
       successResponseHandler(res, data, "Terms & Conditions updated successfully");
@@ -83,10 +83,9 @@ export default class StockTermsConditionController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const deletedBy = req.user?._id ?? req.userId ?? null;
       const data = await StockTermsConditionService.softDeleteTermsCondition(
         req.params.id,
-        deletedBy,
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -105,7 +104,7 @@ export default class StockTermsConditionController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const data = await StockTermsConditionService.restoreTermsCondition(req.params.id, session);
+      const data = await StockTermsConditionService.restoreTermsCondition(req.params.id, req.user, session);
       await session.commitTransaction();
       log.info("Terms & Conditions restored");
       successResponseHandler(res, data, "Terms & Conditions restored successfully");

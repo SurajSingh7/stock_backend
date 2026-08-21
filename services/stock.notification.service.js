@@ -1,12 +1,15 @@
 import StockNotificationModel from "../models/stock.notification.model.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
 import { NOTIFICATION_CHANNEL } from "../constants/stock.enums.js";
+
+const ENTITY_TYPE = "notifications";
 
 const escapeRegex = (str = "") => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export default class StockNotificationService {
   // ─── Create ──────────────────────────────────────────────────────────────
 
-  static async createNotification(body, session) {
+  static async createNotification(body, actor, session) {
     try {
       const { name, channel, note, ccEmails, isDefault, applicableVendors } = body;
       const wantsDefault = !!isDefault;
@@ -34,6 +37,9 @@ export default class StockNotificationService {
         ],
         { session }
       );
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: notification._id, action: "CREATE", actor, before: null, after: notification.toObject(),
+      });
       return notification;
     } catch (error) {
       throw error;
@@ -80,10 +86,11 @@ export default class StockNotificationService {
 
   // ─── Update ──────────────────────────────────────────────────────────────
 
-  static async updateNotification(id, body, session) {
+  static async updateNotification(id, body, actor, session) {
     try {
       const notification = await StockNotificationModel.findOne({ _id: id, isActive: true }).session(session);
       if (!notification) throw new Error("Notification not found");
+      const before = notification.toObject();
 
       const { name, channel, note, ccEmails, isDefault, applicableVendors } = body;
       const nextChannel = channel !== undefined ? channel : notification.channel;
@@ -107,6 +114,9 @@ export default class StockNotificationService {
       notification.applicableVendors = nextIsDefault ? [] : applicableVendors || [];
 
       await notification.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: notification._id, action: "UPDATE", actor, before, after: notification.toObject(),
+      });
       return notification;
     } catch (error) {
       throw error;
@@ -115,15 +125,19 @@ export default class StockNotificationService {
 
   // ─── Soft delete ─────────────────────────────────────────────────────────
 
-  static async softDeleteNotification(id, deletedBy, session) {
+  static async softDeleteNotification(id, actor, session) {
     try {
       const notification = await StockNotificationModel.findOne({ _id: id, isActive: true }).session(session);
       if (!notification) throw new Error("Notification not found");
+      const before = notification.toObject();
 
       notification.isActive = false;
       notification.deletedAt = new Date();
-      notification.deletedBy = deletedBy ?? null;
+      notification.deletedBy = actor?._id ?? null;
       await notification.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: notification._id, action: "DELETE", actor, before, after: notification.toObject(),
+      });
       return notification;
     } catch (error) {
       throw error;
@@ -132,11 +146,12 @@ export default class StockNotificationService {
 
   // ─── Restore ─────────────────────────────────────────────────────────────
 
-  static async restoreNotification(id, session) {
+  static async restoreNotification(id, actor, session) {
     try {
       const notification = await StockNotificationModel.findOne({ _id: id }).session(session);
       if (!notification) throw new Error("Notification not found");
       if (notification.isActive) throw new Error("Notification is already active");
+      const before = notification.toObject();
 
       if (notification.isDefault) {
         await StockNotificationModel.updateMany(
@@ -150,6 +165,9 @@ export default class StockNotificationService {
       notification.deletedAt = null;
       notification.deletedBy = null;
       await notification.save({ session });
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE, entityId: notification._id, action: "RESTORE", actor, before, after: notification.toObject(),
+      });
       return notification;
     } catch (error) {
       throw error;

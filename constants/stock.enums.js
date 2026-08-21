@@ -199,6 +199,21 @@ export const CONSUMPTION_REF_TYPE_ARRAY = Object.values(CONSUMPTION_REF_TYPE);
 export const MAIL_MODE = { SENT: "SENT", MANUAL: "MANUAL" };
 export const MAIL_MODE_ARRAY = Object.values(MAIL_MODE);
 
+// ─── Access Control ─────────────────────────────────────────────────────────
+// Determines which records a user can see/act on within a module, on top of
+// whatever actions their role+override already grant them.
+export const ACCESS_SCOPE = {
+  OWN_BRANCH: "OWN_BRANCH",
+  ALL_BRANCHES: "ALL_BRANCHES",
+  SPECIFIC_BRANCHES: "SPECIFIC_BRANCHES", // uses allowedBranchIds
+};
+export const ACCESS_SCOPE_ARRAY = Object.values(ACCESS_SCOPE);
+
+// Base action vocabulary most modules grant as-is; a module can extend this
+// with its own (e.g. purchase-orders adds APPROVE/REJECT/SEND_MAIL) — see
+// each entry in seeders/stock.module.seeder.js.
+export const STANDARD_ACTIONS = ["CREATE", "READ", "UPDATE", "DELETE", "RESTORE"];
+
 // ─── Notification master ───────────────────────────────────────────────────
 export const NOTIFICATION_CHANNEL = {
   EMAIL: "EMAIL",

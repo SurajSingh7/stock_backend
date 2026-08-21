@@ -7,6 +7,8 @@ import StockVendorReviewModel from "../models/stock.vendor.review.model.js";
 import StockVendorPurchaseHistoryModel from "../models/stock.vendor.purchase.history.model.js";
 import StockInventoryItemService from "./stock.inventory.item.service.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
+import StockAuditLogService from "./stock.audit.log.service.js";
+import { applyBranchScopeToFilter, isWithinBranchScope } from "../helpers/branch.scope.helper.js";
 
 import { paginate } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
@@ -19,6 +21,7 @@ import {
 
 const log = getLogger(import.meta.url);
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const ENTITY_TYPE = "invoices";
 
 const RECEIVABLE_TRACKING_STATUSES = new Set([
   TRACKING_STATUS.PO_SENT,
@@ -285,6 +288,9 @@ export default class StockInvoiceService {
     await StockTrackingOrderService.recalculateStatus(trackingOrderId, session);
 
     log.info(`Invoice created: ${invoice.invoiceNumber} for tracking order ${trackingOrderId}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: "CREATE", actor: user, before: null, after: invoice.toObject(),
+    });
     return invoice;
   }
 
@@ -298,6 +304,7 @@ export default class StockInvoiceService {
     if (invoice.status !== INVOICE_STATUS.REJECTED) {
       throw new Error("Only a rejected invoice can be edited");
     }
+    const before = invoice.toObject();
 
     const po = await StockPurchaseOrderModel.findOne({ _id: invoice.poId, isActive: true })
       .session(session)
@@ -346,6 +353,9 @@ export default class StockInvoiceService {
     await StockTrackingOrderService.recalculateStatus(invoice.trackingOrderId, session);
 
     log.info(`Invoice resubmitted: ${invoice.invoiceNumber}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: "UPDATE", actor: user, before, after: invoice.toObject(),
+    });
     return invoice;
   }
 
@@ -359,6 +369,7 @@ export default class StockInvoiceService {
     if (invoice.status !== INVOICE_STATUS.PENDING) {
       throw new Error("Only a pending invoice can be approved");
     }
+    const before = invoice.toObject();
 
     const tracking = await StockTrackingOrderModel.findOne({ _id: invoice.trackingOrderId }).session(
       session
@@ -398,6 +409,9 @@ export default class StockInvoiceService {
     await StockTrackingOrderService.recalculateStatus(invoice.trackingOrderId, session);
 
     log.info(`Invoice approved: ${invoice.invoiceNumber}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: "APPROVE", actor: user, before, after: invoice.toObject(),
+    });
     return invoice;
   }
 
@@ -407,6 +421,7 @@ export default class StockInvoiceService {
     if (invoice.status !== INVOICE_STATUS.PENDING) {
       throw new Error("Only a pending invoice can be rejected");
     }
+    const before = invoice.toObject();
 
     invoice.status = INVOICE_STATUS.REJECTED;
     invoice.rejectedReason = typeof reason === "string" ? reason : "";
@@ -424,6 +439,9 @@ export default class StockInvoiceService {
     await StockTrackingOrderService.recalculateStatus(invoice.trackingOrderId, session);
 
     log.info(`Invoice rejected: ${invoice.invoiceNumber}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: "REJECT", actor: user, before, after: invoice.toObject(), reason,
+    });
     return invoice;
   }
 
@@ -435,9 +453,11 @@ export default class StockInvoiceService {
   // type/pdf, per-line GST rate, product tracking method) for the Invoice
   // Approval "Review" full page — same "resolve at read-time, no schema
   // change" posture as getBoard's poNumber/orderedQty.
-  static async getInvoiceById(id) {
+  static async getInvoiceById(id, scopeCtx) {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).lean();
-    if (!invoice) throw new Error("Invoice not found");
+    if (!invoice || !isWithinBranchScope(invoice, scopeCtx, "warehouseId")) {
+      throw new Error("Invoice not found");
+    }
 
     const po = invoice.poId
       ? await StockPurchaseOrderModel.findOne({ _id: invoice.poId })
@@ -475,7 +495,7 @@ export default class StockInvoiceService {
 
   // Serves both the Tracking Order card's invoice table (pass trackingOrderId,
   // no status tab) and the Invoice Approval page (status tab + filters).
-  static async getBoard(query = {}) {
+  static async getBoard(query = {}, scopeCtx) {
     const { trackingOrderId, status, search, vendorId, categoryId, productId, dateFrom, dateTo } = query;
 
     const filter = { isActive: true };
@@ -483,6 +503,7 @@ export default class StockInvoiceService {
     if (vendorId) filter.vendorId = vendorId;
     if (categoryId) filter["lines.categoryId"] = categoryId;
     if (productId) filter["lines.productDefinitionId"] = productId;
+    applyBranchScopeToFilter(filter, scopeCtx, "warehouseId");
     if (dateFrom || dateTo) {
       filter.invoiceDate = {};
       if (dateFrom) filter.invoiceDate.$gte = new Date(dateFrom);

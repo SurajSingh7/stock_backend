@@ -4,6 +4,7 @@ import { getLogger } from "../helpers/logger.helper.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import StockWarehouseService from "../services/stock.warehouse.service.js";
 import { validateCreateWarehouse, validateUpdateWarehouse } from "../validators/stock.validator.js";
+import { scopeCtxFromReq } from "../helpers/branch.scope.helper.js";
 
 const log = getLogger(import.meta.url);
 
@@ -13,7 +14,7 @@ export default class StockWarehouseController {
     try {
       session.startTransaction();
       validateCreateWarehouse(req.body);
-      const data = await StockWarehouseService.createWarehouse(req.body, session);
+      const data = await StockWarehouseService.createWarehouse(req.body, req.user, session);
       await session.commitTransaction();
       log.info("Warehouse created");
       successResponseHandler(res, data, "Warehouse created successfully", 201);
@@ -30,12 +31,15 @@ export default class StockWarehouseController {
     try {
       const { skip, limit, page } = paginate(req.query);
       const { search, showInactive } = req.query;
-      const { data, total } = await StockWarehouseService.getAllWarehouses({
-        skip,
-        limit,
-        search,
-        showInactive: showInactive === "true",
-      });
+      const { data, total } = await StockWarehouseService.getAllWarehouses(
+        {
+          skip,
+          limit,
+          search,
+          showInactive: showInactive === "true",
+        },
+        scopeCtxFromReq(req)
+      );
       successResponseHandler(res, paginateReturn(data, total, page, limit), "Warehouses fetched successfully");
     } catch (error) {
       log.error("Error fetching warehouses", error);
@@ -55,7 +59,7 @@ export default class StockWarehouseController {
 
   static async getWarehouseById(req, res) {
     try {
-      const data = await StockWarehouseService.getWarehouseById(req.params.id);
+      const data = await StockWarehouseService.getWarehouseById(req.params.id, scopeCtxFromReq(req));
       successResponseHandler(res, data, "Warehouse fetched successfully");
     } catch (error) {
       log.error("Error fetching warehouse", error);
@@ -68,7 +72,7 @@ export default class StockWarehouseController {
     try {
       session.startTransaction();
       validateUpdateWarehouse(req.body);
-      const data = await StockWarehouseService.updateWarehouse(req.params.id, req.body, session);
+      const data = await StockWarehouseService.updateWarehouse(req.params.id, req.body, req.user, session);
       await session.commitTransaction();
       log.info("Warehouse updated");
       successResponseHandler(res, data, "Warehouse updated successfully");
@@ -85,8 +89,7 @@ export default class StockWarehouseController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const deletedBy = req.user?._id ?? req.userId ?? null;
-      const data = await StockWarehouseService.softDeleteWarehouse(req.params.id, deletedBy, session);
+      const data = await StockWarehouseService.softDeleteWarehouse(req.params.id, req.user, session);
       await session.commitTransaction();
       log.info("Warehouse soft deleted");
       successResponseHandler(res, data, "Warehouse deleted successfully");
@@ -103,7 +106,7 @@ export default class StockWarehouseController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const data = await StockWarehouseService.restoreWarehouse(req.params.id, session);
+      const data = await StockWarehouseService.restoreWarehouse(req.params.id, req.user, session);
       await session.commitTransaction();
       log.info("Warehouse restored");
       successResponseHandler(res, data, "Warehouse restored successfully");

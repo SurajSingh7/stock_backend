@@ -16,7 +16,7 @@ export default class StockNotificationController {
     try {
       session.startTransaction();
       validateCreateNotification(req.body);
-      const data = await StockNotificationService.createNotification(req.body, session);
+      const data = await StockNotificationService.createNotification(req.body, req.user, session);
       await session.commitTransaction();
       log.info("Notification created");
       successResponseHandler(res, data, "Notification created successfully");
@@ -62,7 +62,7 @@ export default class StockNotificationController {
     try {
       session.startTransaction();
       validateUpdateNotification(req.body);
-      const data = await StockNotificationService.updateNotification(req.params.id, req.body, session);
+      const data = await StockNotificationService.updateNotification(req.params.id, req.body, req.user, session);
       await session.commitTransaction();
       log.info("Notification updated");
       successResponseHandler(res, data, "Notification updated successfully");
@@ -79,8 +79,7 @@ export default class StockNotificationController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const deletedBy = req.user?._id ?? req.userId ?? null;
-      const data = await StockNotificationService.softDeleteNotification(req.params.id, deletedBy, session);
+      const data = await StockNotificationService.softDeleteNotification(req.params.id, req.user, session);
       await session.commitTransaction();
       log.info("Notification soft deleted");
       successResponseHandler(res, data, "Notification deleted successfully");
@@ -97,7 +96,7 @@ export default class StockNotificationController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const data = await StockNotificationService.restoreNotification(req.params.id, session);
+      const data = await StockNotificationService.restoreNotification(req.params.id, req.user, session);
       await session.commitTransaction();
       log.info("Notification restored");
       successResponseHandler(res, data, "Notification restored successfully");

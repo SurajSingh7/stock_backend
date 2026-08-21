@@ -36,6 +36,7 @@ export default class StockProductDefinitionController {
 
       const data = await StockProductDefinitionService.createProductDefinition(
         body,
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -130,6 +131,7 @@ export default class StockProductDefinitionController {
       const data = await StockProductDefinitionService.updateProductDefinition(
         req.params.id,
         body,
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -149,10 +151,9 @@ export default class StockProductDefinitionController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const deletedBy = req.user?._id ?? req.userId ?? null;
       const data = await StockProductDefinitionService.softDeleteProductDefinition(
         req.params.id,
-        deletedBy,
+        req.user,
         session
       );
       await session.commitTransaction();
@@ -173,6 +174,7 @@ export default class StockProductDefinitionController {
       session.startTransaction();
       const data = await StockProductDefinitionService.restoreProductDefinition(
         req.params.id,
+        req.user,
         session
       );
       await session.commitTransaction();
