@@ -88,6 +88,15 @@ export const generatePOPdf = (po) =>
       const isSplit = po.taxType === PO_TAX_TYPE.CGST_SGST;
       const buyer = po.buyerEntity || {};
 
+      // Tax labels carry the rate ("CGST@9%") only when every line shares the
+      // same GST rate — with mixed rates a single percentage would be a lie,
+      // so the label falls back to the bare "CGST"/"SGST"/"IGST".
+      const rates = [...new Set((po.items || []).map((it) => Number(it.gstRate || 0)))];
+      const uniformRate = rates.length === 1 ? rates[0] : null;
+      const pct = (r) => `@${Number(r.toFixed(2))}%`;
+      const fullRateSuffix = uniformRate ? pct(uniformRate) : "";
+      const halfRateSuffix = uniformRate ? pct(uniformRate / 2) : "";
+
       // Draw one line at (x, y) bounded to `width`, and return the y just
       // below it — this is the whole trick that keeps everything from
       // overlapping: nobody ever assumes a fixed line height again, every
@@ -165,28 +174,19 @@ export const generatePOPdf = (po) =>
       y = Math.max(ySup, yDel) + 14;
 
       // ── Items table ───────────────────────────────────────────────────────
+      // Per-line tax is NOT itemised: the line shows what was ordered and what
+      // it costs before tax (Unit Price x Qty = Total Price); CGST/SGST/IGST
+      // are applied once, on the totals block below.
       // Explicit gaps between every column (not just narrower widths) so
       // Description/Product never look crammed against their neighbours.
-      const cols = isSplit
-        ? [
-            { label: "Sr.", x: 40, w: 20, align: "left" },
-            { label: "Description", x: 66, w: 108, align: "left" },
-            { label: "Product", x: 180, w: 95, align: "left" },
-            { label: "Qty", x: 281, w: 26, align: "right" },
-            { label: "Basic Price", x: 313, w: 58, align: "right" },
-            { label: "CGST", x: 377, w: 50, align: "right" },
-            { label: "SGST", x: 433, w: 50, align: "right" },
-            { label: "Amount", x: 489, w: 66, align: "right" },
-          ]
-        : [
-            { label: "Sr.", x: 40, w: 22, align: "left" },
-            { label: "Description", x: 68, w: 124, align: "left" },
-            { label: "Product", x: 198, w: 110, align: "left" },
-            { label: "Qty", x: 314, w: 30, align: "right" },
-            { label: "Basic Price", x: 350, w: 65, align: "right" },
-            { label: "IGST", x: 421, w: 58, align: "right" },
-            { label: "Amount", x: 485, w: 69, align: "right" },
-          ];
+      const cols = [
+        { label: "Sr.", x: 40, w: 24, align: "left" },
+        { label: "Description", x: 70, w: 175, align: "left" },
+        { label: "Product", x: 252, w: 125, align: "left" },
+        { label: "Qty", x: 383, w: 36, align: "right" },
+        { label: "Unit Price", x: 425, w: 60, align: "right" },
+        { label: "Total Price", x: 491, w: 64, align: "right" },
+      ];
 
       const drawTableHeader = (headerY) => {
         doc.fillColor(C.muted).font("Helvetica-Bold").fontSize(7.5);
@@ -203,26 +203,14 @@ export const generatePOPdf = (po) =>
       const ROW_MIN_H = 16;
 
       (po.items || []).forEach((it, idx) => {
-        const cells = isSplit
-          ? [
-              String(idx + 1),
-              it.categoryName,
-              it.productName,
-              String(it.quantity),
-              Number(it.taxable).toLocaleString("en-IN"),
-              Number(it.cgst).toLocaleString("en-IN"),
-              Number(it.sgst).toLocaleString("en-IN"),
-              Number(it.lineTotal).toLocaleString("en-IN"),
-            ]
-          : [
-              String(idx + 1),
-              it.categoryName,
-              it.productName,
-              String(it.quantity),
-              Number(it.taxable).toLocaleString("en-IN"),
-              Number(it.igst).toLocaleString("en-IN"),
-              Number(it.lineTotal).toLocaleString("en-IN"),
-            ];
+        const cells = [
+          String(idx + 1),
+          it.categoryName,
+          it.productName,
+          String(it.quantity),
+          Number(it.unitPrice || 0).toLocaleString("en-IN"),
+          Number(it.taxable || 0).toLocaleString("en-IN"),
+        ];
 
         doc.font("Helvetica").fontSize(8.5);
         // Row height = tallest wrapped cell (Description/Product are the only
@@ -257,7 +245,7 @@ export const generatePOPdf = (po) =>
           .fillColor(bold ? C.ink : C.muted)
           .font(bold ? "Helvetica-Bold" : "Helvetica")
           .fontSize(bold ? 10.5 : 9)
-          .text(label, 350, y, { width: 120, align: "right" });
+          .text(label, 350, y, { width: 120, align: "left" });
         doc
           .fillColor(C.ink)
           .font(bold ? "Helvetica-Bold" : "Helvetica")
@@ -265,16 +253,18 @@ export const generatePOPdf = (po) =>
           .text(money(val), 470, y, { width: 85, align: "right" });
         y += bold ? 16 : 13;
       };
-      rightLabel("Basic Price", po.subTotal);
-      if (isSplit) {
-        rightLabel("CGST", po.cgstTotal);
-        rightLabel("SGST", po.sgstTotal);
-      } else {
-        rightLabel("IGST", po.igstTotal);
-      }
       y = ensureSpace(y, 20);
-      doc.moveTo(350, y).lineTo(MARGIN + CONTENT_W, y).strokeColor(C.ink).lineWidth(1).stroke();
-      y += 5;
+      doc.moveTo(350, y).lineTo(MARGIN + CONTENT_W, y).strokeColor(C.rule).lineWidth(1).stroke();
+      y += 8;
+
+      rightLabel("Sub Total", po.subTotal);
+      if (isSplit) {
+        rightLabel(`CGST${halfRateSuffix}`, po.cgstTotal);
+        rightLabel(`SGST${halfRateSuffix}`, po.sgstTotal);
+      } else {
+        rightLabel(`IGST${fullRateSuffix}`, po.igstTotal);
+      }
+      y += 8;
       rightLabel("Grand total", po.grandTotal, true);
 
       // ── Terms + signatory ────────────────────────────────────────────────
