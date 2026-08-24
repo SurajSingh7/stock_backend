@@ -166,7 +166,6 @@ export default class StockPurchaseOrderService {
       TRACKING_STATUS.PO_PENDING,
       TRACKING_STATUS.PO_GENERATED,
       TRACKING_STATUS.PO_APPROVED,
-      TRACKING_STATUS.PO_SENT,
       TRACKING_STATUS.IN_PROGRESS,
       TRACKING_STATUS.PARTIAL,
       TRACKING_STATUS.COMPLETED,
@@ -318,7 +317,7 @@ export default class StockPurchaseOrderService {
     };
 
     // counts: every filter EXCEPT status
-    const counts = { ALL: 0, PO_PENDING: 0, GENERATED: 0, APPROVED: 0, SENT: 0, REJECTED: 0 };
+    const counts = { ALL: 0, PO_PENDING: 0, GENERATED: 0, APPROVED: 0, REJECTED: 0 };
     fullBoard.forEach((q) =>
       q.rows.forEach((r) => {
         if (rowPass(r, q.quotationNumber, true)) {
@@ -765,17 +764,18 @@ export default class StockPurchaseOrderService {
   /* ---------------------------------------------------------------------- */
   /* Send Mail — APPROVED only. Either actually emails the PO (via the       */
   /* resolved Notification's From/CC) or records a Manual hand-off; either   */
-  /* way the PO moves to SENT and the linked tracking order advances to      */
-  /* PO_SENT.                                                                */
+  /* way the PO STAYS APPROVED — that is the terminal state now. What marks  */
+  /* it as gone-to-vendor is the mailResult on the tracking order, which is  */
+  /* also what turns "Send Mail" into "Resend Mail" and blocks deletion.     */
   /* ---------------------------------------------------------------------- */
 
   static async sendMail(id, body, user, session) {
     const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!po) throw new Error("Purchase order not found");
-    // APPROVED = first send. SENT = resend — once sent, the PO stays
+    // Approved covers both the first send and every resend — a PO stays
     // resendable indefinitely (see PurchaseOrderPage buildRowActions).
-    if (![PO_STATUS.APPROVED, PO_STATUS.SENT].includes(po.status)) {
-      throw new Error("Only an approved or already-sent PO can be sent");
+    if (po.status !== PO_STATUS.APPROVED) {
+      throw new Error("Only an approved PO can be sent");
     }
     const before = po.toObject();
 
@@ -816,7 +816,7 @@ export default class StockPurchaseOrderService {
       };
     } else {
       // Manual hand-off — no email sent through the ERP, but the PO has still
-      // left the building, so it moves to SENT the same as an emailed one.
+      // left the building, so it is recorded the same as an emailed one.
       mailResult = {
         mode: MAIL_MODE.MANUAL,
         channel: NOTIFICATION_CHANNEL.EMAIL,
@@ -827,7 +827,6 @@ export default class StockPurchaseOrderService {
       };
     }
 
-    po.status = PO_STATUS.SENT;
     await po.save({ session });
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE, entityId: po._id, action: "SEND_MAIL", actor: user, before, after: po.toObject(),
@@ -845,7 +844,13 @@ export default class StockPurchaseOrderService {
   static async softDeletePurchaseOrder(id, user, session) {
     const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!po) throw new Error("Purchase order not found");
-    if (po.status === PO_STATUS.SENT) {
+    // With no SENT status left, "already gone to the vendor" is whatever the
+    // tracking order recorded when the mail went out (emailed OR marked
+    // Manual) — po.emailedAt alone would miss the manual hand-off.
+    const tracked = await StockTrackingOrderModel.findOne({ poId: po._id, isActive: true })
+      .session(session)
+      .lean();
+    if (po.emailedAt || tracked?.mailResult?.mode) {
       throw new Error("Cannot delete — this PO has already been sent to the vendor");
     }
     const before = po.toObject();

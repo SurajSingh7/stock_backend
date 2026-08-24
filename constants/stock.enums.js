@@ -88,9 +88,8 @@ export const EMPTY_SNAPSHOT_DISPLAY = "-";
  
 export const PO_STATUS = {
   GENERATED: "GENERATED",   // form submitted + PDF made, review pending ("PO Created")
-  APPROVED: "APPROVED",     // PO reviewed OK, ready to email (future SENT)
+  APPROVED: "APPROVED",     // reviewed OK and handed to the vendor — terminal
   REJECTED: "REJECTED",     // sent back → edit → regenerate
-  SENT: "SENT",             // future — emailed to vendor
 };
 export const PO_STATUS_ARRAY = Object.values(PO_STATUS);
  
@@ -135,8 +134,7 @@ export const TRACKING_STATUS = {
   ENTITY_PENDING: "ENTITY_PENDING",     // just created — entity/state not yet assigned
   PO_PENDING: "PO_PENDING",             // entity assigned — ready for PO creation
   PO_GENERATED: "PO_GENERATED",         // PO created (mirrors PO_STATUS.GENERATED)
-  PO_APPROVED: "PO_APPROVED",           // PO approved (mirrors PO_STATUS.APPROVED)
-  PO_SENT: "PO_SENT",                   // mail sent or marked manual (mirrors PO_STATUS.SENT)
+  PO_APPROVED: "PO_APPROVED",           // PO approved + mailed (mirrors PO_STATUS.APPROVED)
   IN_PROGRESS: "IN_PROGRESS",           // an invoice submitted, none approved yet
   PARTIAL: "PARTIAL",                   // >=1 invoice approved, 0 < received < ordered
   COMPLETED: "COMPLETED",               // received == ordered on every PO line
@@ -193,9 +191,9 @@ export const CONSUMPTION_REF_TYPE = {
 };
 export const CONSUMPTION_REF_TYPE_ARRAY = Object.values(CONSUMPTION_REF_TYPE);
 
-// How the PO ended up in PO_SENT — actually emailed, or handled
-// outside the system. Stored on the tracking order for the Action-column
-// "Mail Sent"/"Manual" badge.
+// How the PO reached the vendor — actually emailed, or handled outside the
+// system. Stored on the tracking order for the "Mail Sent"/"Manual" badge, and
+// it is what marks a PO as already sent now that there is no SENT status.
 export const MAIL_MODE = { SENT: "SENT", MANUAL: "MANUAL" };
 export const MAIL_MODE_ARRAY = Object.values(MAIL_MODE);
 

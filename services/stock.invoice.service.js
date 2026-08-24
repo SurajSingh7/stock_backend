@@ -24,7 +24,7 @@ const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const ENTITY_TYPE = "invoices";
 
 const RECEIVABLE_TRACKING_STATUSES = new Set([
-  TRACKING_STATUS.PO_SENT,
+  TRACKING_STATUS.PO_APPROVED,
   TRACKING_STATUS.IN_PROGRESS,
   TRACKING_STATUS.PARTIAL,
 ]);

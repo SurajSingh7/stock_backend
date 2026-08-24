@@ -241,7 +241,6 @@ export default class StockTrackingOrderService {
       PO_PENDING: 0,
       PO_GENERATED: 0,
       PO_APPROVED: 0,
-      PO_SENT: 0,
       IN_PROGRESS: 0,
       PARTIAL: 0,
       COMPLETED: 0,
@@ -352,7 +351,7 @@ export default class StockTrackingOrderService {
   /* Recalculate status from approved-invoice received quantities, per PO    */
   /* line (quotationItemId). Called after invoice create/approve/reject —    */
   /* never set directly by a route. Only touches tracking orders already in  */
-  /* the receiving flow (PO_SENT/IN_PROGRESS/PARTIAL/COMPLETED).             */
+  /* the receiving flow (PO_APPROVED/IN_PROGRESS/PARTIAL/COMPLETED).         */
   /* ---------------------------------------------------------------------- */
 
   static async recalculateStatus(trackingOrderId, session) {
@@ -363,7 +362,7 @@ export default class StockTrackingOrderService {
     if (!tracking) return null;
 
     const RECEIVING_STATUSES = new Set([
-      TRACKING_STATUS.PO_SENT,
+      TRACKING_STATUS.PO_APPROVED,
       TRACKING_STATUS.IN_PROGRESS,
       TRACKING_STATUS.PARTIAL,
       TRACKING_STATUS.COMPLETED,
@@ -430,19 +429,16 @@ export default class StockTrackingOrderService {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Mail result — records the send outcome, then auto-advances to PO_SENT   */
-  /* regardless of whether the email actually sent or was handled manually.  */
+  /* Mail result — records the send outcome (emailed or handled manually).   */
+  /* The status is deliberately NOT touched: approving already moved the      */
+  /* tracking order to PO_APPROVED, which is where it stays until goods start */
+  /* arriving. The mailResult itself is the "it reached the vendor" marker.   */
   /* ---------------------------------------------------------------------- */
 
   static async recordMailResult(poId, mailResult, session) {
     await StockTrackingOrderModel.updateOne(
       { poId, isActive: true },
-      {
-        $set: {
-          mailResult: { ...mailResult, sentAt: new Date() },
-          status: TRACKING_STATUS.PO_SENT,
-        },
-      },
+      { $set: { mailResult: { ...mailResult, sentAt: new Date() } } },
       { session }
     );
   }
