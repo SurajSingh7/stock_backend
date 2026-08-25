@@ -4,8 +4,9 @@ import StockRoleModulePermissionModel from "../models/stock.role.module.permissi
 import StockUserPermissionOverrideModel from "../models/stock.user.permission.override.model.js";
 import StockAccessScopePolicyModel from "../models/stock.access.scope.policy.model.js";
 import StockAccessDelegationModel from "../models/stock.access.delegation.model.js";
+import StockUserEntityAccessModel from "../models/stock.user.entity.access.model.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
-import { ACCESS_SCOPE } from "../constants/stock.enums.js";
+import { ACCESS_SCOPE, ENTITY_SCOPE, ENTITY_SCOPE_ARRAY } from "../constants/stock.enums.js";
 
 const ENTITY_TYPE = "Permission";
 
@@ -107,6 +108,50 @@ export default class StockAccessControlService {
       before,
       after: after.toObject(),
       reason: `user=${userId} module=${module.key}`,
+    });
+
+    return after;
+  };
+
+  // ─── Entity access — per USER, not per module ──────────────────────────────
+  // Deliberately separate from setScopePolicy: "Ramesh works on GTEL" is a
+  // fact about the person and must hold identically across Purchase Orders,
+  // Invoices and Tracking Orders.
+  getEntityAccess = async (userId) => {
+    if (!userId) throw new Error("userId is required");
+    const access = await StockUserEntityAccessModel.findOne({ userId }).lean();
+    // No row = unrestricted. Returned explicitly so the admin UI shows the
+    // real effective state rather than an empty form.
+    return access || { userId, scope: ENTITY_SCOPE.ALL_ENTITIES, allowedEntityAliases: [] };
+  };
+
+  setEntityAccess = async ({ userId, scope, allowedEntityAliases, actor }) => {
+    if (!userId) throw new Error("userId is required");
+    if (!ENTITY_SCOPE_ARRAY.includes(scope)) throw new Error("Invalid entity scope");
+
+    const aliases = (allowedEntityAliases || [])
+      .map((a) => String(a).trim().toUpperCase())
+      .filter(Boolean);
+
+    if (scope === ENTITY_SCOPE.SPECIFIC_ENTITIES && aliases.length === 0) {
+      throw new Error("Pick at least one entity, or choose All entities");
+    }
+
+    const before = await StockUserEntityAccessModel.findOne({ userId }).lean();
+    const after = await StockUserEntityAccessModel.findOneAndUpdate(
+      { userId },
+      { $set: { scope, allowedEntityAliases: scope === ENTITY_SCOPE.SPECIFIC_ENTITIES ? aliases : [] } },
+      { new: true, upsert: true }
+    );
+
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE,
+      entityId: after._id,
+      action: "SET_ENTITY_ACCESS",
+      actor,
+      before,
+      after: after.toObject(),
+      reason: `user=${userId} scope=${scope}${aliases.length ? " [" + aliases.join(", ") + "]" : ""}`,
     });
 
     return after;

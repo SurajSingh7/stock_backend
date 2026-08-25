@@ -14,6 +14,7 @@ import {
   validateDisableVendor,
   validateSendMail,
 } from "../validators/stock.validator.js";
+import { entityCtxFromReq } from "../helpers/entity.scope.helper.js";
 
 const log = getLogger(import.meta.url);
 
@@ -34,7 +35,7 @@ export default class StockPurchaseOrderController {
 
   static async getBoard(req, res) {
     try {
-      const data = await StockPurchaseOrderService.getBoard(req.query);
+      const data = await StockPurchaseOrderService.getBoard(req.query, entityCtxFromReq(req));
       successResponseHandler(res, data, "PO board fetched");
     } catch (error) {
       errorResponseHandler(res, error);
@@ -48,6 +49,8 @@ export default class StockPurchaseOrderController {
     try {
       session.startTransaction();
       validateDisableVendor(req.body);
+      // No entity scope here — this acts on a quotation, which is upstream of
+      // entity assignment and therefore has no entity to scope by.
       const q = await StockPurchaseOrderService.disableVendor(
         req.params.quotationId,
         req.body,
@@ -92,7 +95,8 @@ export default class StockPurchaseOrderController {
       const po = await StockPurchaseOrderService.createPurchaseOrder(
         req.body,
         actingUser(req),
-        session
+        session,
+        entityCtxFromReq(req)
       );
       await session.commitTransaction();
       successResponseHandler(res, po, "Purchase order created", 201);
@@ -106,7 +110,7 @@ export default class StockPurchaseOrderController {
 
   static async getAllPurchaseOrders(req, res) {
     try {
-      const data = await StockPurchaseOrderService.getAllPurchaseOrders(req.query);
+      const data = await StockPurchaseOrderService.getAllPurchaseOrders(req.query, entityCtxFromReq(req));
       successResponseHandler(res, data, "Purchase orders fetched");
     } catch (error) {
       errorResponseHandler(res, error);
@@ -115,7 +119,7 @@ export default class StockPurchaseOrderController {
 
   static async getPurchaseOrderById(req, res) {
     try {
-      const po = await StockPurchaseOrderService.getPurchaseOrderById(req.params.id);
+      const po = await StockPurchaseOrderService.getPurchaseOrderById(req.params.id, entityCtxFromReq(req));
       successResponseHandler(res, po, "Purchase order fetched");
     } catch (error) {
       errorResponseHandler(res, error);
@@ -125,7 +129,7 @@ export default class StockPurchaseOrderController {
   // Streams the generated PDF inline.
   static async getPurchaseOrderPdf(req, res) {
     try {
-      const po = await StockPurchaseOrderService.getPurchaseOrderById(req.params.id);
+      const po = await StockPurchaseOrderService.getPurchaseOrderById(req.params.id, entityCtxFromReq(req));
       if (!po.pdfPath) throw new Error("PDF not generated for this PO");
       const abs = poPdfAbsolutePath(po.pdfPath);
       if (!fs.existsSync(abs)) throw new Error("PDF file missing on server");
@@ -145,7 +149,8 @@ export default class StockPurchaseOrderController {
         req.params.id,
         req.body,
         actingUser(req),
-        session
+        session,
+        entityCtxFromReq(req)
       );
       await session.commitTransaction();
       successResponseHandler(res, po, "Purchase order updated");
@@ -164,7 +169,8 @@ export default class StockPurchaseOrderController {
       const po = await StockPurchaseOrderService.approvePurchaseOrder(
         req.params.id,
         actingUser(req),
-        session
+        session,
+        entityCtxFromReq(req)
       );
       await session.commitTransaction();
       successResponseHandler(res, po, "Purchase order approved");
@@ -185,7 +191,8 @@ export default class StockPurchaseOrderController {
         req.params.id,
         req.body.rejectedReason,
         actingUser(req),
-        session
+        session,
+        entityCtxFromReq(req)
       );
       await session.commitTransaction();
       successResponseHandler(res, po, "Purchase order rejected");
@@ -206,7 +213,8 @@ export default class StockPurchaseOrderController {
         req.params.id,
         req.body,
         actingUser(req),
-        session
+        session,
+        entityCtxFromReq(req)
       );
       await session.commitTransaction();
       successResponseHandler(res, data, "Mail action completed");
@@ -225,7 +233,8 @@ export default class StockPurchaseOrderController {
       const po = await StockPurchaseOrderService.softDeletePurchaseOrder(
         req.params.id,
         actingUser(req),
-        session
+        session,
+        entityCtxFromReq(req)
       );
       await session.commitTransaction();
       successResponseHandler(res, po, "Purchase order deleted");

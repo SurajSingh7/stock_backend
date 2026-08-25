@@ -38,6 +38,10 @@ router.post("/access-control/user-overrides", authenticate, requireAdmin, StockA
 router.get("/access-control/user-overrides", authenticate, requireAdmin, StockAccessControlController.getUserOverrides);
 router.post("/access-control/scope-policies", authenticate, requireAdmin, StockAccessControlController.setScopePolicy);
 router.get("/access-control/scope-policies", authenticate, requireAdmin, StockAccessControlController.getScopePolicies);
+// Entity access is per-user (no moduleId), hence its own pair of routes
+// rather than living inside scope-policies.
+router.get("/access-control/entity-access", authenticate, requireAdmin, StockAccessControlController.getEntityAccess);
+router.post("/access-control/entity-access", authenticate, requireAdmin, StockAccessControlController.setEntityAccess);
 router.post("/access-control/delegate", authenticate, requireAdmin, StockAccessControlController.delegateAccess);
 
 // ─── Audit Log ───────────────────────────────────────────────────────────────

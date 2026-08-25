@@ -77,6 +77,28 @@ export default class StockAccessControlController {
     }
   }
 
+  static async getEntityAccess(req, res) {
+    try {
+      const data = await service.getEntityAccess(req.query.userId);
+      successResponseHandler(res, data, "Entity access fetched successfully");
+    } catch (error) {
+      log.error("Error fetching entity access", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
+  static async setEntityAccess(req, res) {
+    try {
+      const { userId, scope, allowedEntityAliases } = req.body;
+      const data = await service.setEntityAccess({ userId, scope, allowedEntityAliases, actor: req.user });
+      log.info(`Entity access set by ${actingUser(req).name || actingUser(req).id}`);
+      successResponseHandler(res, data, "Entity access saved successfully");
+    } catch (error) {
+      log.error("Error setting entity access", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
   static async getScopePolicies(req, res) {
     try {
       const data = await service.getScopePolicies(req.query.userId);

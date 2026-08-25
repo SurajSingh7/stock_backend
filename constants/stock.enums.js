@@ -207,6 +207,19 @@ export const ACCESS_SCOPE = {
 };
 export const ACCESS_SCOPE_ARRAY = Object.values(ACCESS_SCOPE);
 
+// Which internal company's ("entity") paperwork a user may see and act on.
+// Held per USER, not per module — "Ramesh works on GTEL" is a fact about the
+// person, so it cannot drift between Purchase Orders and Invoices the way a
+// per-module setting could.
+//
+// Deliberately only two states, unlike ACCESS_SCOPE: there is no "own entity",
+// because a user has no entity of their own the way they have a branch.
+export const ENTITY_SCOPE = {
+  ALL_ENTITIES: "ALL_ENTITIES",
+  SPECIFIC_ENTITIES: "SPECIFIC_ENTITIES", // uses allowedEntityAliases
+};
+export const ENTITY_SCOPE_ARRAY = Object.values(ENTITY_SCOPE);
+
 // Base action vocabulary most modules grant as-is; a module can extend this
 // with its own (e.g. purchase-orders adds APPROVE/REJECT/SEND_MAIL) — see
 // each entry in seeders/stock.module.seeder.js.

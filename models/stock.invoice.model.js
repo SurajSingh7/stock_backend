@@ -66,6 +66,12 @@ const invoiceSchema = new Schema(
     trackingOrderId: { type: Schema.Types.ObjectId, ref: "tracking_orders", required: true },
     poId: { type: Schema.Types.ObjectId, ref: "purchase_orders", default: null },
 
+    // Copied from the tracking order at create time purely so this collection
+    // can be entity-scoped without joining tracking_orders on every list read.
+    // Only the alias — the full buyerEntity snapshot already lives on the
+    // tracking order and the PO, and nothing here displays it.
+    entityAlias: { type: String, trim: true, uppercase: true, default: "" },
+
     vendorId: { type: Schema.Types.ObjectId, ref: "vendors", default: null },
     vendorName: { type: String, trim: true, default: "" },
 

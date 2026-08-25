@@ -1,8 +1,11 @@
-import { ACCESS_SCOPE } from "../constants/stock.enums.js";
+import { ACCESS_SCOPE, ENTITY_SCOPE } from "../constants/stock.enums.js";
 import StockModuleModel from "../models/stock.module.model.js";
 import StockRoleModulePermissionModel from "../models/stock.role.module.permission.model.js";
 import StockUserPermissionOverrideModel from "../models/stock.user.permission.override.model.js";
 import StockAccessScopePolicyModel from "../models/stock.access.scope.policy.model.js";
+import StockUserEntityAccessModel from "../models/stock.user.entity.access.model.js";
+
+const UNRESTRICTED_ENTITIES = { scope: ENTITY_SCOPE.ALL_ENTITIES, allowedEntityAliases: [] };
 
 // effective actions = role default ∪ addActions, minus removeActions.
 // Action + scope are resolved together per request rather than cached —
@@ -21,6 +24,7 @@ export function requirePermission(moduleKey, action) {
       // second verification path.
       if (req.user.isAdmin) {
         req.accessScope = { scope: ACCESS_SCOPE.ALL_BRANCHES, allowedBranchIds: [] };
+        req.entityAccess = UNRESTRICTED_ENTITIES;
         return next();
       }
 
@@ -29,10 +33,12 @@ export function requirePermission(moduleKey, action) {
         return res.status(403).json({ success: false, message: "This module is not configured" });
       }
 
-      const [roleDefault, override, scopePolicy] = await Promise.all([
+      const [roleDefault, override, scopePolicy, entityAccess] = await Promise.all([
         StockRoleModulePermissionModel.findOne({ roleId: req.user.roleId, moduleId: module._id }).lean(),
         StockUserPermissionOverrideModel.findOne({ userId: req.user._id, moduleId: module._id }).lean(),
         StockAccessScopePolicyModel.findOne({ userId: req.user._id, moduleId: module._id }).lean(),
+        // Per-user, so no moduleId in this one.
+        StockUserEntityAccessModel.findOne({ userId: req.user._id }).lean(),
       ]);
 
       const effectiveActions = new Set(roleDefault?.allowedActions ?? []);
@@ -49,6 +55,14 @@ export function requirePermission(moduleKey, action) {
       req.accessScope = scopePolicy
         ? { scope: scopePolicy.scope, allowedBranchIds: scopePolicy.allowedBranchIds ?? [] }
         : { scope: ACCESS_SCOPE.OWN_BRANCH, allowedBranchIds: [] };
+
+      // Opposite default to branch, on purpose. A user has no entity of their
+      // own, so "nobody configured this yet" cannot mean "restricted to their
+      // own" — a restrictive default here would hide every Purchase Order and
+      // Invoice from every existing user the moment this shipped.
+      req.entityAccess = entityAccess
+        ? { scope: entityAccess.scope, allowedEntityAliases: entityAccess.allowedEntityAliases ?? [] }
+        : UNRESTRICTED_ENTITIES;
 
       req.module = module;
       next();

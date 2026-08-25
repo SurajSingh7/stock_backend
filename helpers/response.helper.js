@@ -21,6 +21,13 @@ export const errorResponseHandler = (res, error) => {
     message.includes("not found") ||
     message.includes("Not found")
   ) statusCode = 404;
+  // Checked before the 400 group: a permission denial is neither a bad request
+  // nor a server fault, and without this it fell through to 500.
+  else if (
+    message.includes("not allowed") ||
+    message.includes("not authorized") ||
+    message.includes("do not have permission")
+  ) statusCode = 403;
   else if (
     message.includes("required") ||
     message.includes("immutable") ||
