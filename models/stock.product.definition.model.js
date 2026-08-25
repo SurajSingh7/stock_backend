@@ -25,6 +25,26 @@ const selectedFieldSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// One explicit alert threshold per warehouse. Kept as a sub-document array on
+// the product (rather than its own collection) because warehouses are
+// branch-level and few — the whole set reads with the product and saves
+// atomically with it.
+const warehouseThresholdSchema = new mongoose.Schema(
+  {
+    warehouseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "warehouses",
+      required: true,
+    },
+    threshold: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+  },
+  { _id: false }
+);
+
 const stockProductDefinitionSchema = new mongoose.Schema(
   {
     categoryId: {
@@ -61,10 +81,30 @@ const stockProductDefinitionSchema = new mongoose.Schema(
       enum: UNIT_TYPES_ARRAY,
       required: true,
     },
-    stockAlertThreshold: {
+    // ── Stock alert thresholds (per warehouse) ──
+    // Alerts are raised per warehouse, not per product: the same product can
+    // be low in Delhi and healthy in Mumbai. `warehouseThresholds` carries one
+    // explicit row for every ACTIVE warehouse — that completeness is enforced
+    // on every create/update by assertWarehouseThresholdsComplete().
+    //
+    // `defaultStockAlertThreshold` is the fallback for the window BETWEEN
+    // saves: a warehouse created after this product was last saved has no row
+    // yet, so alerting falls back to this value until an admin next edits the
+    // product (the form pre-fills that new warehouse's row with it).
+    //
+    // Neither is `required: true` at the schema level, for the same reason as
+    // warrantyYears below — Mongoose re-validates the whole document on every
+    // .save() (soft-delete, restore, unrelated field edits), so a schema-level
+    // `required` would permanently block those on any product saved before
+    // these fields existed. Required is enforced at the API layer instead.
+    defaultStockAlertThreshold: {
       type: Number,
       default: null,
       min: 0,
+    },
+    warehouseThresholds: {
+      type: [warehouseThresholdSchema],
+      default: [],
     },
     // Default warranty (years) for this product — vendors may override this
     // per assignment (see Vendor.assignedProducts.overrides.warrantyYears),
@@ -117,6 +157,9 @@ const stockProductDefinitionSchema = new mongoose.Schema(
 stockProductDefinitionSchema.index({ categoryId: 1, isActive: 1 });
 stockProductDefinitionSchema.index({ trackingMethod: 1 });
 stockProductDefinitionSchema.index({ name: 1 });
+// Supports the (future) low-stock alert sweep: "which products define a
+// threshold for warehouse X".
+stockProductDefinitionSchema.index({ "warehouseThresholds.warehouseId": 1 });
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.
 const StockProductDefinitionModel = mongoose.model(

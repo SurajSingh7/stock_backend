@@ -82,8 +82,16 @@ export const validateReorderCategories = (body) => {
 
 // ─── Product Definition Validators ───────────────────────────────────────────
 
+// Thresholds are counts of stock, so fractions are meaningless. 0 IS allowed
+// and means "only alert once this warehouse is completely out".
+const assertThresholdValue = (value, label) => {
+  if (value === undefined || value === null) throw new Error(`${label} is required`);
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0)
+    throw new Error(`${label} must be a non-negative whole number`);
+};
+
 const validateProductDefinitionExtras = (body) => {
-  const { unit, gstRate, stockAlertThreshold, warrantyYears } = body;
+  const { unit, gstRate, warrantyYears, defaultStockAlertThreshold, warehouseThresholds } = body;
 
   // Independent of trackingMethod — the client always picks both explicitly
   // (e.g. Group+Pieces for bottles, Individual+Meter for a serialized reel
@@ -95,12 +103,23 @@ const validateProductDefinitionExtras = (body) => {
   if (gstRate !== undefined && gstRate !== null && !GST_RATES_ARRAY.includes(String(gstRate)))
     throw new Error(`gstRate must be one of: ${GST_RATES_ARRAY.join(", ")}`);
 
-  if (
-    stockAlertThreshold !== undefined &&
-    stockAlertThreshold !== null &&
-    (typeof stockAlertThreshold !== "number" || stockAlertThreshold < 0)
-  )
-    throw new Error("stockAlertThreshold must be a non-negative number");
+  // Shape only. That every ACTIVE warehouse is actually covered needs the
+  // warehouse collection, so it lives in the service
+  // (assertWarehouseThresholdsComplete) — validators here stay DB-free.
+  assertThresholdValue(defaultStockAlertThreshold, "defaultStockAlertThreshold");
+
+  if (!Array.isArray(warehouseThresholds) || warehouseThresholds.length === 0)
+    throw new Error("warehouseThresholds is required — set a stock alert threshold for every warehouse");
+
+  const seenWarehouseIds = new Set();
+  warehouseThresholds.forEach((row, i) => {
+    if (!row || !row.warehouseId) throw new Error(`warehouseThresholds[${i}].warehouseId is required`);
+    const key = String(row.warehouseId);
+    if (seenWarehouseIds.has(key))
+      throw new Error("warehouseThresholds must be unique per warehouse — the same warehouse is listed twice");
+    seenWarehouseIds.add(key);
+    assertThresholdValue(row.threshold, `warehouseThresholds[${i}].threshold`);
+  });
 
   if (warrantyYears === undefined || warrantyYears === null)
     throw new Error("warrantyYears is required");
