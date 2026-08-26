@@ -486,9 +486,12 @@ export const validateRejectTransferRequest = (body) => {
 export const validateCreateInvoice = (body) => {
   if (!body || typeof body !== "object") throw new Error("Request body is required");
 
-  const { invoiceNumber, invoiceDate, lines, extraCharges } = body;
+  const { invoiceNumber, invoiceDate, warehouseId, lines, extraCharges } = body;
   if (!invoiceNumber || !String(invoiceNumber).trim()) throw new Error("Invoice number is required");
   if (!invoiceDate) throw new Error("Invoice date is required");
+  // The warehouse is the invoice's branch — the service checks it is one the
+  // receiver may use; here we only insist it was sent at all.
+  if (!isNonEmptyString(warehouseId)) throw new Error("Receiving warehouse is required");
 
   if (!Array.isArray(lines) || lines.length === 0) {
     throw new Error("At least one product line must be received");

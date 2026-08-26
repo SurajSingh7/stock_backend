@@ -42,6 +42,7 @@ export default class StockInvoiceController {
         body,
         actingUser(req),
         session,
+        scopeCtxFromReq(req),
         entityCtxFromReq(req)
       );
       await session.commitTransaction();
@@ -54,6 +55,18 @@ export default class StockInvoiceController {
       errorResponseHandler(res, error);
     } finally {
       await session.endSession();
+    }
+  }
+
+  // Bootstraps the "Add Items" / edit-invoice warehouse field. Read-only and
+  // scoped to the caller — see StockInvoiceService.getReceivingWarehouses.
+  static async getReceivingWarehouses(req, res) {
+    try {
+      const data = await StockInvoiceService.getReceivingWarehouses(scopeCtxFromReq(req));
+      successResponseHandler(res, data, "Receiving warehouses fetched successfully");
+    } catch (error) {
+      log.error("Error fetching receiving warehouses", error);
+      errorResponseHandler(res, error);
     }
   }
 
@@ -90,6 +103,7 @@ export default class StockInvoiceController {
         body,
         actingUser(req),
         session,
+        scopeCtxFromReq(req),
         entityCtxFromReq(req)
       );
       await session.commitTransaction();

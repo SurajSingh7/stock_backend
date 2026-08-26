@@ -22,7 +22,12 @@ export default class StockTransferRequestController {
     try {
       session.startTransaction();
       validateCreateTransferRequest(req.body);
-      const data = await StockTransferRequestService.createTransferRequest(req.body, actingUser(req), session);
+      const data = await StockTransferRequestService.createTransferRequest(
+        req.body,
+        actingUser(req),
+        session,
+        scopeCtxFromReq(req)
+      );
       await session.commitTransaction();
       log.info("Transfer request created");
       successResponseHandler(res, data, "Transfer request created successfully", 201);
@@ -32,6 +37,18 @@ export default class StockTransferRequestController {
       errorResponseHandler(res, error);
     } finally {
       await session.endSession();
+    }
+  }
+
+  // Bootstraps the transfer screens' location pickers — see
+  // StockTransferRequestService.getFormLocations.
+  static async getFormLocations(req, res) {
+    try {
+      const data = await StockTransferRequestService.getFormLocations(scopeCtxFromReq(req));
+      successResponseHandler(res, data, "Transfer locations fetched successfully");
+    } catch (error) {
+      log.error("Error fetching transfer locations", error);
+      errorResponseHandler(res, error);
     }
   }
 

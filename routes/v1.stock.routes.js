@@ -176,6 +176,15 @@ router.get("/tracking-orders/:id", authenticate, requirePermission("tracking-ord
 // ─── Invoices (goods receiving / Invoice Approval) ───────────────────────────
 // /board BEFORE /:id — same static-before-dynamic rule as everywhere else.
 router.get("/invoices/board", authenticate, requirePermission("invoices", "READ"), StockInvoiceController.getBoard);
+// Warehouse picker for the goods-receiving form. Deliberately on the invoices
+// module rather than /warehouses/active's `warehouses:READ` — receiving staff
+// need to name their own branch without holding the warehouse-master permission.
+router.get(
+  "/invoices/receiving-warehouses",
+  authenticate,
+  requirePermission("invoices", "READ"),
+  StockInvoiceController.getReceivingWarehouses
+);
 router.get("/invoices/:id", authenticate, requirePermission("invoices", "READ"), StockInvoiceController.getInvoiceById);
 router.put(
   "/invoices/:id",
@@ -201,6 +210,9 @@ router.patch("/warehouses/:id/restore", authenticate, requirePermission("warehou
 // /board BEFORE /:id — same static-before-dynamic rule as everywhere else.
 router.post("/transfer-requests", authenticate, requirePermission("transfer-requests", "CREATE"), StockTransferRequestController.createTransferRequest);
 router.get("/transfer-requests/board", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getBoard);
+// Location pickers for the transfer screens — on this module, not
+// /warehouses/active's `warehouses:READ`. Static path, so above /:id.
+router.get("/transfer-requests/locations", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getFormLocations);
 router.get("/transfer-requests/:id", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getTransferRequestById);
 router.patch("/transfer-requests/:id/process", authenticate, requirePermission("transfer-requests", "PROCESS"), StockTransferRequestController.processTransferRequest);
 router.patch("/transfer-requests/:id/reject", authenticate, requirePermission("transfer-requests", "REJECT"), StockTransferRequestController.rejectTransferRequest);

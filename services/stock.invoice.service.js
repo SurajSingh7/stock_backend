@@ -8,6 +8,7 @@ import StockVendorPurchaseHistoryModel from "../models/stock.vendor.purchase.his
 import StockInventoryItemService from "./stock.inventory.item.service.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
+import StockWarehouseService from "./stock.warehouse.service.js";
 import { applyBranchScopeToFilter, isWithinBranchScope } from "../helpers/branch.scope.helper.js";
 import { applyEntityScopeToFilter, isWithinEntityScope } from "../helpers/entity.scope.helper.js";
 
@@ -245,10 +246,39 @@ export default class StockInvoiceService {
   }
 
   /* ---------------------------------------------------------------------- */
+  /* Receiving form bootstrap                                                */
+  /* ---------------------------------------------------------------------- */
+
+  // Warehouses the caller may receive goods into, plus the one the form should
+  // land on. Lives on the invoices module (not warehouses) on purpose: the
+  // question "where can *I* book stock in" belongs to the receiving flow, and
+  // gating it on `warehouses:READ` would make every receiving clerk a
+  // warehouse-master user too.
+  //
+  // defaultWarehouseId is the caller's own HRMS branch whenever that branch is
+  // in scope — the overwhelmingly common case, where the field is really a
+  // display of a fact rather than a choice. A wider-scoped user (admin, or a
+  // SPECIFIC_BRANCHES policy) with no branch of their own gets no default and
+  // picks one, unless there is exactly one option to pick.
+  static async getReceivingWarehouses(scopeCtx) {
+    const warehouses = await StockWarehouseService.getScopedActiveWarehouses(scopeCtx);
+
+    const ownBranchId = scopeCtx?.branchId ? String(scopeCtx.branchId) : null;
+    const ownInScope = ownBranchId && warehouses.some((w) => String(w._id) === ownBranchId);
+    const defaultWarehouseId = ownInScope
+      ? ownBranchId
+      : warehouses.length === 1
+        ? String(warehouses[0]._id)
+        : null;
+
+    return { warehouses, defaultWarehouseId, ownBranchId };
+  }
+
+  /* ---------------------------------------------------------------------- */
   /* Create — "Add Items" submit                                             */
   /* ---------------------------------------------------------------------- */
 
-  static async createInvoice(trackingOrderId, body, user, session, entityAccess) {
+  static async createInvoice(trackingOrderId, body, user, session, scopeCtx, entityAccess) {
     const tracking = await StockTrackingOrderModel.findOne({
       _id: trackingOrderId,
       isActive: true,
@@ -266,6 +296,16 @@ export default class StockInvoiceService {
       .session(session)
       .lean();
     if (!po) throw new Error("Purchase order not found for this tracking order");
+
+    // The receiving warehouse is this invoice's branch: getBoard, getInvoiceById
+    // and every inventory item created below are all branch-scoped on it. Pinning
+    // it to the receiver's own scope here is what keeps a submitted invoice
+    // visible to the person who submitted it.
+    const warehouseId = await StockWarehouseService.assertWarehouseInScope(
+      body.warehouseId,
+      scopeCtx,
+      session
+    );
 
     const existingQtyByLine = await StockInvoiceService._sumNonRejectedQtyByLine(
       trackingOrderId,
@@ -287,7 +327,7 @@ export default class StockInvoiceService {
           invoiceNumber: String(body.invoiceNumber).trim(),
           invoiceDate: body.invoiceDate,
           invoiceFile: body.invoiceFile || "",
-          warehouseId: body.warehouseId || null,
+          warehouseId,
           receivedByName: body.receivedByName || user?.name || "",
           extraCharges: body.extraCharges || [],
           lines,
@@ -303,7 +343,7 @@ export default class StockInvoiceService {
     await StockInvoiceService._createPendingInventoryItems(
       invoice,
       po.vendorId,
-      body.warehouseId || null,
+      warehouseId,
       user?.id || user?._id || null,
       session
     );
@@ -323,7 +363,7 @@ export default class StockInvoiceService {
   /* Edit + resubmit — REJECTED only                                         */
   /* ---------------------------------------------------------------------- */
 
-  static async updateInvoice(id, body, user, session, entityAccess) {
+  static async updateInvoice(id, body, user, session, scopeCtx, entityAccess) {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
     if (!invoice) throw new Error("Invoice not found");
     assertEntityScope(invoice, entityAccess);
@@ -336,6 +376,14 @@ export default class StockInvoiceService {
       .session(session)
       .lean();
     if (!po) throw new Error("Purchase order not found for this invoice");
+
+    // Same branch pin as create — a resubmit may move the goods to a different
+    // warehouse, but only one the resubmitter can still see afterwards.
+    const warehouseId = await StockWarehouseService.assertWarehouseInScope(
+      body.warehouseId ?? invoice.warehouseId,
+      scopeCtx,
+      session
+    );
 
     // The old (rejected) inventory_items were never real stock — safe to
     // hard-delete and recreate from the edited rows.
@@ -354,7 +402,7 @@ export default class StockInvoiceService {
     if (body.invoiceNumber !== undefined) invoice.invoiceNumber = String(body.invoiceNumber).trim();
     if (body.invoiceDate !== undefined) invoice.invoiceDate = body.invoiceDate;
     if (body.invoiceFile) invoice.invoiceFile = body.invoiceFile;
-    if (body.warehouseId !== undefined) invoice.warehouseId = body.warehouseId;
+    invoice.warehouseId = warehouseId;
     if (body.receivedByName !== undefined) invoice.receivedByName = body.receivedByName;
     if (body.extraCharges !== undefined) invoice.extraCharges = body.extraCharges;
 

@@ -27,10 +27,49 @@ export default class StockTransferRequestService {
   }
 
   /* ---------------------------------------------------------------------- */
+  /* Location pickers for the transfer screens                               */
+  /* ---------------------------------------------------------------------- */
+
+  // Both halves of a transfer form in one call, because it needs both:
+  //
+  //  - `locations` is every active warehouse. The *counterparty* of a transfer
+  //    is by definition outside your own branch, so branch-scoping this list
+  //    would make cross-branch transfers impossible to raise at all.
+  //  - `defaultLocationId` is the caller's own branch — you ask for stock on
+  //    behalf of the branch you belong to, so the requesting side of the form
+  //    is read-only and this is what it displays. null means no branch assigned.
+  //
+  // Served on the transfer-requests module rather than /warehouses/active's
+  // `warehouses:READ`: needing a location list to raise a transfer must not
+  // force warehouse-master permission (and the nav entry it unlocks) on
+  // ordinary branch staff.
+  static async getFormLocations(scopeCtx) {
+    const locations = await StockWarehouseModel.find({ isActive: true }).sort({ name: 1 }).lean();
+
+    const activeIds = new Set(locations.map((l) => String(l._id)));
+    const branchIds = resolveBranchIds(scopeCtx);
+    // null = unrestricted (admin / ALL_BRANCHES). Otherwise intersect, so a
+    // stale or deactivated branch id never resolves to a usable location.
+    const scopedIds =
+      branchIds === null ? [...activeIds] : branchIds.filter((id) => activeIds.has(id));
+
+    const ownBranchId = scopeCtx?.branchId ? String(scopeCtx.branchId) : null;
+    // Own branch when it is in scope; otherwise only an unambiguous single
+    // scoped location counts — never an arbitrary pick out of several.
+    const defaultLocationId = scopedIds.includes(ownBranchId)
+      ? ownBranchId
+      : scopedIds.length === 1
+        ? scopedIds[0]
+        : null;
+
+    return { locations, defaultLocationId };
+  }
+
+  /* ---------------------------------------------------------------------- */
   /* Create — Branch A requests N units from Branch B                        */
   /* ---------------------------------------------------------------------- */
 
-  static async createTransferRequest(body, user, session) {
+  static async createTransferRequest(body, user, session, scopeCtx) {
     const { requestingLocationId, sourceLocationId, lines, remarks } = body;
 
     // Sequential, not Promise.all — two operations can't run concurrently on
@@ -39,6 +78,13 @@ export default class StockTransferRequestService {
       .session(session)
       .lean();
     if (!requestingLoc) throw new Error("Requesting location not found");
+    // Only the requesting side is scoped. Standing in for someone else's
+    // branch would put a request on their board that they never raised; the
+    // source side stays open, since asking another branch for stock is the
+    // entire point of the feature.
+    if (!isWithinBranchScope(requestingLoc, scopeCtx, "_id")) {
+      throw new Error("You do not have permission to raise a request for this location");
+    }
 
     const sourceLoc = await StockWarehouseModel.findOne({ _id: sourceLocationId, isActive: true })
       .session(session)

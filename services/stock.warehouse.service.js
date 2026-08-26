@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import StockWarehouseModel from "../models/stock.warehouse.model.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import { applyBranchScopeToFilter, isWithinBranchScope } from "../helpers/branch.scope.helper.js";
@@ -71,6 +72,42 @@ export default class StockWarehouseService {
   // create in the first place.
   static async getActiveWarehouses() {
     return StockWarehouseModel.find({ isActive: true }).sort({ name: 1 }).lean();
+  }
+
+  // Active warehouses inside the caller's branch scope, resolved off the
+  // *calling module's* scope policy. The warehouse record IS the branch, so
+  // it's scoped on its own _id — same rule as getAllWarehouses, minus the
+  // pagination/search of a management list.
+  //
+  // This is what other modules' warehouse pickers should read. getActiveWarehouses
+  // above sits behind `warehouses:READ`, which is the Master > Warehouse
+  // *management* permission — a receiving clerk who only holds `invoices` must
+  // not be forced to take that (and the nav entry it unlocks) just to name
+  // their own branch.
+  //
+  // Returns [] for a branchless user on the default OWN_BRANCH scope. That is
+  // the intended answer, not an error: callers surface it as "no branch assigned".
+  static async getScopedActiveWarehouses(scopeCtx) {
+    const filter = applyBranchScopeToFilter({ isActive: true }, scopeCtx, "_id");
+    return StockWarehouseModel.find(filter).sort({ name: 1 }).lean();
+  }
+
+  // Write-path guard for any record that persists a warehouseId. Storing one
+  // outside the writer's scope produces a row its own author can no longer
+  // read back (every list is branch-scoped on that same field), so reject it
+  // up front rather than writing it silently.
+  static async assertWarehouseInScope(warehouseId, scopeCtx, session) {
+    if (!warehouseId) throw new Error("Receiving warehouse is required");
+    if (!mongoose.isValidObjectId(warehouseId)) throw new Error("Invalid warehouse selected");
+
+    const warehouse = await StockWarehouseModel.findOne({ _id: warehouseId, isActive: true })
+      .lean()
+      .session(session ?? null);
+    if (!warehouse || !isWithinBranchScope(warehouse, scopeCtx, "_id")) {
+      // Worded to hit the 403 branch of errorResponseHandler.
+      throw new Error("You do not have permission to use the selected warehouse");
+    }
+    return warehouse._id;
   }
 
   static async getWarehouseById(id, scopeCtx) {
