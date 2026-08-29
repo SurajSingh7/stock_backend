@@ -22,10 +22,10 @@ export const resolveBranchIds = ({ accessScope, branchId } = {}) => {
 };
 
 // For list queries — adds an $in (single field) or $or (multiple fields,
-// e.g. transfer-requests' two locations) condition. If the caller already
-// set one of `fields` (e.g. a `?warehouseId=` query filter), intersects
+// e.g. transfer-requests' two branches) condition. If the caller already
+// set one of `fields` (e.g. a `?branchId=` query filter), intersects
 // with the branch scope instead of overwriting it — a filter for a
-// warehouse outside scope correctly yields zero rows rather than leaking
+// branch outside scope correctly yields zero rows rather than leaking
 // out-of-scope data or silently ignoring the caller's own filter. Not for
 // by-id lookups (a single _id can't be intersected this way) — use
 // isWithinBranchScope for those.

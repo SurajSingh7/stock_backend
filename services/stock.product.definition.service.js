@@ -3,7 +3,7 @@ import StockProductDefinitionModel from "../models/stock.product.definition.mode
 import StockCategoryModel from "../models/stock.category.model.js";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
-import StockWarehouseModel from "../models/stock.warehouse.model.js";
+import StockBranchModel from "../models/stock.branch.model.js";
 import { CATEGORY_TYPES, GST_RATES_ARRAY } from "../constants/stock.enums.js";
 import { deleteProductImageFile } from "../helpers/stock.upload.helper.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
@@ -40,34 +40,34 @@ export default class StockProductDefinitionService {
     }
   }
 
-  // 🔔 Stock alerts are raised PER WAREHOUSE, so every active warehouse must
-  // carry an explicit threshold on the product — an un-covered warehouse would
+  // 🔔 Stock alerts are raised PER BRANCH, so every active branch must
+  // carry an explicit threshold on the product — an un-covered branch would
   // silently never alert. The array's *shape* is checked in the validator; this
-  // is the half of the rule that needs the warehouse collection.
-  static async assertWarehouseThresholdsComplete(warehouseThresholds, session) {
-    const activeWarehouses = await StockWarehouseModel.find({ isActive: true })
+  // is the half of the rule that needs the branch collection.
+  static async assertBranchThresholdsComplete(branchThresholds, session) {
+    const activeBranches = await StockBranchModel.find({ isActive: true })
       .select("name code")
       .lean()
       .session(session ?? null);
 
-    if (activeWarehouses.length === 0)
-      throw new Error("At least one active warehouse is required before a product can be defined");
+    if (activeBranches.length === 0)
+      throw new Error("At least one active branch is required before a product can be defined");
 
-    const activeById = new Map(activeWarehouses.map((w) => [String(w._id), w]));
-    const provided = new Set((warehouseThresholds || []).map((r) => String(r.warehouseId)));
+    const activeById = new Map(activeBranches.map((w) => [String(w._id), w]));
+    const provided = new Set((branchThresholds || []).map((r) => String(r.branchId)));
 
-    const missing = activeWarehouses.filter((w) => !provided.has(String(w._id)));
+    const missing = activeBranches.filter((w) => !provided.has(String(w._id)));
     if (missing.length > 0)
       throw new Error(
-        `A stock alert threshold is required for every warehouse. Missing: ${missing
+        `A stock alert threshold is required for every branch. Missing: ${missing
           .map((w) => `${w.name} (${w.code})`)
           .join(", ")}`
       );
 
-    // Guards a stale form posting a warehouse that was deleted meanwhile.
+    // Guards a stale form posting a branch that was deleted meanwhile.
     const unknown = [...provided].filter((id) => !activeById.has(id));
     if (unknown.length > 0)
-      throw new Error(`Invalid warehouse in stock alert thresholds: ${unknown.join(", ")}`);
+      throw new Error(`Invalid branch in stock alert thresholds: ${unknown.join(", ")}`);
   }
 
   static async createProductDefinition(body, actor, session) {
@@ -81,7 +81,7 @@ export default class StockProductDefinitionService {
         gstRate,
         unit,
         defaultStockAlertThreshold,
-        warehouseThresholds,
+        branchThresholds,
         warrantyYears,
         image, // NEW — public path set by controller from req.file, or null
       } = body;
@@ -104,7 +104,7 @@ export default class StockProductDefinitionService {
       if (exists) throw new Error("A product with this name already exists in this category");
 
       await StockProductDefinitionService.assertSelectedFieldsApplicable(trackingMethod, selectedFields, session);
-      await StockProductDefinitionService.assertWarehouseThresholdsComplete(warehouseThresholds, session);
+      await StockProductDefinitionService.assertBranchThresholdsComplete(branchThresholds, session);
 
       const def = new StockProductDefinitionModel({
         categoryId,
@@ -117,7 +117,7 @@ export default class StockProductDefinitionService {
         // in validateCreateProductDefinition.
         unit,
         defaultStockAlertThreshold,
-        warehouseThresholds,
+        branchThresholds,
         warrantyYears,
         image: image ?? null,
       });
@@ -151,7 +151,7 @@ export default class StockProductDefinitionService {
       const [data, total] = await Promise.all([
         StockProductDefinitionModel.find(filter)
           .populate("selectedFields.fieldDefId", "code label inputType optionsSource isRequired")
-          .populate("warehouseThresholds.warehouseId", "name code")
+          .populate("branchThresholds.branchId", "name code")
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limit)
@@ -172,7 +172,7 @@ export default class StockProductDefinitionService {
         isActive: true,
       })
         .populate("selectedFields.fieldDefId", "code label inputType optionsSource isRequired")
-        .populate("warehouseThresholds.warehouseId", "name code")
+        .populate("branchThresholds.branchId", "name code")
         .lean();
       if (!def) throw new Error("Product definition not found");
       return def;
@@ -196,7 +196,7 @@ export default class StockProductDefinitionService {
         isActive: true,
       })
         .populate("selectedFields.fieldDefId", "code label inputType optionsSource isRequired")
-        .populate("warehouseThresholds.warehouseId", "name code")
+        .populate("branchThresholds.branchId", "name code")
         .sort({ name: 1 })
         .lean();
 
@@ -232,8 +232,8 @@ export default class StockProductDefinitionService {
         session
       );
 
-      if (body.warehouseThresholds !== undefined) {
-        await StockProductDefinitionService.assertWarehouseThresholdsComplete(body.warehouseThresholds, session);
+      if (body.branchThresholds !== undefined) {
+        await StockProductDefinitionService.assertBranchThresholdsComplete(body.branchThresholds, session);
       }
 
       const allowed = [
@@ -244,7 +244,7 @@ export default class StockProductDefinitionService {
         "gstRate",
         "unit",
         "defaultStockAlertThreshold",
-        "warehouseThresholds",
+        "branchThresholds",
         "warrantyYears",
         "image", // NEW
       ];

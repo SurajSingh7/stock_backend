@@ -79,7 +79,7 @@ const invoiceSchema = new Schema(
     invoiceDate: { type: Date, required: true },
     invoiceFile: { type: String, trim: true, default: "" }, // relative public path
 
-    warehouseId: { type: Schema.Types.ObjectId, ref: "warehouses", default: null },
+    branchId: { type: Schema.Types.ObjectId, ref: "branches", default: null },
 
     // String snapshot (no real user-linking system on the frontend yet) —
     // same convention as createdByName/reviewedByName elsewhere.

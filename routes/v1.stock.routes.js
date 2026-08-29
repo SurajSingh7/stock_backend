@@ -10,7 +10,7 @@ import StockPurchaseOrderController from "../controllers/stock.purchase.order.co
 import StockTermsConditionController from "../controllers/stock.terms.condition.controller.js";
 import StockTrackingOrderController from "../controllers/stock.tracking.order.controller.js";
 import StockNotificationController from "../controllers/stock.notification.controller.js";
-import StockWarehouseController from "../controllers/stock.warehouse.controller.js";
+import StockBranchController from "../controllers/stock.branch.controller.js";
 import StockInvoiceController from "../controllers/stock.invoice.controller.js";
 import { uploadInvoiceFile } from "../helpers/stock.invoice.upload.helper.js";
 import StockTransferRequestController from "../controllers/stock.transfer.request.controller.js";
@@ -176,14 +176,14 @@ router.get("/tracking-orders/:id", authenticate, requirePermission("tracking-ord
 // ─── Invoices (goods receiving / Invoice Approval) ───────────────────────────
 // /board BEFORE /:id — same static-before-dynamic rule as everywhere else.
 router.get("/invoices/board", authenticate, requirePermission("invoices", "READ"), StockInvoiceController.getBoard);
-// Warehouse picker for the goods-receiving form. Deliberately on the invoices
-// module rather than /warehouses/active's `warehouses:READ` — receiving staff
-// need to name their own branch without holding the warehouse-master permission.
+// Branch picker for the goods-receiving form. Deliberately on the invoices
+// module rather than /branches/active's `branches:READ` — receiving staff
+// need to name their own branch without holding the branch-master permission.
 router.get(
-  "/invoices/receiving-warehouses",
+  "/invoices/receiving-branches",
   authenticate,
   requirePermission("invoices", "READ"),
-  StockInvoiceController.getReceivingWarehouses
+  StockInvoiceController.getReceivingBranches
 );
 router.get("/invoices/:id", authenticate, requirePermission("invoices", "READ"), StockInvoiceController.getInvoiceById);
 router.put(
@@ -196,23 +196,23 @@ router.put(
 router.patch("/invoices/:id/approve", authenticate, requirePermission("invoices", "APPROVE"), StockInvoiceController.approveInvoice);
 router.patch("/invoices/:id/reject", authenticate, requirePermission("invoices", "REJECT"), StockInvoiceController.rejectInvoice);
 
-// ─── Warehouses ───────────────────────────────────────────────────────────────
+// ─── Branches ───────────────────────────────────────────────────────────────
 // /active BEFORE /:id — same static-before-dynamic rule as everywhere else.
-router.get("/warehouses/active", authenticate, requirePermission("warehouses", "READ"), StockWarehouseController.getActiveWarehouses);
-router.post("/warehouses", authenticate, requirePermission("warehouses", "CREATE"), StockWarehouseController.createWarehouse);
-router.get("/warehouses", authenticate, requirePermission("warehouses", "READ"), StockWarehouseController.getAllWarehouses);
-router.get("/warehouses/:id", authenticate, requirePermission("warehouses", "READ"), StockWarehouseController.getWarehouseById);
-router.put("/warehouses/:id", authenticate, requirePermission("warehouses", "UPDATE"), StockWarehouseController.updateWarehouse);
-router.delete("/warehouses/:id", authenticate, requirePermission("warehouses", "DELETE"), StockWarehouseController.softDeleteWarehouse);
-router.patch("/warehouses/:id/restore", authenticate, requirePermission("warehouses", "RESTORE"), StockWarehouseController.restoreWarehouse);
+router.get("/branches/active", authenticate, requirePermission("branches", "READ"), StockBranchController.getActiveBranches);
+router.post("/branches", authenticate, requirePermission("branches", "CREATE"), StockBranchController.createBranch);
+router.get("/branches", authenticate, requirePermission("branches", "READ"), StockBranchController.getAllBranches);
+router.get("/branches/:id", authenticate, requirePermission("branches", "READ"), StockBranchController.getBranchById);
+router.put("/branches/:id", authenticate, requirePermission("branches", "UPDATE"), StockBranchController.updateBranch);
+router.delete("/branches/:id", authenticate, requirePermission("branches", "DELETE"), StockBranchController.softDeleteBranch);
+router.patch("/branches/:id/restore", authenticate, requirePermission("branches", "RESTORE"), StockBranchController.restoreBranch);
 
 // ─── Inventory Transfer Requests ──────────────────────────────────────────────
 // /board BEFORE /:id — same static-before-dynamic rule as everywhere else.
 router.post("/transfer-requests", authenticate, requirePermission("transfer-requests", "CREATE"), StockTransferRequestController.createTransferRequest);
 router.get("/transfer-requests/board", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getBoard);
-// Location pickers for the transfer screens — on this module, not
-// /warehouses/active's `warehouses:READ`. Static path, so above /:id.
-router.get("/transfer-requests/locations", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getFormLocations);
+// Branch pickers for the transfer screens — on this module, not
+// /branches/active's `branches:READ`. Static path, so above /:id.
+router.get("/transfer-requests/branches", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getFormBranches);
 router.get("/transfer-requests/:id", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getTransferRequestById);
 router.patch("/transfer-requests/:id/process", authenticate, requirePermission("transfer-requests", "PROCESS"), StockTransferRequestController.processTransferRequest);
 router.patch("/transfer-requests/:id/reject", authenticate, requirePermission("transfer-requests", "REJECT"), StockTransferRequestController.rejectTransferRequest);

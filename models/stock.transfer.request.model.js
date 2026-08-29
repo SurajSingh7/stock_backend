@@ -31,9 +31,9 @@ const transferRequestSchema = new Schema(
     requestNumber: { type: String, trim: true, uppercase: true, required: true },
 
     // Branch A — wants the stock, raised the request.
-    requestingLocationId: { type: Schema.Types.ObjectId, ref: "warehouses", required: true },
-    // Branch B — chosen at creation time as the location the request is sent to.
-    sourceLocationId: { type: Schema.Types.ObjectId, ref: "warehouses", required: true },
+    requestingBranchId: { type: Schema.Types.ObjectId, ref: "branches", required: true },
+    // Branch B — chosen at creation time as the branch the request is sent to.
+    sourceBranchId: { type: Schema.Types.ObjectId, ref: "branches", required: true },
 
     lines: { type: [transferRequestLineSchema], default: [] },
 
@@ -52,7 +52,7 @@ const transferRequestSchema = new Schema(
     requestedByName: { type: String, trim: true, default: "" },
     requestedAt: { type: Date, default: Date.now },
 
-    // Whoever closed the request — the source location processing or
+    // Whoever closed the request — the source branch processing or
     // rejecting it.
     processedBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
     processedByName: { type: String, trim: true, default: "" },
@@ -66,8 +66,8 @@ const transferRequestSchema = new Schema(
 );
 
 transferRequestSchema.index({ requestNumber: 1 }, { unique: true });
-transferRequestSchema.index({ requestingLocationId: 1 });
-transferRequestSchema.index({ sourceLocationId: 1 });
+transferRequestSchema.index({ requestingBranchId: 1 });
+transferRequestSchema.index({ sourceBranchId: 1 });
 transferRequestSchema.index({ status: 1 });
 
 const StockTransferRequestModel = mongoose.model(

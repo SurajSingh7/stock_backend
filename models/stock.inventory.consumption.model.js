@@ -26,7 +26,7 @@ const inventoryConsumptionSchema = new Schema(
     inventoryItemId: { type: Schema.Types.ObjectId, ref: "inventory_items", default: null }, // individual-tracked
     productDefinitionId: { type: Schema.Types.ObjectId, ref: "product_definitions", required: true },
     quantity: { type: Number, required: true, min: 0 }, // quantity-tracked
-    warehouseId: { type: Schema.Types.ObjectId, ref: "warehouses", default: null },
+    branchId: { type: Schema.Types.ObjectId, ref: "branches", default: null },
 
     consumedFor: { type: consumedForSchema, default: () => ({}) },
 
@@ -44,7 +44,7 @@ const inventoryConsumptionSchema = new Schema(
 
 inventoryConsumptionSchema.index({ productDefinitionId: 1 });
 inventoryConsumptionSchema.index({ inventoryItemId: 1 });
-inventoryConsumptionSchema.index({ warehouseId: 1 });
+inventoryConsumptionSchema.index({ branchId: 1 });
 
 const StockInventoryConsumptionModel = mongoose.model(
   "inventory_consumptions",

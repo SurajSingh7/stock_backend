@@ -9,7 +9,7 @@ import {
   TERMS_STATUS_ARRAY,
   NOTIFICATION_CHANNEL_ARRAY,
   NOTIFICATION_CHANNEL,
-  LOCATION_ROLE_ARRAY,
+  BRANCH_ROLE_ARRAY,
 } from "../constants/stock.enums.js";
 
 const stripTags = (html) => String(html || "").replace(/<[^>]*>/g, "").trim();
@@ -83,7 +83,7 @@ export const validateReorderCategories = (body) => {
 // ─── Product Definition Validators ───────────────────────────────────────────
 
 // Thresholds are counts of stock, so fractions are meaningless. 0 IS allowed
-// and means "only alert once this warehouse is completely out".
+// and means "only alert once this branch is completely out".
 const assertThresholdValue = (value, label) => {
   if (value === undefined || value === null) throw new Error(`${label} is required`);
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0)
@@ -91,7 +91,7 @@ const assertThresholdValue = (value, label) => {
 };
 
 const validateProductDefinitionExtras = (body) => {
-  const { unit, gstRate, warrantyYears, defaultStockAlertThreshold, warehouseThresholds } = body;
+  const { unit, gstRate, warrantyYears, defaultStockAlertThreshold, branchThresholds } = body;
 
   // Independent of trackingMethod — the client always picks both explicitly
   // (e.g. Group+Pieces for bottles, Individual+Meter for a serialized reel
@@ -103,22 +103,22 @@ const validateProductDefinitionExtras = (body) => {
   if (gstRate !== undefined && gstRate !== null && !GST_RATES_ARRAY.includes(String(gstRate)))
     throw new Error(`gstRate must be one of: ${GST_RATES_ARRAY.join(", ")}`);
 
-  // Shape only. That every ACTIVE warehouse is actually covered needs the
-  // warehouse collection, so it lives in the service
-  // (assertWarehouseThresholdsComplete) — validators here stay DB-free.
+  // Shape only. That every ACTIVE branch is actually covered needs the
+  // branch collection, so it lives in the service
+  // (assertBranchThresholdsComplete) — validators here stay DB-free.
   assertThresholdValue(defaultStockAlertThreshold, "defaultStockAlertThreshold");
 
-  if (!Array.isArray(warehouseThresholds) || warehouseThresholds.length === 0)
-    throw new Error("warehouseThresholds is required — set a stock alert threshold for every warehouse");
+  if (!Array.isArray(branchThresholds) || branchThresholds.length === 0)
+    throw new Error("branchThresholds is required — set a stock alert threshold for every branch");
 
-  const seenWarehouseIds = new Set();
-  warehouseThresholds.forEach((row, i) => {
-    if (!row || !row.warehouseId) throw new Error(`warehouseThresholds[${i}].warehouseId is required`);
-    const key = String(row.warehouseId);
-    if (seenWarehouseIds.has(key))
-      throw new Error("warehouseThresholds must be unique per warehouse — the same warehouse is listed twice");
-    seenWarehouseIds.add(key);
-    assertThresholdValue(row.threshold, `warehouseThresholds[${i}].threshold`);
+  const seenBranchIds = new Set();
+  branchThresholds.forEach((row, i) => {
+    if (!row || !row.branchId) throw new Error(`branchThresholds[${i}].branchId is required`);
+    const key = String(row.branchId);
+    if (seenBranchIds.has(key))
+      throw new Error("branchThresholds must be unique per branch — the same branch is listed twice");
+    seenBranchIds.add(key);
+    assertThresholdValue(row.threshold, `branchThresholds[${i}].threshold`);
   });
 
   if (warrantyYears === undefined || warrantyYears === null)
@@ -418,34 +418,34 @@ export const validateMarkNotRequired = (body) => {
   if (!body?.reason || !String(body.reason).trim()) throw new Error("A reason is required");
 };
 
-// ─── Warehouse Validators ─────────────────────────────────────────────────────
+// ─── Branch Validators ─────────────────────────────────────────────────────
 
-export const validateCreateWarehouse = (body) => {
-  const { name, code, locationRole } = body || {};
+export const validateCreateBranch = (body) => {
+  const { name, code, branchRole } = body || {};
   if (!name || !String(name).trim()) throw new Error("name is required");
   if (!code || !String(code).trim()) throw new Error("code is required");
-  if (locationRole !== undefined && locationRole !== null && !LOCATION_ROLE_ARRAY.includes(locationRole))
-    throw new Error(`locationRole must be one of: ${LOCATION_ROLE_ARRAY.join(", ")}`);
+  if (branchRole !== undefined && branchRole !== null && !BRANCH_ROLE_ARRAY.includes(branchRole))
+    throw new Error(`branchRole must be one of: ${BRANCH_ROLE_ARRAY.join(", ")}`);
 };
 
-export const validateUpdateWarehouse = (body) => {
-  const { name, code, locationRole } = body || {};
+export const validateUpdateBranch = (body) => {
+  const { name, code, branchRole } = body || {};
   if (name !== undefined && !String(name).trim()) throw new Error("name cannot be empty");
   if (code !== undefined && !String(code).trim()) throw new Error("code cannot be empty");
-  if (locationRole !== undefined && locationRole !== null && !LOCATION_ROLE_ARRAY.includes(locationRole))
-    throw new Error(`locationRole must be one of: ${LOCATION_ROLE_ARRAY.join(", ")}`);
+  if (branchRole !== undefined && branchRole !== null && !BRANCH_ROLE_ARRAY.includes(branchRole))
+    throw new Error(`branchRole must be one of: ${BRANCH_ROLE_ARRAY.join(", ")}`);
 };
 
 // ─── Inventory Transfer Request Validators ───────────────────────────────────
 
 export const validateCreateTransferRequest = (body) => {
   if (!body || typeof body !== "object") throw new Error("Request body is required");
-  const { requestingLocationId, sourceLocationId, lines } = body;
+  const { requestingBranchId, sourceBranchId, lines } = body;
 
-  if (!requestingLocationId) throw new Error("requestingLocationId is required");
-  if (!sourceLocationId) throw new Error("sourceLocationId is required");
-  if (String(requestingLocationId) === String(sourceLocationId))
-    throw new Error("Requesting location and source location must be different");
+  if (!requestingBranchId) throw new Error("requestingBranchId is required");
+  if (!sourceBranchId) throw new Error("sourceBranchId is required");
+  if (String(requestingBranchId) === String(sourceBranchId))
+    throw new Error("Requesting branch and source branch must be different");
 
   if (!Array.isArray(lines) || lines.length === 0)
     throw new Error("At least one product line is required");
@@ -486,12 +486,12 @@ export const validateRejectTransferRequest = (body) => {
 export const validateCreateInvoice = (body) => {
   if (!body || typeof body !== "object") throw new Error("Request body is required");
 
-  const { invoiceNumber, invoiceDate, warehouseId, lines, extraCharges } = body;
+  const { invoiceNumber, invoiceDate, branchId, lines, extraCharges } = body;
   if (!invoiceNumber || !String(invoiceNumber).trim()) throw new Error("Invoice number is required");
   if (!invoiceDate) throw new Error("Invoice date is required");
-  // The warehouse is the invoice's branch — the service checks it is one the
+  // The branch is the invoice's branch — the service checks it is one the
   // receiver may use; here we only insist it was sent at all.
-  if (!isNonEmptyString(warehouseId)) throw new Error("Receiving warehouse is required");
+  if (!isNonEmptyString(branchId)) throw new Error("Receiving branch is required");
 
   if (!Array.isArray(lines) || lines.length === 0) {
     throw new Error("At least one product line must be received");

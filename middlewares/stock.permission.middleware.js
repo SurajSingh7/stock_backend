@@ -27,6 +27,9 @@ export function requirePermission(moduleKey, action) {
         req.entityAccess = UNRESTRICTED_ENTITIES;
         return next();
       }
+    
+
+
 
       const module = await StockModuleModel.findOne({ key: moduleKey, isActive: true }).lean();
       if (!module) {
@@ -40,6 +43,8 @@ export function requirePermission(moduleKey, action) {
         // Per-user, so no moduleId in this one.
         StockUserEntityAccessModel.findOne({ userId: req.user._id }).lean(),
       ]);
+
+  
 
       const effectiveActions = new Set(roleDefault?.allowedActions ?? []);
       for (const a of override?.addActions ?? []) effectiveActions.add(a);

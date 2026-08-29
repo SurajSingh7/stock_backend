@@ -1,9 +1,9 @@
 import mongoose from "mongoose";
-import { LOCATION_ROLE, LOCATION_ROLE_ARRAY } from "../constants/stock.enums.js";
+import { BRANCH_ROLE, BRANCH_ROLE_ARRAY } from "../constants/stock.enums.js";
 
 const { Schema } = mongoose;
 
-const warehouseSchema = new Schema(
+const branchSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
     code: { type: String, required: true, trim: true, uppercase: true },
@@ -14,10 +14,10 @@ const warehouseSchema = new Schema(
     state: { type: String, trim: true, default: "" },
     // Descriptive role in the network (CENTRAL/REGIONAL/NORMAL) — used for
     // reporting/filtering only, never restricts transfer eligibility.
-    locationRole: {
+    branchRole: {
       type: String,
-      enum: LOCATION_ROLE_ARRAY,
-      default: LOCATION_ROLE.NORMAL,
+      enum: BRANCH_ROLE_ARRAY,
+      default: BRANCH_ROLE.NORMAL,
     },
 
     isActive: { type: Boolean, default: true },
@@ -27,11 +27,11 @@ const warehouseSchema = new Schema(
   { timestamps: true }
 );
 
-warehouseSchema.index({ code: 1 }, { unique: true });
-warehouseSchema.index({ isActive: 1 });
-warehouseSchema.index({ name: 1 });
-warehouseSchema.index({ locationRole: 1 });
+branchSchema.index({ code: 1 }, { unique: true });
+branchSchema.index({ isActive: 1 });
+branchSchema.index({ name: 1 });
+branchSchema.index({ branchRole: 1 });
 
-const StockWarehouseModel = mongoose.model("warehouses", warehouseSchema, "warehouses");
+const StockBranchModel = mongoose.model("branches", branchSchema, "branches");
 
-export default StockWarehouseModel;
+export default StockBranchModel;

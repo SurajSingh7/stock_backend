@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import StockTransferRequestModel from "../models/stock.transfer.request.model.js";
-import StockWarehouseModel from "../models/stock.warehouse.model.js";
+import StockBranchModel from "../models/stock.branch.model.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import { paginate } from "../helpers/pagination.helper.js";
@@ -27,42 +27,42 @@ export default class StockTransferRequestService {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Location pickers for the transfer screens                               */
+  /* Branch pickers for the transfer screens                               */
   /* ---------------------------------------------------------------------- */
 
   // Both halves of a transfer form in one call, because it needs both:
   //
-  //  - `locations` is every active warehouse. The *counterparty* of a transfer
+  //  - `branches` is every active branch. The *counterparty* of a transfer
   //    is by definition outside your own branch, so branch-scoping this list
   //    would make cross-branch transfers impossible to raise at all.
-  //  - `defaultLocationId` is the caller's own branch — you ask for stock on
+  //  - `defaultBranchId` is the caller's own branch — you ask for stock on
   //    behalf of the branch you belong to, so the requesting side of the form
   //    is read-only and this is what it displays. null means no branch assigned.
   //
-  // Served on the transfer-requests module rather than /warehouses/active's
-  // `warehouses:READ`: needing a location list to raise a transfer must not
-  // force warehouse-master permission (and the nav entry it unlocks) on
+  // Served on the transfer-requests module rather than /branches/active's
+  // `branches:READ`: needing a branch list to raise a transfer must not
+  // force branch-master permission (and the nav entry it unlocks) on
   // ordinary branch staff.
-  static async getFormLocations(scopeCtx) {
-    const locations = await StockWarehouseModel.find({ isActive: true }).sort({ name: 1 }).lean();
+  static async getFormBranches(scopeCtx) {
+    const branches = await StockBranchModel.find({ isActive: true }).sort({ name: 1 }).lean();
 
-    const activeIds = new Set(locations.map((l) => String(l._id)));
+    const activeIds = new Set(branches.map((l) => String(l._id)));
     const branchIds = resolveBranchIds(scopeCtx);
     // null = unrestricted (admin / ALL_BRANCHES). Otherwise intersect, so a
-    // stale or deactivated branch id never resolves to a usable location.
+    // stale or deactivated branch id never resolves to a usable branch.
     const scopedIds =
       branchIds === null ? [...activeIds] : branchIds.filter((id) => activeIds.has(id));
 
     const ownBranchId = scopeCtx?.branchId ? String(scopeCtx.branchId) : null;
     // Own branch when it is in scope; otherwise only an unambiguous single
-    // scoped location counts — never an arbitrary pick out of several.
-    const defaultLocationId = scopedIds.includes(ownBranchId)
+    // scoped branch counts — never an arbitrary pick out of several.
+    const defaultBranchId = scopedIds.includes(ownBranchId)
       ? ownBranchId
       : scopedIds.length === 1
         ? scopedIds[0]
         : null;
 
-    return { locations, defaultLocationId };
+    return { branches, defaultBranchId };
   }
 
   /* ---------------------------------------------------------------------- */
@@ -70,26 +70,26 @@ export default class StockTransferRequestService {
   /* ---------------------------------------------------------------------- */
 
   static async createTransferRequest(body, user, session, scopeCtx) {
-    const { requestingLocationId, sourceLocationId, lines, remarks } = body;
+    const { requestingBranchId, sourceBranchId, lines, remarks } = body;
 
     // Sequential, not Promise.all — two operations can't run concurrently on
     // the same MongoDB session/transaction (causes NoSuchTransaction errors).
-    const requestingLoc = await StockWarehouseModel.findOne({ _id: requestingLocationId, isActive: true })
+    const requestingBranch = await StockBranchModel.findOne({ _id: requestingBranchId, isActive: true })
       .session(session)
       .lean();
-    if (!requestingLoc) throw new Error("Requesting location not found");
+    if (!requestingBranch) throw new Error("Requesting branch not found");
     // Only the requesting side is scoped. Standing in for someone else's
     // branch would put a request on their board that they never raised; the
     // source side stays open, since asking another branch for stock is the
     // entire point of the feature.
-    if (!isWithinBranchScope(requestingLoc, scopeCtx, "_id")) {
-      throw new Error("You do not have permission to raise a request for this location");
+    if (!isWithinBranchScope(requestingBranch, scopeCtx, "_id")) {
+      throw new Error("You do not have permission to raise a request for this branch");
     }
 
-    const sourceLoc = await StockWarehouseModel.findOne({ _id: sourceLocationId, isActive: true })
+    const sourceBranch = await StockBranchModel.findOne({ _id: sourceBranchId, isActive: true })
       .session(session)
       .lean();
-    if (!sourceLoc) throw new Error("Source location not found");
+    if (!sourceBranch) throw new Error("Source branch not found");
 
     const resolvedLines = [];
     for (const l of lines) {
@@ -115,8 +115,8 @@ export default class StockTransferRequestService {
       [
         {
           requestNumber,
-          requestingLocationId,
-          sourceLocationId,
+          requestingBranchId,
+          sourceBranchId,
           lines: resolvedLines,
           status: TRANSFER_REQUEST_STATUS.PENDING,
           remarks: remarks || "",
@@ -138,22 +138,22 @@ export default class StockTransferRequestService {
   /* ---------------------------------------------------------------------- */
 
   static async getBoard(query = {}, scopeCtx) {
-    const { locationId, role, status, search } = query;
+    const { branchId, role, status, search } = query;
 
     const filter = { isActive: true };
     const and = [];
 
-    // A transfer request touches two locations — in scope if either side is
+    // A transfer request touches two branches — in scope if either side is
     // one of the caller's allowed branches. Explicit ObjectId cast: this
     // filter also feeds the counts .aggregate() below, which — unlike
-    // .find() — never auto-casts string ids (see locObjId above).
+    // .find() — never auto-casts string ids (see branchObjId above).
     const scopedBranchIds = resolveBranchIds(scopeCtx);
     if (scopedBranchIds !== null) {
       const scopedObjIds = scopedBranchIds.map((id) => new mongoose.Types.ObjectId(id));
       and.push({
         $or: [
-          { requestingLocationId: { $in: scopedObjIds } },
-          { sourceLocationId: { $in: scopedObjIds } },
+          { requestingBranchId: { $in: scopedObjIds } },
+          { sourceBranchId: { $in: scopedObjIds } },
         ],
       });
     }
@@ -162,14 +162,14 @@ export default class StockTransferRequestService {
     // does not auto-cast query strings to ObjectId the way .find() does, so
     // a raw string here would silently match zero documents in the count
     // pipeline while .find() kept working fine.
-    const locObjId = locationId && mongoose.Types.ObjectId.isValid(locationId)
-      ? new mongoose.Types.ObjectId(locationId)
+    const branchObjId = branchId && mongoose.Types.ObjectId.isValid(branchId)
+      ? new mongoose.Types.ObjectId(branchId)
       : null;
 
-    if (locObjId && role === "requesting") filter.requestingLocationId = locObjId;
-    else if (locObjId && role === "source") filter.sourceLocationId = locObjId;
-    else if (locObjId)
-      and.push({ $or: [{ requestingLocationId: locObjId }, { sourceLocationId: locObjId }] });
+    if (branchObjId && role === "requesting") filter.requestingBranchId = branchObjId;
+    else if (branchObjId && role === "source") filter.sourceBranchId = branchObjId;
+    else if (branchObjId)
+      and.push({ $or: [{ requestingBranchId: branchObjId }, { sourceBranchId: branchObjId }] });
 
     if (search) {
       const regex = new RegExp(escapeRegex(search), "i");
@@ -179,8 +179,8 @@ export default class StockTransferRequestService {
 
     const [allRows, counts] = await Promise.all([
       StockTransferRequestModel.find(filter)
-        .populate({ path: "requestingLocationId", select: "name code" })
-        .populate({ path: "sourceLocationId", select: "name code" })
+        .populate({ path: "requestingBranchId", select: "name code" })
+        .populate({ path: "sourceBranchId", select: "name code" })
         .sort({ createdAt: -1 })
         .lean(),
       StockTransferRequestModel.aggregate([{ $match: filter }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
@@ -213,11 +213,11 @@ export default class StockTransferRequestService {
 
   static async getTransferRequestById(id, scopeCtx) {
     const request = await StockTransferRequestModel.findOne({ _id: id, isActive: true })
-      .populate({ path: "requestingLocationId", select: "name code city state locationRole" })
-      .populate({ path: "sourceLocationId", select: "name code city state locationRole" })
+      .populate({ path: "requestingBranchId", select: "name code city state branchRole" })
+      .populate({ path: "sourceBranchId", select: "name code city state branchRole" })
       .populate({ path: "lines.transferredInventoryItemIds", select: "fieldValues quantity" })
       .lean();
-    if (!request || !isWithinBranchScope(request, scopeCtx, ["requestingLocationId", "sourceLocationId"])) {
+    if (!request || !isWithinBranchScope(request, scopeCtx, ["requestingBranchId", "sourceBranchId"])) {
       throw new Error("Transfer request not found");
     }
     return request;
@@ -229,10 +229,10 @@ export default class StockTransferRequestService {
 
   // Quantity-tracked: consume FIFO across the source's available batches,
   // create one new AVAILABLE batch at the destination.
-  static async _moveQuantityStock(productDefinitionId, sourceLocationId, destinationLocationId, qty, user, session) {
+  static async _moveQuantityStock(productDefinitionId, sourceBranchId, destinationBranchId, qty, user, session) {
     const batches = await StockInventoryItemModel.find({
       productDefinitionId,
-      warehouseId: sourceLocationId,
+      branchId: sourceBranchId,
       isActive: true,
       status: ITEM_STATUS.AVAILABLE,
       approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
@@ -243,7 +243,7 @@ export default class StockTransferRequestService {
 
     const availableTotal = batches.reduce((s, b) => s + (b.quantity || 0), 0);
     if (availableTotal < qty)
-      throw new Error(`Not enough available stock at the source location (have ${availableTotal}, need ${qty})`);
+      throw new Error(`Not enough available stock at the source branch (have ${availableTotal}, need ${qty})`);
 
     let remaining = qty;
     for (const batch of batches) {
@@ -258,7 +258,7 @@ export default class StockTransferRequestService {
       [
         {
           productDefinitionId,
-          warehouseId: destinationLocationId,
+          branchId: destinationBranchId,
           status: ITEM_STATUS.AVAILABLE,
           approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
           quantity: qty,
@@ -270,8 +270,8 @@ export default class StockTransferRequestService {
     );
   }
 
-  // Individual-tracked: flip warehouseId on the exact units the source chose.
-  static async _moveIndividualStock(inventoryItemIds, productDefinitionId, sourceLocationId, destinationLocationId, session) {
+  // Individual-tracked: flip branchId on the exact units the source chose.
+  static async _moveIndividualStock(inventoryItemIds, productDefinitionId, sourceBranchId, destinationBranchId, session) {
     const items = await StockInventoryItemModel.find({
       _id: { $in: inventoryItemIds },
       isActive: true,
@@ -283,15 +283,15 @@ export default class StockTransferRequestService {
     for (const item of items) {
       if (String(item.productDefinitionId) !== String(productDefinitionId))
         throw new Error("A selected unit does not match the requested product");
-      if (String(item.warehouseId) !== String(sourceLocationId))
-        throw new Error("A selected unit is not available at the source location");
+      if (String(item.branchId) !== String(sourceBranchId))
+        throw new Error("A selected unit is not available at the source branch");
       if (item.status !== ITEM_STATUS.AVAILABLE || item.approvalStatus !== ITEM_APPROVAL_STATUS.APPROVED)
         throw new Error("A selected unit is not currently available for transfer");
     }
 
     await StockInventoryItemModel.updateMany(
       { _id: { $in: inventoryItemIds } },
-      { $set: { warehouseId: destinationLocationId } },
+      { $set: { branchId: destinationBranchId } },
       { session }
     );
   }
@@ -328,16 +328,16 @@ export default class StockTransferRequestService {
           await StockTransferRequestService._moveIndividualStock(
             ids,
             line.productDefinitionId,
-            request.sourceLocationId,
-            request.requestingLocationId,
+            request.sourceBranchId,
+            request.requestingBranchId,
             session
           );
           line.transferredInventoryItemIds = ids;
         } else {
           await StockTransferRequestService._moveQuantityStock(
             line.productDefinitionId,
-            request.sourceLocationId,
-            request.requestingLocationId,
+            request.sourceBranchId,
+            request.requestingBranchId,
             transferQty,
             user,
             session

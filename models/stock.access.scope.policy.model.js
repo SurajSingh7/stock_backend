@@ -12,7 +12,7 @@ const accessScopePolicySchema = new Schema(
     moduleId: { type: Schema.Types.ObjectId, ref: "modules", required: true },
     scope: { type: String, enum: ACCESS_SCOPE_ARRAY, required: true, default: ACCESS_SCOPE.OWN_BRANCH },
     // Only meaningful when scope === SPECIFIC_BRANCHES.
-    allowedBranchIds: [{ type: Schema.Types.ObjectId, ref: "warehouses" }],
+    allowedBranchIds: [{ type: Schema.Types.ObjectId, ref: "branches" }],
   },
   { timestamps: true }
 );

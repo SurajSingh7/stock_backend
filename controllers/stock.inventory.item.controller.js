@@ -62,7 +62,7 @@ export default class StockInventoryItemController {
   static async getAllInventoryItems(req, res) {
     try {
       const { skip, limit, page } = paginate(req.query);
-      const { productDefinitionId, categoryId, warehouseId, status, approvalStatus, search, showInactive } =
+      const { productDefinitionId, categoryId, branchId, status, approvalStatus, search, showInactive } =
         req.query;
       const { data, total } = await StockInventoryItemService.getAllInventoryItems(
         {
@@ -70,7 +70,7 @@ export default class StockInventoryItemController {
           limit,
           productDefinitionId,
           categoryId,
-          warehouseId,
+          branchId,
           status,
           approvalStatus,
           search,
@@ -92,7 +92,7 @@ export default class StockInventoryItemController {
   static async getInventoryCards(req, res) {
     try {
       const { skip, limit, page } = paginate(req.query);
-      const { search, categoryId, productDefinitionId, warehouseId } = req.query;
+      const { search, categoryId, productDefinitionId, branchId } = req.query;
       const { data, total } = await StockInventoryItemService.getInventoryCards(
         {
           skip,
@@ -100,7 +100,7 @@ export default class StockInventoryItemController {
           search,
           categoryId,
           productDefinitionId,
-          warehouseId,
+          branchId,
         },
         scopeCtxFromReq(req)
       );
@@ -118,7 +118,7 @@ export default class StockInventoryItemController {
   static async getProductInventorySummary(req, res) {
     try {
       const { skip, limit, page } = paginate(req.query);
-      const { search, categoryId, productDefinitionId, warehouseId, stockStatus } = req.query;
+      const { search, categoryId, productDefinitionId, branchId, stockStatus } = req.query;
       const { data, total } = await StockInventoryItemService.getProductInventorySummary(
         {
           skip,
@@ -126,7 +126,7 @@ export default class StockInventoryItemController {
           search,
           categoryId,
           productDefinitionId,
-          warehouseId,
+          branchId,
           stockStatus,
         },
         scopeCtxFromReq(req)
@@ -144,8 +144,8 @@ export default class StockInventoryItemController {
 
   static async getReceivingHistory(req, res) {
     try {
-      const { warehouseId } = req.query;
-      const data = await StockInventoryItemService.getReceivingHistory(req.params.defId, { warehouseId });
+      const { branchId } = req.query;
+      const data = await StockInventoryItemService.getReceivingHistory(req.params.defId, { branchId });
       successResponseHandler(res, data, "Receiving history fetched successfully");
     } catch (error) {
       log.error("Error fetching receiving history", error);

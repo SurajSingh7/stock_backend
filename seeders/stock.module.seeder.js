@@ -20,7 +20,7 @@ const MODULE_DEFINITIONS = [
   { key: "purchase-orders", name: "Purchase Orders", actions: ["CREATE", "READ", "UPDATE", "DELETE", "APPROVE", "REJECT", "SEND_MAIL"] },
   { key: "tracking-orders", name: "Tracking Orders", actions: ["READ", "ADD_ENTITY", "MARK_NOT_REQUIRED"] },
   { key: "invoices", name: "Invoices", actions: ["CREATE", "READ", "UPDATE", "APPROVE", "REJECT"] },
-  { key: "warehouses", name: "Warehouses", actions: STANDARD_ACTIONS },
+  { key: "branches", name: "Branches", actions: STANDARD_ACTIONS },
   { key: "transfer-requests", name: "Transfer Requests", actions: ["CREATE", "READ", "PROCESS", "REJECT"] },
   { key: "notifications", name: "Notifications", actions: STANDARD_ACTIONS },
 ];

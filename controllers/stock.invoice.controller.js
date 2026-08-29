@@ -58,14 +58,14 @@ export default class StockInvoiceController {
     }
   }
 
-  // Bootstraps the "Add Items" / edit-invoice warehouse field. Read-only and
-  // scoped to the caller — see StockInvoiceService.getReceivingWarehouses.
-  static async getReceivingWarehouses(req, res) {
+  // Bootstraps the "Add Items" / edit-invoice branch field. Read-only and
+  // scoped to the caller — see StockInvoiceService.getReceivingBranches.
+  static async getReceivingBranches(req, res) {
     try {
-      const data = await StockInvoiceService.getReceivingWarehouses(scopeCtxFromReq(req));
-      successResponseHandler(res, data, "Receiving warehouses fetched successfully");
+      const data = await StockInvoiceService.getReceivingBranches(scopeCtxFromReq(req));
+      successResponseHandler(res, data, "Receiving branches fetched successfully");
     } catch (error) {
-      log.error("Error fetching receiving warehouses", error);
+      log.error("Error fetching receiving branches", error);
       errorResponseHandler(res, error);
     }
   }

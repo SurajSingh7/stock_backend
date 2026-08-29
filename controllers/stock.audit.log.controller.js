@@ -6,7 +6,7 @@ import StockAuditLogService from "../services/stock.audit.log.service.js";
 const log = getLogger(import.meta.url);
 
 export default class StockAuditLogController {
-  // Per-record timeline — e.g. the History tab on a warehouse's detail page.
+  // Per-record timeline — e.g. the History tab on a branch's detail page.
   static async getEntityHistory(req, res) {
     try {
       const { skip, limit, page } = paginate(req.query);

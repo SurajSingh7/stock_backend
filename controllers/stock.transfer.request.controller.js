@@ -40,14 +40,14 @@ export default class StockTransferRequestController {
     }
   }
 
-  // Bootstraps the transfer screens' location pickers — see
-  // StockTransferRequestService.getFormLocations.
-  static async getFormLocations(req, res) {
+  // Bootstraps the transfer screens' branch pickers — see
+  // StockTransferRequestService.getFormBranches.
+  static async getFormBranches(req, res) {
     try {
-      const data = await StockTransferRequestService.getFormLocations(scopeCtxFromReq(req));
-      successResponseHandler(res, data, "Transfer locations fetched successfully");
+      const data = await StockTransferRequestService.getFormBranches(scopeCtxFromReq(req));
+      successResponseHandler(res, data, "Transfer branches fetched successfully");
     } catch (error) {
-      log.error("Error fetching transfer locations", error);
+      log.error("Error fetching transfer branches", error);
       errorResponseHandler(res, error);
     }
   }

@@ -15,11 +15,11 @@ const stockInventoryItemSchema = new mongoose.Schema(
       ref: "vendors", // ← matches the vendor model's registered name
       default: null,
     },
-    // Where this stock physically sits. Nullable for pre-warehouse-feature
+    // Where this stock physically sits. Nullable for pre-branch-feature
     // records; the invoice-receiving flow always sets it going forward.
-    warehouseId: {
+    branchId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "warehouses",
+      ref: "branches",
       default: null,
     },
     // Set only when this item was created by the invoice-receiving flow —
@@ -87,7 +87,7 @@ stockInventoryItemSchema.index({ productDefinitionId: 1, isActive: 1 });
 stockInventoryItemSchema.index({ vendorId: 1 });
 stockInventoryItemSchema.index({ status: 1 });
 stockInventoryItemSchema.index({ approvalStatus: 1 });
-stockInventoryItemSchema.index({ warehouseId: 1 });
+stockInventoryItemSchema.index({ branchId: 1 });
 stockInventoryItemSchema.index({ invoiceId: 1 });
 stockInventoryItemSchema.index({ "fieldValues.imei": 1 }, { sparse: true });
 stockInventoryItemSchema.index({ "fieldValues.serial_no": 1 }, { sparse: true });

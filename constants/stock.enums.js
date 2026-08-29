@@ -160,19 +160,19 @@ export const ITEM_APPROVAL_STATUS = {
 };
 export const ITEM_APPROVAL_STATUS_ARRAY = Object.values(ITEM_APPROVAL_STATUS);
 
-// ─── Warehouse / Location role ─────────────────────────────────────────────
-// Descriptive only (reporting/filtering) — does not restrict which locations
-// can transfer with which. Any location can send/receive stock to/from any
+// ─── Branch role ──────────────────────────────────────────────────────────
+// Descriptive only (reporting/filtering) — does not restrict which branches
+// can transfer with which. Any branch can send/receive stock to/from any
 // other, regardless of role.
-export const LOCATION_ROLE = {
+export const BRANCH_ROLE = {
   CENTRAL: "CENTRAL",
   REGIONAL: "REGIONAL",
   NORMAL: "NORMAL",
 };
-export const LOCATION_ROLE_ARRAY = Object.values(LOCATION_ROLE);
+export const BRANCH_ROLE_ARRAY = Object.values(BRANCH_ROLE);
 
 // ─── Inventory Transfer Request — one-shot request/fulfil workflow ─────────
-// A request is PENDING until the source location acts on it exactly once:
+// A request is PENDING until the source branch acts on it exactly once:
 //   - process (full or partial transfer) -> COMPLETED, any shortfall auto-closed
 //   - reject (nothing transferred)       -> REJECTED
 // There is no further action once a request leaves PENDING — a still-needed

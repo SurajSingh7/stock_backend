@@ -8,7 +8,7 @@ const { Schema } = mongoose;
 // per-record History tab and the global activity log read from one place.
 const auditLogSchema = new Schema(
   {
-    entityType: { type: String, required: true, trim: true }, // e.g. "warehouses", "Permission"
+    entityType: { type: String, required: true, trim: true }, // e.g. "branches", "Permission"
     entityId: { type: Schema.Types.ObjectId, required: true },
     action: { type: String, required: true, trim: true }, // matches the module's action vocabulary
     actor: {

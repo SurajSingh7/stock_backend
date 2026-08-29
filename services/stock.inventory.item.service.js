@@ -37,7 +37,7 @@ export default class StockInventoryItemService {
 
   static async createInventoryItem(body, actor, session) {
     try {
-      const { productDefinitionId, fieldValues, quantity, receivedAt, receivedBy, warehouseId, vendorId } = body;
+      const { productDefinitionId, fieldValues, quantity, receivedAt, receivedBy, branchId, vendorId } = body;
 
       const def = await StockProductDefinitionModel.findOne({
         _id: productDefinitionId,
@@ -53,7 +53,7 @@ export default class StockInventoryItemService {
       const item = new StockInventoryItemModel({
         productDefinitionId,
         vendorId: vendorId ?? null,
-        warehouseId: warehouseId ?? null,
+        branchId: branchId ?? null,
         fieldValues: fieldValues || {},
         quantity: def.trackingMethod === TRACKING_METHODS.QUANTITY ? quantity : null,
         receivedAt,
@@ -74,7 +74,7 @@ export default class StockInventoryItemService {
 
   static async bulkCreateInventoryItems(body, actor, session) {
     try {
-      const { productDefinitionId, items, receivedAt, receivedBy, warehouseId, vendorId } = body;
+      const { productDefinitionId, items, receivedAt, receivedBy, branchId, vendorId } = body;
 
       const def = await StockProductDefinitionModel.findOne({
         _id: productDefinitionId,
@@ -94,7 +94,7 @@ export default class StockInventoryItemService {
           docs.push({
             productDefinitionId,
             vendorId: vendorId ?? null,
-            warehouseId: warehouseId ?? null,
+            branchId: branchId ?? null,
             fieldValues: items[i].fieldValues || {},
             quantity: null,
             receivedAt,
@@ -131,7 +131,7 @@ export default class StockInventoryItemService {
     limit,
     productDefinitionId,
     categoryId,
-    warehouseId,
+    branchId,
     status,
     approvalStatus,
     search,
@@ -140,10 +140,10 @@ export default class StockInventoryItemService {
     try {
       const filter = showInactive ? {} : { isActive: true };
       if (productDefinitionId) filter.productDefinitionId = productDefinitionId;
-      if (warehouseId) filter.warehouseId = warehouseId;
+      if (branchId) filter.branchId = branchId;
       if (status) filter.status = status;
       if (approvalStatus) filter.approvalStatus = approvalStatus;
-      applyBranchScopeToFilter(filter, scopeCtx, "warehouseId");
+      applyBranchScopeToFilter(filter, scopeCtx, "branchId");
 
       if (categoryId) {
         const defIds = await StockProductDefinitionModel.find({ categoryId, isActive: true }).distinct("_id");
@@ -180,7 +180,7 @@ export default class StockInventoryItemService {
               select: "code label inputType optionsSource showList isFilterable",
             },
           })
-          .populate({ path: "warehouseId", select: "name code" })
+          .populate({ path: "branchId", select: "name code" })
           .populate({ path: "vendorId", select: "name" })
           .populate({ path: "invoiceId", select: "invoiceNumber receivedByName" })
           .sort({ createdAt: -1 })
@@ -215,18 +215,18 @@ export default class StockInventoryItemService {
 
   /* ---------------------------------------------------------------------- */
   /* Item Inventory (card view) — one card per PHYSICAL UNIT for individual- */
-  /* tracked products, but exactly one card per (product, warehouse) for     */
+  /* tracked products, but exactly one card per (product, branch) for     */
   /* group-tracked products — batches are summed, never shown as separate    */
   /* rows. Fetches broadly (this system's inventory volumes are small) and   */
   /* merges + paginates in memory so a group card's total is never split     */
   /* across pages.                                                           */
   /* ---------------------------------------------------------------------- */
 
-  static async getInventoryCards({ skip, limit, search, categoryId, productDefinitionId, warehouseId }, scopeCtx) {
+  static async getInventoryCards({ skip, limit, search, categoryId, productDefinitionId, branchId }, scopeCtx) {
     const filter = { isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED };
-    if (warehouseId) filter.warehouseId = warehouseId;
+    if (branchId) filter.branchId = branchId;
     if (productDefinitionId) filter.productDefinitionId = productDefinitionId;
-    applyBranchScopeToFilter(filter, scopeCtx, "warehouseId");
+    applyBranchScopeToFilter(filter, scopeCtx, "branchId");
 
     if (categoryId) {
       const defIds = await StockProductDefinitionModel.find({ categoryId, isActive: true }).distinct("_id");
@@ -252,7 +252,7 @@ export default class StockInventoryItemService {
         select: "name trackingMethod unit selectedFields categoryId",
         populate: { path: "selectedFields.fieldDefId", select: "code label inputType optionsSource showList isFilterable" },
       })
-      .populate({ path: "warehouseId", select: "name code" })
+      .populate({ path: "branchId", select: "name code" })
       .populate({ path: "vendorId", select: "name" })
       .populate({ path: "invoiceId", select: "invoiceNumber receivedByName" })
       .sort({ createdAt: -1 })
@@ -285,7 +285,7 @@ export default class StockInventoryItemService {
           cardType: "individual",
           _id: item._id,
           productDefinitionId: { ...def, categoryPath },
-          warehouseId: item.warehouseId,
+          branchId: item.branchId,
           vendorId: item.vendorId,
           invoiceId: item.invoiceId,
           fieldValues: item.fieldValues,
@@ -296,13 +296,13 @@ export default class StockInventoryItemService {
           sortAt: item.createdAt || item.receivedAt,
         });
       } else {
-        const key = `${def._id}::${item.warehouseId?._id || "none"}`;
+        const key = `${def._id}::${item.branchId?._id || "none"}`;
         if (!groupCardByKey.has(key)) {
           groupCardByKey.set(key, {
             cardType: "group",
             _id: key,
             productDefinitionId: { ...def, categoryPath },
-            warehouseId: item.warehouseId,
+            branchId: item.branchId,
             totalQty: 0,
             batchCount: 0,
             latestReceivedAt: null,
@@ -341,7 +341,7 @@ export default class StockInventoryItemService {
     search,
     categoryId,
     productDefinitionId,
-    warehouseId,
+    branchId,
     stockStatus,
   }, scopeCtx) {
     const productMatch = { isActive: true };
@@ -355,12 +355,12 @@ export default class StockInventoryItemService {
       { $eq: ["$status", ITEM_STATUS.AVAILABLE] },
       { $eq: ["$approvalStatus", ITEM_APPROVAL_STATUS.APPROVED] },
     ];
-    if (warehouseId) {
-      stockMatchExpr.push({ $eq: ["$warehouseId", new mongoose.Types.ObjectId(warehouseId)] });
+    if (branchId) {
+      stockMatchExpr.push({ $eq: ["$branchId", new mongoose.Types.ObjectId(branchId)] });
     }
     const scopedBranchIds = resolveBranchIds(scopeCtx);
     if (scopedBranchIds !== null) {
-      stockMatchExpr.push({ $in: ["$warehouseId", scopedBranchIds.map((id) => new mongoose.Types.ObjectId(id))] });
+      stockMatchExpr.push({ $in: ["$branchId", scopedBranchIds.map((id) => new mongoose.Types.ObjectId(id))] });
     }
 
     const pipeline = [
@@ -428,7 +428,7 @@ export default class StockInventoryItemService {
   /* for this product. Powers Feature 3's History screen.                    */
   /* ---------------------------------------------------------------------- */
 
-  static async getReceivingHistory(productDefinitionId, { warehouseId } = {}) {
+  static async getReceivingHistory(productDefinitionId, { branchId } = {}) {
     const match = {
       productDefinitionId: new mongoose.Types.ObjectId(productDefinitionId),
       isActive: true,
@@ -436,7 +436,7 @@ export default class StockInventoryItemService {
       approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
       invoiceId: { $ne: null },
     };
-    if (warehouseId) match.warehouseId = new mongoose.Types.ObjectId(warehouseId);
+    if (branchId) match.branchId = new mongoose.Types.ObjectId(branchId);
 
     const grouped = await StockInventoryItemModel.aggregate([
       { $match: match },
@@ -476,7 +476,7 @@ export default class StockInventoryItemService {
           },
         })
         .lean();
-      if (!item || !isWithinBranchScope(item, scopeCtx, "warehouseId")) {
+      if (!item || !isWithinBranchScope(item, scopeCtx, "branchId")) {
         throw new Error("Inventory item not found");
       }
       return item;

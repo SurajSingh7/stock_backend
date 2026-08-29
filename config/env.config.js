@@ -19,5 +19,5 @@ export const internalApiKey = process.env.INTERNAL_API_KEY;
 // NOTE: there is deliberately no default/fallback branch. A user's branch is
 // whatever HRMS has on their Login (assigned in the staff-registration form),
 // or null. A hardcoded fallback would silently hand every branchless user one
-// specific warehouse's data — and would break outright the moment that
-// warehouse is deleted, which is exactly what happened while it existed.
+// specific branch's data — and would break outright the moment that
+// branch is deleted, which is exactly what happened while it existed.

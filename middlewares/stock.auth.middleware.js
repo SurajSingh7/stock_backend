@@ -1,13 +1,13 @@
 import jwt from "jsonwebtoken";
-import axios from "axios";
 import {
   hrmsApiUrl,
   hrmsSvcApiKey,
   hrmsJwtSharedSecret,
   adminRoleId,
 } from "../config/env.config.js";
+import { createHttpClient } from "../helpers/http.helper.js";
 
-const hrmsApi = axios.create({
+const hrmsApi = createHttpClient({
   baseURL: hrmsApiUrl,
   headers: { "x-api-key": hrmsSvcApiKey },
   timeout: 5000,
@@ -57,15 +57,14 @@ export async function authenticate(req, res, next) {
     if (!hrmsUser) {
       let userCtx;
       try {
-        const response = await hrmsApi.get(`/internal/user-context/${userId}`);
-        userCtx = response.data;
+        userCtx = await hrmsApi.get(`/internal/user-context/${encodeURIComponent(userId)}`);
       } catch (err) {
-        if (err.response) {
+        if (err.status) {
           // HRMS answered — trust its status (e.g. 404 = no such user, token
           // for a deleted account). Not the same failure as HRMS being down.
           return res.status(401).json({ success: false, message: "User not found" });
         }
-        // No response at all — network error/timeout/connection refused.
+        // No answer at all — network error/timeout/connection refused.
         return res
           .status(503)
           .json({ success: false, message: "Identity service unavailable, please try again shortly" });
@@ -80,7 +79,7 @@ export async function authenticate(req, res, next) {
 
     // Branch comes from HRMS and nowhere else — it's whatever an admin picked
     // in the staff-registration Login step. null is a legitimate value: most
-    // HRMS users (sales, HR) are not warehouse staff and never get one.
+    // HRMS users (sales, HR) are not branch staff and never get one.
     //
     // Deliberately NOT a 403 here. Blocking at this layer would also lock out
     // admins and anyone holding ALL_BRANCHES scope, since authenticate runs

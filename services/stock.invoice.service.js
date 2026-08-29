@@ -8,7 +8,7 @@ import StockVendorPurchaseHistoryModel from "../models/stock.vendor.purchase.his
 import StockInventoryItemService from "./stock.inventory.item.service.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
-import StockWarehouseService from "./stock.warehouse.service.js";
+import StockBranchService from "./stock.branch.service.js";
 import { applyBranchScopeToFilter, isWithinBranchScope } from "../helpers/branch.scope.helper.js";
 import { applyEntityScopeToFilter, isWithinEntityScope } from "../helpers/entity.scope.helper.js";
 
@@ -119,7 +119,7 @@ export default class StockInvoiceService {
   // generated Serial/MAC entry for individual-tracked products, one
   // aggregated doc for quantity-tracked products. Mutates each line in place
   // to record the created ids.
-  static async _createPendingInventoryItems(invoice, vendorId, warehouseId, receivedBy, session) {
+  static async _createPendingInventoryItems(invoice, vendorId, branchId, receivedBy, session) {
     for (const line of invoice.lines) {
       const productDef = await StockProductDefinitionModel.findOne({
         _id: line.productDefinitionId,
@@ -138,7 +138,7 @@ export default class StockInvoiceService {
           docs.push({
             productDefinitionId: line.productDefinitionId,
             vendorId,
-            warehouseId,
+            branchId,
             invoiceId: invoice._id,
             approvalStatus: ITEM_APPROVAL_STATUS.PENDING,
             isFoc: !!row.isFoc,
@@ -166,7 +166,7 @@ export default class StockInvoiceService {
               {
                 productDefinitionId: line.productDefinitionId,
                 vendorId,
-                warehouseId,
+                branchId,
                 invoiceId: invoice._id,
                 approvalStatus: ITEM_APPROVAL_STATUS.PENDING,
                 isFoc: qd.isFoc,
@@ -249,29 +249,29 @@ export default class StockInvoiceService {
   /* Receiving form bootstrap                                                */
   /* ---------------------------------------------------------------------- */
 
-  // Warehouses the caller may receive goods into, plus the one the form should
-  // land on. Lives on the invoices module (not warehouses) on purpose: the
+  // Branches the caller may receive goods into, plus the one the form should
+  // land on. Lives on the invoices module (not branches) on purpose: the
   // question "where can *I* book stock in" belongs to the receiving flow, and
-  // gating it on `warehouses:READ` would make every receiving clerk a
-  // warehouse-master user too.
+  // gating it on `branches:READ` would make every receiving clerk a
+  // branch-master user too.
   //
-  // defaultWarehouseId is the caller's own HRMS branch whenever that branch is
+  // defaultBranchId is the caller's own HRMS branch whenever that branch is
   // in scope — the overwhelmingly common case, where the field is really a
   // display of a fact rather than a choice. A wider-scoped user (admin, or a
   // SPECIFIC_BRANCHES policy) with no branch of their own gets no default and
   // picks one, unless there is exactly one option to pick.
-  static async getReceivingWarehouses(scopeCtx) {
-    const warehouses = await StockWarehouseService.getScopedActiveWarehouses(scopeCtx);
+  static async getReceivingBranches(scopeCtx) {
+    const branches = await StockBranchService.getScopedActiveBranches(scopeCtx);
 
     const ownBranchId = scopeCtx?.branchId ? String(scopeCtx.branchId) : null;
-    const ownInScope = ownBranchId && warehouses.some((w) => String(w._id) === ownBranchId);
-    const defaultWarehouseId = ownInScope
+    const ownInScope = ownBranchId && branches.some((w) => String(w._id) === ownBranchId);
+    const defaultBranchId = ownInScope
       ? ownBranchId
-      : warehouses.length === 1
-        ? String(warehouses[0]._id)
+      : branches.length === 1
+        ? String(branches[0]._id)
         : null;
 
-    return { warehouses, defaultWarehouseId, ownBranchId };
+    return { branches, defaultBranchId, ownBranchId };
   }
 
   /* ---------------------------------------------------------------------- */
@@ -297,12 +297,12 @@ export default class StockInvoiceService {
       .lean();
     if (!po) throw new Error("Purchase order not found for this tracking order");
 
-    // The receiving warehouse is this invoice's branch: getBoard, getInvoiceById
+    // The receiving branch is this invoice's branch: getBoard, getInvoiceById
     // and every inventory item created below are all branch-scoped on it. Pinning
     // it to the receiver's own scope here is what keeps a submitted invoice
     // visible to the person who submitted it.
-    const warehouseId = await StockWarehouseService.assertWarehouseInScope(
-      body.warehouseId,
+    const branchId = await StockBranchService.assertBranchInScope(
+      body.branchId,
       scopeCtx,
       session
     );
@@ -327,7 +327,7 @@ export default class StockInvoiceService {
           invoiceNumber: String(body.invoiceNumber).trim(),
           invoiceDate: body.invoiceDate,
           invoiceFile: body.invoiceFile || "",
-          warehouseId,
+          branchId,
           receivedByName: body.receivedByName || user?.name || "",
           extraCharges: body.extraCharges || [],
           lines,
@@ -343,7 +343,7 @@ export default class StockInvoiceService {
     await StockInvoiceService._createPendingInventoryItems(
       invoice,
       po.vendorId,
-      warehouseId,
+      branchId,
       user?.id || user?._id || null,
       session
     );
@@ -378,9 +378,9 @@ export default class StockInvoiceService {
     if (!po) throw new Error("Purchase order not found for this invoice");
 
     // Same branch pin as create — a resubmit may move the goods to a different
-    // warehouse, but only one the resubmitter can still see afterwards.
-    const warehouseId = await StockWarehouseService.assertWarehouseInScope(
-      body.warehouseId ?? invoice.warehouseId,
+    // branch, but only one the resubmitter can still see afterwards.
+    const branchId = await StockBranchService.assertBranchInScope(
+      body.branchId ?? invoice.branchId,
       scopeCtx,
       session
     );
@@ -402,7 +402,7 @@ export default class StockInvoiceService {
     if (body.invoiceNumber !== undefined) invoice.invoiceNumber = String(body.invoiceNumber).trim();
     if (body.invoiceDate !== undefined) invoice.invoiceDate = body.invoiceDate;
     if (body.invoiceFile) invoice.invoiceFile = body.invoiceFile;
-    invoice.warehouseId = warehouseId;
+    invoice.branchId = branchId;
     if (body.receivedByName !== undefined) invoice.receivedByName = body.receivedByName;
     if (body.extraCharges !== undefined) invoice.extraCharges = body.extraCharges;
 
@@ -417,7 +417,7 @@ export default class StockInvoiceService {
     await StockInvoiceService._createPendingInventoryItems(
       invoice,
       po.vendorId,
-      invoice.warehouseId,
+      invoice.branchId,
       user?.id || user?._id || null,
       session
     );
@@ -531,7 +531,7 @@ export default class StockInvoiceService {
   // change" posture as getBoard's poNumber/orderedQty.
   static async getInvoiceById(id, scopeCtx, entityAccess) {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).lean();
-    if (!invoice || !isWithinBranchScope(invoice, scopeCtx, "warehouseId")) {
+    if (!invoice || !isWithinBranchScope(invoice, scopeCtx, "branchId")) {
       throw new Error("Invoice not found");
     }
     assertEntityScope(invoice, entityAccess);
@@ -580,7 +580,7 @@ export default class StockInvoiceService {
     if (vendorId) filter.vendorId = vendorId;
     if (categoryId) filter["lines.categoryId"] = categoryId;
     if (productId) filter["lines.productDefinitionId"] = productId;
-    applyBranchScopeToFilter(filter, scopeCtx, "warehouseId");
+    applyBranchScopeToFilter(filter, scopeCtx, "branchId");
     applyEntityScopeToFilter(filter, entityAccess, ENTITY_FIELD, { includeUnassigned: false });
     if (dateFrom || dateTo) {
       filter.invoiceDate = {};

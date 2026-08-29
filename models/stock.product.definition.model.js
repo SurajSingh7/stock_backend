@@ -25,15 +25,15 @@ const selectedFieldSchema = new mongoose.Schema(
   { _id: false }
 );
 
-// One explicit alert threshold per warehouse. Kept as a sub-document array on
-// the product (rather than its own collection) because warehouses are
+// One explicit alert threshold per branch. Kept as a sub-document array on
+// the product (rather than its own collection) because branches are
 // branch-level and few — the whole set reads with the product and saves
 // atomically with it.
-const warehouseThresholdSchema = new mongoose.Schema(
+const branchThresholdSchema = new mongoose.Schema(
   {
-    warehouseId: {
+    branchId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "warehouses",
+      ref: "branches",
       required: true,
     },
     threshold: {
@@ -81,16 +81,16 @@ const stockProductDefinitionSchema = new mongoose.Schema(
       enum: UNIT_TYPES_ARRAY,
       required: true,
     },
-    // ── Stock alert thresholds (per warehouse) ──
-    // Alerts are raised per warehouse, not per product: the same product can
-    // be low in Delhi and healthy in Mumbai. `warehouseThresholds` carries one
-    // explicit row for every ACTIVE warehouse — that completeness is enforced
-    // on every create/update by assertWarehouseThresholdsComplete().
+    // ── Stock alert thresholds (per branch) ──
+    // Alerts are raised per branch, not per product: the same product can
+    // be low in Delhi and healthy in Mumbai. `branchThresholds` carries one
+    // explicit row for every ACTIVE branch — that completeness is enforced
+    // on every create/update by assertBranchThresholdsComplete().
     //
     // `defaultStockAlertThreshold` is the fallback for the window BETWEEN
-    // saves: a warehouse created after this product was last saved has no row
+    // saves: a branch created after this product was last saved has no row
     // yet, so alerting falls back to this value until an admin next edits the
-    // product (the form pre-fills that new warehouse's row with it).
+    // product (the form pre-fills that new branch's row with it).
     //
     // Neither is `required: true` at the schema level, for the same reason as
     // warrantyYears below — Mongoose re-validates the whole document on every
@@ -102,8 +102,8 @@ const stockProductDefinitionSchema = new mongoose.Schema(
       default: null,
       min: 0,
     },
-    warehouseThresholds: {
-      type: [warehouseThresholdSchema],
+    branchThresholds: {
+      type: [branchThresholdSchema],
       default: [],
     },
     // Default warranty (years) for this product — vendors may override this
@@ -158,8 +158,8 @@ stockProductDefinitionSchema.index({ categoryId: 1, isActive: 1 });
 stockProductDefinitionSchema.index({ trackingMethod: 1 });
 stockProductDefinitionSchema.index({ name: 1 });
 // Supports the (future) low-stock alert sweep: "which products define a
-// threshold for warehouse X".
-stockProductDefinitionSchema.index({ "warehouseThresholds.warehouseId": 1 });
+// threshold for branch X".
+stockProductDefinitionSchema.index({ "branchThresholds.branchId": 1 });
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.
 const StockProductDefinitionModel = mongoose.model(
