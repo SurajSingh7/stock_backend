@@ -2,11 +2,13 @@ import crypto from "crypto";
 import StockModuleModel from "../models/stock.module.model.js";
 import StockRoleModulePermissionModel from "../models/stock.role.module.permission.model.js";
 import StockUserPermissionOverrideModel from "../models/stock.user.permission.override.model.js";
-import StockAccessScopePolicyModel from "../models/stock.access.scope.policy.model.js";
+import StockUserDataScopeModel from "../models/stock.user.data.scope.model.js";
 import StockAccessDelegationModel from "../models/stock.access.delegation.model.js";
-import StockUserEntityAccessModel from "../models/stock.user.entity.access.model.js";
+import StockDepartmentModuleRestrictionModel from "../models/stock.department.module.restriction.model.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
-import { ACCESS_SCOPE, ENTITY_SCOPE, ENTITY_SCOPE_ARRAY } from "../constants/stock.enums.js";
+import { DATA_SCOPE, DATA_SCOPE_ARRAY, ENTITY_SCOPE, ENTITY_SCOPE_ARRAY } from "../constants/stock.enums.js";
+import { resolveEffectiveActions, resolveDataAccess } from "../middlewares/stock.permission.middleware.js";
+import { DATA_SCOPE_REGISTRY } from "../config/data.scope.registry.js";
 
 const ENTITY_TYPE = "Permission";
 
@@ -17,8 +19,21 @@ const getModuleOrThrow = async (moduleId) => {
 };
 
 export default class StockAccessControlService {
+  // Each module carries its data-scope dimensions alongside its actions, so the
+  // admin screens can show what is grantable AND what will be filtered without
+  // anyone having to open config/data.scope.registry.js to find out.
   getAllModules = async () => {
-    return StockModuleModel.find({ isActive: true }).sort({ name: 1 }).lean();
+    const modules = await StockModuleModel.find({ isActive: true }).sort({ name: 1 }).lean();
+    return modules.map((m) => {
+      const dims = DATA_SCOPE_REGISTRY[m.key];
+      return {
+        ...m,
+        // undefined = not registered at all, which is a configuration bug the
+        // UI should surface rather than quietly render as "unscoped".
+        scopeDimensions: dims === undefined ? null : Object.keys(dims),
+        scopeFields: dims ?? null,
+      };
+    });
   };
 
   // Layer 1 — role default for a module. Upsert: call again to change it.
@@ -86,80 +101,164 @@ export default class StockAccessControlService {
   };
 
   // Layer 3 — which branches' data this user can see/act on for a module.
-  setScopePolicy = async ({ userId, moduleId, scope, allowedBranchIds, actor }) => {
-    if (!userId || !moduleId || !scope) throw new Error("userId, moduleId and scope are required");
-    const module = await getModuleOrThrow(moduleId);
-    if (scope === ACCESS_SCOPE.SPECIFIC_BRANCHES && !(allowedBranchIds || []).length) {
-      throw new Error("allowedBranchIds is required when scope is SPECIFIC_BRANCHES");
-    }
+  /* ── Data access — three dimensions, global + optional module override ──
+   * One collection, one merge rule. A row with moduleId:null is the user's
+   * global default; a row with a moduleId overrides only the dimensions it
+   * explicitly configures. Each dimension carries `configured` so "override
+   * says OWN" is distinguishable from "override says nothing" — OWN is also
+   * the schema default, so the flag is the only way to tell them apart.
+   */
 
-    const before = await StockAccessScopePolicyModel.findOne({ userId, moduleId }).lean();
-    const after = await StockAccessScopePolicyModel.findOneAndUpdate(
+  #validateDimensions = ({ branch, entity, recordOwnership }) => {
+    if (branch?.configured) {
+      if (!DATA_SCOPE_ARRAY.includes(branch.scope)) throw new Error("Invalid branch scope");
+      if (branch.scope === DATA_SCOPE.SELECTED && !(branch.allowedBranchIds || []).length) {
+        throw new Error("Pick at least one branch, or choose Own / All");
+      }
+    }
+    if (entity?.configured) {
+      if (!ENTITY_SCOPE_ARRAY.includes(entity.scope)) throw new Error("Invalid entity scope");
+      if (entity.scope === ENTITY_SCOPE.SELECTED && !(entity.allowedEntityAliases || []).length) {
+        throw new Error("Pick at least one entity, or choose All entities");
+      }
+    }
+    if (recordOwnership?.configured) {
+      if (!DATA_SCOPE_ARRAY.includes(recordOwnership.scope)) throw new Error("Invalid record ownership scope");
+      if (recordOwnership.scope === DATA_SCOPE.SELECTED && !(recordOwnership.allowedUserIds || []).length) {
+        throw new Error("Pick at least one user, or choose Own / All");
+      }
+    }
+  };
+
+  #normalise = (dims) => ({
+    branch: {
+      configured: !!dims.branch?.configured,
+      scope: dims.branch?.scope ?? DATA_SCOPE.OWN,
+      allowedBranchIds: dims.branch?.scope === DATA_SCOPE.SELECTED ? dims.branch.allowedBranchIds || [] : [],
+    },
+    entity: {
+      configured: !!dims.entity?.configured,
+      scope: dims.entity?.scope ?? ENTITY_SCOPE.SELECTED,
+      allowedEntityAliases:
+        dims.entity?.scope === ENTITY_SCOPE.SELECTED
+          ? (dims.entity.allowedEntityAliases || []).map((a) => String(a).trim().toUpperCase()).filter(Boolean)
+          : [],
+    },
+    recordOwnership: {
+      configured: !!dims.recordOwnership?.configured,
+      scope: dims.recordOwnership?.scope ?? DATA_SCOPE.OWN,
+      allowedUserIds: dims.recordOwnership?.scope === DATA_SCOPE.SELECTED ? dims.recordOwnership.allowedUserIds || [] : [],
+    },
+  });
+
+  // moduleId omitted/null → the user's global row.
+  setDataScope = async ({ userId, moduleId = null, branch, entity, recordOwnership, actor }) => {
+    if (!userId) throw new Error("userId is required");
+    const module = moduleId ? await getModuleOrThrow(moduleId) : null;
+
+    this.#validateDimensions({ branch, entity, recordOwnership });
+    const dims = this.#normalise({ branch, entity, recordOwnership });
+
+    const before = await StockUserDataScopeModel.findOne({ userId, moduleId }).lean();
+    const after = await StockUserDataScopeModel.findOneAndUpdate(
       { userId, moduleId },
-      { $set: { scope, allowedBranchIds: scope === ACCESS_SCOPE.SPECIFIC_BRANCHES ? allowedBranchIds : [] } },
+      { $set: { ...dims, updatedBy: actor?._id ?? null } },
       { new: true, upsert: true }
     );
 
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE,
       entityId: after._id,
-      action: "SET_ACCESS_SCOPE",
+      action: moduleId ? "SET_MODULE_DATA_SCOPE" : "SET_GLOBAL_DATA_SCOPE",
       actor,
       before,
       after: after.toObject(),
-      reason: `user=${userId} module=${module.key}`,
+      reason: `user=${userId}${module ? " module=" + module.key : " (global)"}`,
     });
 
     return after;
   };
 
-  // ─── Entity access — per USER, not per module ──────────────────────────────
-  // Deliberately separate from setScopePolicy: "Ramesh works on GTEL" is a
-  // fact about the person and must hold identically across Purchase Orders,
-  // Invoices and Tracking Orders.
-  getEntityAccess = async (userId) => {
+  // Everything the Data Scope screen needs in one call: the global row plus
+  // every module override, so the admin sees exactly what is configured
+  // rather than having to guess which modules were customised.
+  getDataScopes = async (userId) => {
     if (!userId) throw new Error("userId is required");
-    const access = await StockUserEntityAccessModel.findOne({ userId }).lean();
-    // No row = unrestricted. Returned explicitly so the admin UI shows the
-    // real effective state rather than an empty form.
-    return access || { userId, scope: ENTITY_SCOPE.ALL_ENTITIES, allowedEntityAliases: [] };
+    const rows = await StockUserDataScopeModel.find({ userId }).populate("moduleId", "key name").lean();
+    return {
+      global: rows.find((r) => !r.moduleId) || null,
+      moduleOverrides: rows.filter((r) => r.moduleId),
+    };
   };
 
-  setEntityAccess = async ({ userId, scope, allowedEntityAliases, actor }) => {
-    if (!userId) throw new Error("userId is required");
-    if (!ENTITY_SCOPE_ARRAY.includes(scope)) throw new Error("Invalid entity scope");
+  clearModuleDataScope = async ({ userId, moduleId, actor }) => {
+    if (!userId || !moduleId) throw new Error("userId and moduleId are required");
+    const module = await getModuleOrThrow(moduleId);
+    const removed = await StockUserDataScopeModel.findOneAndDelete({ userId, moduleId });
+    if (!removed) throw new Error("Module override not found");
 
-    const aliases = (allowedEntityAliases || [])
-      .map((a) => String(a).trim().toUpperCase())
-      .filter(Boolean);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE,
+      entityId: removed._id,
+      action: "CLEAR_MODULE_DATA_SCOPE",
+      actor,
+      before: removed.toObject(),
+      after: null,
+      reason: `user=${userId} module=${module.key} — falls back to global`,
+    });
+    return removed;
+  };
 
-    if (scope === ENTITY_SCOPE.SPECIFIC_ENTITIES && aliases.length === 0) {
-      throw new Error("Pick at least one entity, or choose All entities");
-    }
+  /* ── Department restriction — a ceiling on the role, never a grant ────── */
 
-    const before = await StockUserEntityAccessModel.findOne({ userId }).lean();
-    const after = await StockUserEntityAccessModel.findOneAndUpdate(
-      { userId },
-      { $set: { scope, allowedEntityAliases: scope === ENTITY_SCOPE.SPECIFIC_ENTITIES ? aliases : [] } },
+  setDepartmentRestriction = async ({ departmentId, moduleId, allowedActions, actor }) => {
+    if (!departmentId || !moduleId) throw new Error("departmentId and moduleId are required");
+    const module = await getModuleOrThrow(moduleId);
+    const invalid = (allowedActions || []).filter((a) => !module.actions.includes(a));
+    if (invalid.length) throw new Error(`Invalid actions for this module: ${invalid.join(", ")}`);
+
+    const before = await StockDepartmentModuleRestrictionModel.findOne({ departmentId, moduleId }).lean();
+    const after = await StockDepartmentModuleRestrictionModel.findOneAndUpdate(
+      { departmentId, moduleId },
+      { $set: { allowedActions: allowedActions || [], updatedBy: actor?._id ?? null } },
       { new: true, upsert: true }
     );
 
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE,
       entityId: after._id,
-      action: "SET_ENTITY_ACCESS",
+      action: "SET_DEPARTMENT_RESTRICTION",
       actor,
       before,
       after: after.toObject(),
-      reason: `user=${userId} scope=${scope}${aliases.length ? " [" + aliases.join(", ") + "]" : ""}`,
+      reason: `department=${departmentId} module=${module.key}`,
     });
-
     return after;
   };
 
-  getScopePolicies = async (userId) => {
-    if (!userId) throw new Error("userId is required");
-    return StockAccessScopePolicyModel.find({ userId }).populate("moduleId", "key name").lean();
+  getDepartmentRestrictions = async (departmentId) => {
+    if (!departmentId) throw new Error("departmentId is required");
+    return StockDepartmentModuleRestrictionModel.find({ departmentId })
+      .populate("moduleId", "key name actions")
+      .lean();
+  };
+
+  clearDepartmentRestriction = async ({ departmentId, moduleId, actor }) => {
+    if (!departmentId || !moduleId) throw new Error("departmentId and moduleId are required");
+    const module = await getModuleOrThrow(moduleId);
+    const removed = await StockDepartmentModuleRestrictionModel.findOneAndDelete({ departmentId, moduleId });
+    if (!removed) throw new Error("Department restriction not found");
+
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE,
+      entityId: removed._id,
+      action: "CLEAR_DEPARTMENT_RESTRICTION",
+      actor,
+      before: removed.toObject(),
+      after: null,
+      reason: `department=${departmentId} module=${module.key} — no restriction`,
+    });
+    return removed;
   };
 
   // Snapshot copy (see stock.access.delegation.model.js) — grants User B
@@ -182,7 +281,7 @@ export default class StockAccessControlService {
     const [roleDefaults, fromOverrides, fromScopes] = await Promise.all([
       StockRoleModulePermissionModel.find({ roleId: fromRoleId, moduleId: { $in: moduleIdList } }).lean(),
       StockUserPermissionOverrideModel.find({ userId: fromUserId, moduleId: { $in: moduleIdList } }).lean(),
-      StockAccessScopePolicyModel.find({ userId: fromUserId, moduleId: { $in: moduleIdList } }).lean(),
+      StockUserDataScopeModel.find({ userId: fromUserId, moduleId: { $in: moduleIdList } }).lean(),
     ]);
 
     const roleDefaultByModule = new Map(roleDefaults.map((r) => [r.moduleId.toString(), r]));
@@ -215,11 +314,20 @@ export default class StockAccessControlService {
         { upsert: true }
       );
 
+      // Only a module-level OVERRIDE is copied. B's global row is deliberately
+      // left alone: delegation grants A's exceptions, not A's whole identity.
       const fromScope = scopeByModule.get(key);
       if (fromScope) {
-        await StockAccessScopePolicyModel.findOneAndUpdate(
+        await StockUserDataScopeModel.findOneAndUpdate(
           { userId: toUserId, moduleId: module._id },
-          { $set: { scope: fromScope.scope, allowedBranchIds: fromScope.allowedBranchIds } },
+          {
+            $set: {
+              branch: fromScope.branch,
+              entity: fromScope.entity,
+              recordOwnership: fromScope.recordOwnership,
+              updatedBy: actor?._id ?? null,
+            },
+          },
           { upsert: true }
         );
       }
@@ -250,36 +358,54 @@ export default class StockAccessControlService {
 
   // What requirePermission() would resolve to for this user, module by
   // module — the admin-facing "what can they actually do" preview.
-  getEffectivePermissions = async ({ userId, roleId }) => {
+  /**
+   * The admin-facing "what can this person actually do, and whose rows can
+   * they touch" preview. Resolved through resolveEffectiveActions() and
+   * resolveDataAccess() — the very functions requirePermission() runs — so a
+   * change to the rules can never leave this screen showing something the API
+   * would not actually allow.
+   */
+  getEffectivePermissions = async ({ userId, roleId, departmentId, branchId }) => {
     if (!userId || !roleId) throw new Error("userId and roleId are required");
 
     const modules = await StockModuleModel.find({ isActive: true }).sort({ name: 1 }).lean();
     const moduleIdList = modules.map((m) => m._id);
-    const [roleDefaults, overrides, scopePolicies] = await Promise.all([
+
+    const [roleDefaults, deptRestrictions, overrides, scopeRows] = await Promise.all([
       StockRoleModulePermissionModel.find({ roleId, moduleId: { $in: moduleIdList } }).lean(),
+      departmentId
+        ? StockDepartmentModuleRestrictionModel.find({ departmentId, moduleId: { $in: moduleIdList } }).lean()
+        : [],
       StockUserPermissionOverrideModel.find({ userId, moduleId: { $in: moduleIdList } }).lean(),
-      StockAccessScopePolicyModel.find({ userId, moduleId: { $in: moduleIdList } }).lean(),
+      StockUserDataScopeModel.find({ userId }).lean(),
     ]);
-    const roleDefaultByModule = new Map(roleDefaults.map((r) => [r.moduleId.toString(), r]));
-    const overrideByModule = new Map(overrides.map((o) => [o.moduleId.toString(), o]));
-    const scopeByModule = new Map(scopePolicies.map((s) => [s.moduleId.toString(), s]));
+
+    const byModule = (rows) => new Map(rows.map((r) => [String(r.moduleId), r]));
+    const roleBy = byModule(roleDefaults);
+    const deptBy = byModule(deptRestrictions);
+    const overrideBy = byModule(overrides);
+    const globalScope = scopeRows.find((r) => !r.moduleId) || null;
+    const scopeBy = byModule(scopeRows.filter((r) => r.moduleId));
+
+    const user = { _id: userId, branchId: branchId ?? null };
 
     return modules.map((module) => {
-      const key = module._id.toString();
-      const roleDefault = roleDefaultByModule.get(key);
-      const override = overrideByModule.get(key);
-      const effective = new Set(roleDefault?.allowedActions ?? []);
-      for (const a of override?.addActions ?? []) effective.add(a);
-      for (const a of override?.removeActions ?? []) effective.delete(a);
+      const key = String(module._id);
+      const actions = resolveEffectiveActions(roleBy.get(key), deptBy.get(key), overrideBy.get(key));
+      const dataAccess = resolveDataAccess(globalScope, scopeBy.get(key), user);
 
-      const scope = scopeByModule.get(key);
       return {
         moduleId: module._id,
         moduleKey: module.key,
         moduleName: module.name,
-        allowedActions: [...effective],
-        scope: scope?.scope ?? ACCESS_SCOPE.OWN_BRANCH,
-        allowedBranchIds: scope?.allowedBranchIds ?? [],
+        allowedActions: [...actions],
+        dataAccess: {
+          branch: dataAccess.branch,
+          entity: dataAccess.entity,
+          recordOwnership: dataAccess.recordOwnership,
+        },
+        // So the UI can show WHY a dimension reads the way it does.
+        hasModuleOverride: scopeBy.has(key),
       };
     });
   };

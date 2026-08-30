@@ -2,7 +2,6 @@ import mongoose from "mongoose";
 import { successResponseHandler, errorResponseHandler } from "../helpers/response.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockTrackingOrderService from "../services/stock.tracking.order.service.js";
-import { entityCtxFromReq } from "../helpers/entity.scope.helper.js";
 import { validateAddEntity, validateMarkNotRequired } from "../validators/stock.validator.js";
 
 const log = getLogger(import.meta.url);
@@ -10,7 +9,7 @@ const log = getLogger(import.meta.url);
 export default class StockTrackingOrderController {
   static async getBoard(req, res) {
     try {
-      const data = await StockTrackingOrderService.getBoard(req.query, entityCtxFromReq(req));
+      const data = await StockTrackingOrderService.getBoard(req.query, req.dataAccess);
       successResponseHandler(res, data, "Tracking orders board fetched");
     } catch (error) {
       log.error("Error fetching tracking orders board", error);
@@ -20,7 +19,7 @@ export default class StockTrackingOrderController {
 
   static async getDetail(req, res) {
     try {
-      const data = await StockTrackingOrderService.getDetail(req.params.id, entityCtxFromReq(req));
+      const data = await StockTrackingOrderService.getDetail(req.params.id, req.dataAccess);
       successResponseHandler(res, data, "Tracking order fetched");
     } catch (error) {
       log.error("Error fetching tracking order", error);
@@ -33,7 +32,7 @@ export default class StockTrackingOrderController {
     try {
       session.startTransaction();
       validateAddEntity(req.body);
-      const data = await StockTrackingOrderService.addEntity(req.params.id, req.body, req.user, session, entityCtxFromReq(req));
+      const data = await StockTrackingOrderService.addEntity(req.params.id, req.body, req.user, session, req.dataAccess);
       await session.commitTransaction();
       log.info("Entity assigned to tracking order");
       successResponseHandler(res, data, "Entity assigned successfully");
@@ -51,7 +50,7 @@ export default class StockTrackingOrderController {
     try {
       session.startTransaction();
       validateMarkNotRequired(req.body);
-      const data = await StockTrackingOrderService.markNotRequired(req.params.id, req.body.reason, req.user, session, entityCtxFromReq(req));
+      const data = await StockTrackingOrderService.markNotRequired(req.params.id, req.body.reason, req.user, session, req.dataAccess);
       await session.commitTransaction();
       log.info("Tracking order marked Not Required");
       successResponseHandler(res, data, "Marked as Not Required");

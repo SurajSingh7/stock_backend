@@ -7,7 +7,6 @@ import {
   validateProcessTransferRequest,
   validateRejectTransferRequest,
 } from "../validators/stock.validator.js";
-import { scopeCtxFromReq } from "../helpers/branch.scope.helper.js";
 
 const log = getLogger(import.meta.url);
 
@@ -26,7 +25,7 @@ export default class StockTransferRequestController {
         req.body,
         actingUser(req),
         session,
-        scopeCtxFromReq(req)
+        req.dataAccess
       );
       await session.commitTransaction();
       log.info("Transfer request created");
@@ -44,7 +43,7 @@ export default class StockTransferRequestController {
   // StockTransferRequestService.getFormBranches.
   static async getFormBranches(req, res) {
     try {
-      const data = await StockTransferRequestService.getFormBranches(scopeCtxFromReq(req));
+      const data = await StockTransferRequestService.getFormBranches(req.dataAccess);
       successResponseHandler(res, data, "Transfer branches fetched successfully");
     } catch (error) {
       log.error("Error fetching transfer branches", error);
@@ -54,7 +53,7 @@ export default class StockTransferRequestController {
 
   static async getBoard(req, res) {
     try {
-      const data = await StockTransferRequestService.getBoard(req.query, scopeCtxFromReq(req));
+      const data = await StockTransferRequestService.getBoard(req.query, req.dataAccess);
       successResponseHandler(res, data, "Transfer requests fetched successfully");
     } catch (error) {
       log.error("Error fetching transfer requests board", error);
@@ -64,7 +63,7 @@ export default class StockTransferRequestController {
 
   static async getTransferRequestById(req, res) {
     try {
-      const data = await StockTransferRequestService.getTransferRequestById(req.params.id, scopeCtxFromReq(req));
+      const data = await StockTransferRequestService.getTransferRequestById(req.params.id, req.dataAccess);
       successResponseHandler(res, data, "Transfer request fetched successfully");
     } catch (error) {
       log.error("Error fetching transfer request", error);

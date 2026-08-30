@@ -65,46 +65,79 @@ export default class StockAccessControlController {
     }
   }
 
-  static async setScopePolicy(req, res) {
+  /* ── Data access: one global row per user, optional per-module override ── */
+
+  static async setDataScope(req, res) {
     try {
-      const { userId, moduleId, scope, allowedBranchIds } = req.body;
-      const data = await service.setScopePolicy({ userId, moduleId, scope, allowedBranchIds, actor: req.user });
-      log.info(`Access scope set by ${actingUser(req).name || actingUser(req).id}`);
-      successResponseHandler(res, data, "Access scope saved successfully");
+      const { userId, moduleId, branch, entity, recordOwnership } = req.body;
+      const data = await service.setDataScope({
+        userId,
+        moduleId: moduleId || null, // omitted / null = the user's global row
+        branch,
+        entity,
+        recordOwnership,
+        actor: req.user,
+      });
+      log.info(`Data scope set by ${actingUser(req).name || actingUser(req).id}`);
+      successResponseHandler(res, data, "Data scope saved successfully");
     } catch (error) {
-      log.error("Error setting access scope", error);
+      log.error("Error setting data scope", error);
       errorResponseHandler(res, error);
     }
   }
 
-  static async getEntityAccess(req, res) {
+  static async getDataScopes(req, res) {
     try {
-      const data = await service.getEntityAccess(req.query.userId);
-      successResponseHandler(res, data, "Entity access fetched successfully");
+      const data = await service.getDataScopes(req.query.userId);
+      successResponseHandler(res, data, "Data scopes fetched successfully");
     } catch (error) {
-      log.error("Error fetching entity access", error);
+      log.error("Error fetching data scopes", error);
       errorResponseHandler(res, error);
     }
   }
 
-  static async setEntityAccess(req, res) {
+  static async clearModuleDataScope(req, res) {
     try {
-      const { userId, scope, allowedEntityAliases } = req.body;
-      const data = await service.setEntityAccess({ userId, scope, allowedEntityAliases, actor: req.user });
-      log.info(`Entity access set by ${actingUser(req).name || actingUser(req).id}`);
-      successResponseHandler(res, data, "Entity access saved successfully");
+      const { userId, moduleId } = req.body;
+      const data = await service.clearModuleDataScope({ userId, moduleId, actor: req.user });
+      successResponseHandler(res, data, "Module override removed — this module now follows the global scope");
     } catch (error) {
-      log.error("Error setting entity access", error);
+      log.error("Error clearing module data scope", error);
       errorResponseHandler(res, error);
     }
   }
 
-  static async getScopePolicies(req, res) {
+  /* ── Department restriction ─────────────────────────────────────────────── */
+
+  static async setDepartmentRestriction(req, res) {
     try {
-      const data = await service.getScopePolicies(req.query.userId);
-      successResponseHandler(res, data, "Access scopes fetched successfully");
+      const { departmentId, moduleId, allowedActions } = req.body;
+      const data = await service.setDepartmentRestriction({ departmentId, moduleId, allowedActions, actor: req.user });
+      log.info(`Department restriction set by ${actingUser(req).name || actingUser(req).id}`);
+      successResponseHandler(res, data, "Department restriction saved successfully");
     } catch (error) {
-      log.error("Error fetching access scopes", error);
+      log.error("Error setting department restriction", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
+  static async getDepartmentRestrictions(req, res) {
+    try {
+      const data = await service.getDepartmentRestrictions(req.query.departmentId);
+      successResponseHandler(res, data, "Department restrictions fetched successfully");
+    } catch (error) {
+      log.error("Error fetching department restrictions", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
+  static async clearDepartmentRestriction(req, res) {
+    try {
+      const { departmentId, moduleId } = req.body;
+      const data = await service.clearDepartmentRestriction({ departmentId, moduleId, actor: req.user });
+      successResponseHandler(res, data, "Department restriction removed — the role's actions apply unchanged");
+    } catch (error) {
+      log.error("Error clearing department restriction", error);
       errorResponseHandler(res, error);
     }
   }
@@ -123,8 +156,8 @@ export default class StockAccessControlController {
 
   static async getEffectivePermissions(req, res) {
     try {
-      const { userId, roleId } = req.query;
-      const data = await service.getEffectivePermissions({ userId, roleId });
+      const { userId, roleId, departmentId, branchId } = req.query;
+      const data = await service.getEffectivePermissions({ userId, roleId, departmentId, branchId });
       successResponseHandler(res, data, "Effective permissions fetched successfully");
     } catch (error) {
       log.error("Error fetching effective permissions", error);
@@ -136,7 +169,12 @@ export default class StockAccessControlController {
   // of truth for gating buttons/menus (see usePermissions() in the plan).
   static async getMyPermissions(req, res) {
     try {
-      const modules = await service.getEffectivePermissions({ userId: req.user._id, roleId: req.user.roleId });
+      const modules = await service.getEffectivePermissions({
+        userId: req.user._id,
+        roleId: req.user.roleId,
+        departmentId: req.user.departmentId,
+        branchId: req.user.branchId,
+      });
       const data = { isAdmin: req.user.isAdmin, branchId: req.user.branchId, modules };
       successResponseHandler(res, data, "Your permissions fetched successfully");
     } catch (error) {

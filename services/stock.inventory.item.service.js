@@ -6,7 +6,9 @@ import StockCategoryModel from "../models/stock.category.model.js";
 import StockInvoiceModel from "../models/stock.invoice.model.js";
 import StockCategoryService from "./stock.category.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
-import { applyBranchScopeToFilter, isWithinBranchScope, resolveBranchIds } from "../helpers/branch.scope.helper.js";
+import { applyDataScope, isWithinDataScope, resolveDimensionAllowList } from "../helpers/data.scope.helper.js";
+
+const SCOPE_MODULE_KEY = "inventory-items";
 import { paginate } from "../helpers/pagination.helper.js";
 import {
   TRACKING_METHODS,
@@ -136,14 +138,14 @@ export default class StockInventoryItemService {
     approvalStatus,
     search,
     showInactive,
-  }, scopeCtx) {
+  }, dataAccess) {
     try {
       const filter = showInactive ? {} : { isActive: true };
       if (productDefinitionId) filter.productDefinitionId = productDefinitionId;
       if (branchId) filter.branchId = branchId;
       if (status) filter.status = status;
       if (approvalStatus) filter.approvalStatus = approvalStatus;
-      applyBranchScopeToFilter(filter, scopeCtx, "branchId");
+      applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
 
       if (categoryId) {
         const defIds = await StockProductDefinitionModel.find({ categoryId, isActive: true }).distinct("_id");
@@ -222,11 +224,11 @@ export default class StockInventoryItemService {
   /* across pages.                                                           */
   /* ---------------------------------------------------------------------- */
 
-  static async getInventoryCards({ skip, limit, search, categoryId, productDefinitionId, branchId }, scopeCtx) {
+  static async getInventoryCards({ skip, limit, search, categoryId, productDefinitionId, branchId }, dataAccess) {
     const filter = { isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED };
     if (branchId) filter.branchId = branchId;
     if (productDefinitionId) filter.productDefinitionId = productDefinitionId;
-    applyBranchScopeToFilter(filter, scopeCtx, "branchId");
+    applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
 
     if (categoryId) {
       const defIds = await StockProductDefinitionModel.find({ categoryId, isActive: true }).distinct("_id");
@@ -343,7 +345,7 @@ export default class StockInventoryItemService {
     productDefinitionId,
     branchId,
     stockStatus,
-  }, scopeCtx) {
+  }, dataAccess) {
     const productMatch = { isActive: true };
     if (categoryId) productMatch.categoryId = new mongoose.Types.ObjectId(categoryId);
     if (productDefinitionId) productMatch._id = new mongoose.Types.ObjectId(productDefinitionId);
@@ -358,7 +360,7 @@ export default class StockInventoryItemService {
     if (branchId) {
       stockMatchExpr.push({ $eq: ["$branchId", new mongoose.Types.ObjectId(branchId)] });
     }
-    const scopedBranchIds = resolveBranchIds(scopeCtx);
+    const scopedBranchIds = resolveDimensionAllowList(dataAccess, "branch");
     if (scopedBranchIds !== null) {
       stockMatchExpr.push({ $in: ["$branchId", scopedBranchIds.map((id) => new mongoose.Types.ObjectId(id))] });
     }
@@ -461,7 +463,7 @@ export default class StockInventoryItemService {
 
   // ─── Get single item ──────────────────────────────────────────────────────────
 
-  static async getInventoryItemById(id, scopeCtx) {
+  static async getInventoryItemById(id, dataAccess) {
     try {
       const item = await StockInventoryItemModel.findOne({
         _id: id,
@@ -476,7 +478,7 @@ export default class StockInventoryItemService {
           },
         })
         .lean();
-      if (!item || !isWithinBranchScope(item, scopeCtx, "branchId")) {
+      if (!item || !isWithinDataScope(item, dataAccess, SCOPE_MODULE_KEY)) {
         throw new Error("Inventory item not found");
       }
       return item;

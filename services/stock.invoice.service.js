@@ -9,21 +9,18 @@ import StockInventoryItemService from "./stock.inventory.item.service.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import StockBranchService from "./stock.branch.service.js";
-import { applyBranchScopeToFilter, isWithinBranchScope } from "../helpers/branch.scope.helper.js";
-import { applyEntityScopeToFilter, isWithinEntityScope } from "../helpers/entity.scope.helper.js";
 
-// Denormalized onto the invoice at create time — see the model comment.
-const ENTITY_FIELD = "entityAlias";
+import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 
-// Same "not found, not 403" reasoning as the PO service: a 403 would confirm
-// that another entity's invoice exists.
-// allowUnassigned:false — unlike a tracking order, an invoice has no
-// "entity pending" stage: it can only be raised once the PO has been sent,
-// which requires an entity. A blank alias means legacy data from before this
-// field existed, so showing those to every restricted user would be a leak
-// with no workflow reason. Unrestricted users (admins) still see them.
-const assertEntityScope = (invoice, entityAccess) => {
-  if (!isWithinEntityScope(invoice, entityAccess, ENTITY_FIELD, { allowUnassigned: false })) {
+const SCOPE_MODULE_KEY = "invoices";
+
+// Guard for every by-id read AND every mutation. Throws the resource's normal
+// "not found" rather than a 403 — a 403 would confirm that an invoice outside
+// the caller's scope exists, which is exactly what the scope is meant to hide.
+// Which dimensions actually get checked (branch + entity + ownership here)
+// comes from the registry, so this can never drift from the model.
+const assertDataScope = (invoice, dataAccess) => {
+  if (!isWithinDataScope(invoice, dataAccess, SCOPE_MODULE_KEY)) {
     throw new Error("Invoice not found");
   }
 };
@@ -260,10 +257,10 @@ export default class StockInvoiceService {
   // display of a fact rather than a choice. A wider-scoped user (admin, or a
   // SPECIFIC_BRANCHES policy) with no branch of their own gets no default and
   // picks one, unless there is exactly one option to pick.
-  static async getReceivingBranches(scopeCtx) {
-    const branches = await StockBranchService.getScopedActiveBranches(scopeCtx);
+  static async getReceivingBranches(dataAccess) {
+    const branches = await StockBranchService.getScopedActiveBranches(dataAccess);
 
-    const ownBranchId = scopeCtx?.branchId ? String(scopeCtx.branchId) : null;
+    const ownBranchId = dataAccess?.branchId ? String(dataAccess.branchId) : null;
     const ownInScope = ownBranchId && branches.some((w) => String(w._id) === ownBranchId);
     const defaultBranchId = ownInScope
       ? ownBranchId
@@ -278,14 +275,14 @@ export default class StockInvoiceService {
   /* Create — "Add Items" submit                                             */
   /* ---------------------------------------------------------------------- */
 
-  static async createInvoice(trackingOrderId, body, user, session, scopeCtx, entityAccess) {
+  static async createInvoice(trackingOrderId, body, user, session, dataAccess) {
     const tracking = await StockTrackingOrderModel.findOne({
       _id: trackingOrderId,
       isActive: true,
     }).session(session);
     if (!tracking) throw new Error("Tracking order not found");
     // Scoped off the tracking order's entity — the invoice inherits it below.
-    if (!isWithinEntityScope(tracking, entityAccess, "buyerEntity.alias")) {
+    if (!isWithinDataScope(tracking, dataAccess, "tracking-orders")) {
       throw new Error("Tracking order not found");
     }
     if (!RECEIVABLE_TRACKING_STATUSES.has(tracking.status)) {
@@ -303,7 +300,7 @@ export default class StockInvoiceService {
     // visible to the person who submitted it.
     const branchId = await StockBranchService.assertBranchInScope(
       body.branchId,
-      scopeCtx,
+      dataAccess,
       session
     );
 
@@ -363,10 +360,10 @@ export default class StockInvoiceService {
   /* Edit + resubmit — REJECTED only                                         */
   /* ---------------------------------------------------------------------- */
 
-  static async updateInvoice(id, body, user, session, scopeCtx, entityAccess) {
+  static async updateInvoice(id, body, user, session, dataAccess) {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
     if (!invoice) throw new Error("Invoice not found");
-    assertEntityScope(invoice, entityAccess);
+    assertDataScope(invoice, dataAccess);
     if (invoice.status !== INVOICE_STATUS.REJECTED) {
       throw new Error("Only a rejected invoice can be edited");
     }
@@ -381,7 +378,7 @@ export default class StockInvoiceService {
     // branch, but only one the resubmitter can still see afterwards.
     const branchId = await StockBranchService.assertBranchInScope(
       body.branchId ?? invoice.branchId,
-      scopeCtx,
+      dataAccess,
       session
     );
 
@@ -437,10 +434,10 @@ export default class StockInvoiceService {
   /* Approve / Reject                                                        */
   /* ---------------------------------------------------------------------- */
 
-  static async approveInvoice(id, user, session, entityAccess) {
+  static async approveInvoice(id, user, session, dataAccess) {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
     if (!invoice) throw new Error("Invoice not found");
-    assertEntityScope(invoice, entityAccess);
+    assertDataScope(invoice, dataAccess);
     if (invoice.status !== INVOICE_STATUS.PENDING) {
       throw new Error("Only a pending invoice can be approved");
     }
@@ -490,10 +487,10 @@ export default class StockInvoiceService {
     return invoice;
   }
 
-  static async rejectInvoice(id, reason, user, session, entityAccess) {
+  static async rejectInvoice(id, reason, user, session, dataAccess) {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
     if (!invoice) throw new Error("Invoice not found");
-    assertEntityScope(invoice, entityAccess);
+    assertDataScope(invoice, dataAccess);
     if (invoice.status !== INVOICE_STATUS.PENDING) {
       throw new Error("Only a pending invoice can be rejected");
     }
@@ -529,12 +526,12 @@ export default class StockInvoiceService {
   // type/pdf, per-line GST rate, product tracking method) for the Invoice
   // Approval "Review" full page — same "resolve at read-time, no schema
   // change" posture as getBoard's poNumber/orderedQty.
-  static async getInvoiceById(id, scopeCtx, entityAccess) {
+  static async getInvoiceById(id, dataAccess) {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).lean();
-    if (!invoice || !isWithinBranchScope(invoice, scopeCtx, "branchId")) {
+    if (!invoice) {
       throw new Error("Invoice not found");
     }
-    assertEntityScope(invoice, entityAccess);
+    assertDataScope(invoice, dataAccess);
 
     const po = invoice.poId
       ? await StockPurchaseOrderModel.findOne({ _id: invoice.poId })
@@ -572,7 +569,7 @@ export default class StockInvoiceService {
 
   // Serves both the Tracking Order card's invoice table (pass trackingOrderId,
   // no status tab) and the Invoice Approval page (status tab + filters).
-  static async getBoard(query = {}, scopeCtx, entityAccess) {
+  static async getBoard(query = {}, dataAccess) {
     const { trackingOrderId, status, search, vendorId, categoryId, productId, dateFrom, dateTo } = query;
 
     const filter = { isActive: true };
@@ -580,8 +577,8 @@ export default class StockInvoiceService {
     if (vendorId) filter.vendorId = vendorId;
     if (categoryId) filter["lines.categoryId"] = categoryId;
     if (productId) filter["lines.productDefinitionId"] = productId;
-    applyBranchScopeToFilter(filter, scopeCtx, "branchId");
-    applyEntityScopeToFilter(filter, entityAccess, ENTITY_FIELD, { includeUnassigned: false });
+    
+    applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
     if (dateFrom || dateTo) {
       filter.invoiceDate = {};
       if (dateFrom) filter.invoiceDate.$gte = new Date(dateFrom);

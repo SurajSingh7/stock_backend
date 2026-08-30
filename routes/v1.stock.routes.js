@@ -36,12 +36,16 @@ router.post("/access-control/role-permissions", authenticate, requireAdmin, Stoc
 router.get("/access-control/role-permissions", authenticate, requireAdmin, StockAccessControlController.getRolePermissions);
 router.post("/access-control/user-overrides", authenticate, requireAdmin, StockAccessControlController.setUserOverride);
 router.get("/access-control/user-overrides", authenticate, requireAdmin, StockAccessControlController.getUserOverrides);
-router.post("/access-control/scope-policies", authenticate, requireAdmin, StockAccessControlController.setScopePolicy);
-router.get("/access-control/scope-policies", authenticate, requireAdmin, StockAccessControlController.getScopePolicies);
-// Entity access is per-user (no moduleId), hence its own pair of routes
-// rather than living inside scope-policies.
-router.get("/access-control/entity-access", authenticate, requireAdmin, StockAccessControlController.getEntityAccess);
-router.post("/access-control/entity-access", authenticate, requireAdmin, StockAccessControlController.setEntityAccess);
+// Data access — all three dimensions in one payload. Omit moduleId for the
+// user's global configuration; pass one to override only that module.
+router.get("/access-control/data-scopes", authenticate, requireAdmin, StockAccessControlController.getDataScopes);
+router.post("/access-control/data-scopes", authenticate, requireAdmin, StockAccessControlController.setDataScope);
+router.post("/access-control/data-scopes/clear-module", authenticate, requireAdmin, StockAccessControlController.clearModuleDataScope);
+
+// Department restriction — narrows what a role granted, never widens it.
+router.get("/access-control/department-restrictions", authenticate, requireAdmin, StockAccessControlController.getDepartmentRestrictions);
+router.post("/access-control/department-restrictions", authenticate, requireAdmin, StockAccessControlController.setDepartmentRestriction);
+router.post("/access-control/department-restrictions/clear", authenticate, requireAdmin, StockAccessControlController.clearDepartmentRestriction);
 router.post("/access-control/delegate", authenticate, requireAdmin, StockAccessControlController.delegateAccess);
 
 // ─── Audit Log ───────────────────────────────────────────────────────────────

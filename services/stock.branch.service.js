@@ -1,7 +1,9 @@
 import mongoose from "mongoose";
 import StockBranchModel from "../models/stock.branch.model.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
-import { applyBranchScopeToFilter, isWithinBranchScope } from "../helpers/branch.scope.helper.js";
+import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
+
+const MODULE_KEY = "branches";
 
 const ENTITY_TYPE = "branches";
 
@@ -47,7 +49,7 @@ export default class StockBranchService {
     return branch;
   }
 
-  static async getAllBranches({ skip, limit, search, showInactive }, scopeCtx) {
+  static async getAllBranches({ skip, limit, search, showInactive }, dataAccess) {
     const filter = showInactive ? {} : { isActive: true };
     if (search) {
       filter.$or = [
@@ -56,7 +58,7 @@ export default class StockBranchService {
       ];
     }
     // The branch record itself IS the branch, so it's scoped on its own _id.
-    applyBranchScopeToFilter(filter, scopeCtx, "_id");
+    applyDataScope(filter, dataAccess, MODULE_KEY);
 
     const [data, total] = await Promise.all([
       StockBranchModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
@@ -87,8 +89,8 @@ export default class StockBranchService {
   //
   // Returns [] for a branchless user on the default OWN_BRANCH scope. That is
   // the intended answer, not an error: callers surface it as "no branch assigned".
-  static async getScopedActiveBranches(scopeCtx) {
-    const filter = applyBranchScopeToFilter({ isActive: true }, scopeCtx, "_id");
+  static async getScopedActiveBranches(dataAccess) {
+    const filter = applyDataScope({ isActive: true }, dataAccess, MODULE_KEY);
     return StockBranchModel.find(filter).sort({ name: 1 }).lean();
   }
 
@@ -96,23 +98,23 @@ export default class StockBranchService {
   // outside the writer's scope produces a row its own author can no longer
   // read back (every list is branch-scoped on that same field), so reject it
   // up front rather than writing it silently.
-  static async assertBranchInScope(branchId, scopeCtx, session) {
+  static async assertBranchInScope(branchId, dataAccess, session) {
     if (!branchId) throw new Error("Receiving branch is required");
     if (!mongoose.isValidObjectId(branchId)) throw new Error("Invalid branch selected");
 
     const branch = await StockBranchModel.findOne({ _id: branchId, isActive: true })
       .lean()
       .session(session ?? null);
-    if (!branch || !isWithinBranchScope(branch, scopeCtx, "_id")) {
+    if (!branch || !isWithinDataScope(branch, dataAccess, MODULE_KEY)) {
       // Worded to hit the 403 branch of errorResponseHandler.
       throw new Error("You do not have permission to use the selected branch");
     }
     return branch._id;
   }
 
-  static async getBranchById(id, scopeCtx) {
+  static async getBranchById(id, dataAccess) {
     const branch = await StockBranchModel.findOne({ _id: id, isActive: true }).lean();
-    if (!branch || !isWithinBranchScope(branch, scopeCtx, "_id")) {
+    if (!branch || !isWithinDataScope(branch, dataAccess, MODULE_KEY)) {
       throw new Error("Branch not found");
     }
     return branch;

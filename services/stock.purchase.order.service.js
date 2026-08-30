@@ -12,9 +12,9 @@ import StockNotificationService from "./stock.notification.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
-import { applyEntityScopeToFilter, isWithinEntityScope } from "../helpers/entity.scope.helper.js";
+import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 
-const ENTITY_FIELD = "buyerEntity.alias";
+const SCOPE_MODULE_KEY = "purchase-orders";
 
 // Guard for every by-id read AND every mutation. Throws the resource's normal
 // "not found" rather than a 403 — a 403 would confirm that a PO belonging to
@@ -23,8 +23,8 @@ const ENTITY_FIELD = "buyerEntity.alias";
 // refuses until the tracking order has one), so a blank alias here would be
 // corrupt data, not pending work. The board is different: it is assembled from
 // tracking orders and legitimately includes rows that have no PO yet.
-const assertEntityScope = (po, entityAccess) => {
-  if (!isWithinEntityScope(po, entityAccess, ENTITY_FIELD, { allowUnassigned: false })) {
+const assertDataScope = (po, dataAccess) => {
+  if (!isWithinDataScope(po, dataAccess, SCOPE_MODULE_KEY)) {
     throw new Error("Purchase order not found");
   }
 };
@@ -139,7 +139,7 @@ export default class StockPurchaseOrderService {
   /* ---------------------------------------------------------------------- */
 
 
-  static async getBoard(query = {}, entityAccess) {
+  static async getBoard(query = {}, dataAccess) {
     const { search, vendorId, categoryId, productId, entityAlias, status, dateFrom, dateTo } = query;
 
     const qFilter = {
@@ -321,7 +321,7 @@ export default class StockPurchaseOrderService {
       // so the scope is applied to the built row rather than to a Mongo filter.
       // Rows with no entity yet stay visible — that is the ENTITY_PENDING work
       // someone still has to pick up.
-      if (!isWithinEntityScope(row, entityAccess, "entityAlias")) return false;
+      if (!isWithinDataScope({ buyerEntity: { alias: row.entityAlias }, createdBy: row.createdBy }, dataAccess, SCOPE_MODULE_KEY)) return false;
       if (categoryId && !row._catIds.includes(String(categoryId))) return false;
       if (productId && !row._prodIds.includes(String(productId))) return false;
       if (t) {
@@ -444,7 +444,7 @@ export default class StockPurchaseOrderService {
   /* Create — one PO from the given quotation item ids (all same vendor)     */
   /* ---------------------------------------------------------------------- */
 
-  static async createPurchaseOrder(body, user, session, entityAccess) {
+  static async createPurchaseOrder(body, user, session, dataAccess) {
     const {
       sourceQuotationId,
       vendorId,
@@ -483,7 +483,7 @@ export default class StockPurchaseOrderService {
     }
     // The entity is already fixed on the tracking order by this point, so a
     // PO can only be raised by someone allowed to work on that entity.
-    assertEntityScope(tracking, entityAccess);
+    assertDataScope(tracking, dataAccess);
     const buyerEntity = tracking.buyerEntity;
 
     // Auto-pick terms: a vendor-specific ACTIVE term wins, else the single
@@ -662,7 +662,7 @@ export default class StockPurchaseOrderService {
   /* Read                                                                    */
   /* ---------------------------------------------------------------------- */
 
-  static async getAllPurchaseOrders(query, entityAccess) {
+  static async getAllPurchaseOrders(query, dataAccess) {
     const { search, status, vendorId, sourceQuotationId } = query;
     const { skip, limit, page } = paginate(query);
 
@@ -674,7 +674,7 @@ export default class StockPurchaseOrderService {
       const regex = new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       filter.$or = [{ poNumber: regex }, { vendorName: regex }];
     }
-    applyEntityScopeToFilter(filter, entityAccess, ENTITY_FIELD, { includeUnassigned: false });
+    applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
 
     const [data, total] = await Promise.all([
       StockPurchaseOrderModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
@@ -683,10 +683,10 @@ export default class StockPurchaseOrderService {
     return paginateReturn(data, total, page, limit);
   }
 
-  static async getPurchaseOrderById(id, entityAccess) {
+  static async getPurchaseOrderById(id, dataAccess) {
     const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).lean();
     if (!po) throw new Error("Purchase order not found");
-    assertEntityScope(po, entityAccess);
+    assertDataScope(po, dataAccess);
 
     // trackingMethod/unit aren't snapshotted on the PO line item — resolve
     // them so the view/edit screens can show the actual saved unit next to
@@ -708,10 +708,10 @@ export default class StockPurchaseOrderService {
   /* Edit (GENERATED/REJECTED only) → regenerate PDF                         */
   /* ---------------------------------------------------------------------- */
 
-  static async updatePurchaseOrder(id, body, user, session, entityAccess) {
+  static async updatePurchaseOrder(id, body, user, session, dataAccess) {
     const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!po) throw new Error("Purchase order not found");
-    assertEntityScope(po, entityAccess);
+    assertDataScope(po, dataAccess);
     if (![PO_STATUS.GENERATED, PO_STATUS.REJECTED].includes(po.status)) {
       throw new Error("Only a generated or rejected PO can be edited");
     }
@@ -748,10 +748,10 @@ export default class StockPurchaseOrderService {
   /* Approve / Reject                                                        */
   /* ---------------------------------------------------------------------- */
 
-  static async approvePurchaseOrder(id, user, session, entityAccess) {
+  static async approvePurchaseOrder(id, user, session, dataAccess) {
     const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!po) throw new Error("Purchase order not found");
-    assertEntityScope(po, entityAccess);
+    assertDataScope(po, dataAccess);
     if (![PO_STATUS.GENERATED, PO_STATUS.REJECTED].includes(po.status)) {
       throw new Error("Only a generated or rejected PO can be approved");
     }
@@ -769,10 +769,10 @@ export default class StockPurchaseOrderService {
     return po;
   }
 
-  static async rejectPurchaseOrder(id, reason, user, session, entityAccess) {
+  static async rejectPurchaseOrder(id, reason, user, session, dataAccess) {
     const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!po) throw new Error("Purchase order not found");
-    assertEntityScope(po, entityAccess);
+    assertDataScope(po, dataAccess);
     if (po.status !== PO_STATUS.GENERATED) {
       throw new Error("Only a generated PO can be rejected");
     }
@@ -798,10 +798,10 @@ export default class StockPurchaseOrderService {
   /* also what turns "Send Mail" into "Resend Mail" and blocks deletion.     */
   /* ---------------------------------------------------------------------- */
 
-  static async sendMail(id, body, user, session, entityAccess) {
+  static async sendMail(id, body, user, session, dataAccess) {
     const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!po) throw new Error("Purchase order not found");
-    assertEntityScope(po, entityAccess);
+    assertDataScope(po, dataAccess);
     // Approved covers both the first send and every resend — a PO stays
     // resendable indefinitely (see PurchaseOrderPage buildRowActions).
     if (po.status !== PO_STATUS.APPROVED) {
@@ -871,10 +871,10 @@ export default class StockPurchaseOrderService {
   /* Soft delete — frees the quotation-item lock                             */
   /* ---------------------------------------------------------------------- */
 
-  static async softDeletePurchaseOrder(id, user, session, entityAccess) {
+  static async softDeletePurchaseOrder(id, user, session, dataAccess) {
     const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!po) throw new Error("Purchase order not found");
-    assertEntityScope(po, entityAccess);
+    assertDataScope(po, dataAccess);
     // With no SENT status left, "already gone to the vendor" is whatever the
     // tracking order recorded when the mail went out (emailed OR marked
     // Manual) — po.emailedAt alone would miss the manual hand-off.

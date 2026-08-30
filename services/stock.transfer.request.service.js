@@ -5,7 +5,9 @@ import StockProductDefinitionModel from "../models/stock.product.definition.mode
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import { paginate } from "../helpers/pagination.helper.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
-import { resolveBranchIds, isWithinBranchScope } from "../helpers/branch.scope.helper.js";
+import { isWithinDataScope, resolveDimensionAllowList } from "../helpers/data.scope.helper.js";
+
+const SCOPE_MODULE_KEY = "transfer-requests";
 import {
   TRACKING_METHODS,
   TRANSFER_REQUEST_STATUS,
@@ -43,17 +45,17 @@ export default class StockTransferRequestService {
   // `branches:READ`: needing a branch list to raise a transfer must not
   // force branch-master permission (and the nav entry it unlocks) on
   // ordinary branch staff.
-  static async getFormBranches(scopeCtx) {
+  static async getFormBranches(dataAccess) {
     const branches = await StockBranchModel.find({ isActive: true }).sort({ name: 1 }).lean();
 
     const activeIds = new Set(branches.map((l) => String(l._id)));
-    const branchIds = resolveBranchIds(scopeCtx);
+    const branchIds = resolveDimensionAllowList(dataAccess, "branch");
     // null = unrestricted (admin / ALL_BRANCHES). Otherwise intersect, so a
     // stale or deactivated branch id never resolves to a usable branch.
     const scopedIds =
       branchIds === null ? [...activeIds] : branchIds.filter((id) => activeIds.has(id));
 
-    const ownBranchId = scopeCtx?.branchId ? String(scopeCtx.branchId) : null;
+    const ownBranchId = dataAccess?.branchId ? String(dataAccess.branchId) : null;
     // Own branch when it is in scope; otherwise only an unambiguous single
     // scoped branch counts — never an arbitrary pick out of several.
     const defaultBranchId = scopedIds.includes(ownBranchId)
@@ -69,7 +71,7 @@ export default class StockTransferRequestService {
   /* Create — Branch A requests N units from Branch B                        */
   /* ---------------------------------------------------------------------- */
 
-  static async createTransferRequest(body, user, session, scopeCtx) {
+  static async createTransferRequest(body, user, session, dataAccess) {
     const { requestingBranchId, sourceBranchId, lines, remarks } = body;
 
     // Sequential, not Promise.all — two operations can't run concurrently on
@@ -82,7 +84,7 @@ export default class StockTransferRequestService {
     // branch would put a request on their board that they never raised; the
     // source side stays open, since asking another branch for stock is the
     // entire point of the feature.
-    if (!isWithinBranchScope(requestingBranch, scopeCtx, "_id")) {
+    if (!isWithinDataScope(requestingBranch, dataAccess, "branches")) {
       throw new Error("You do not have permission to raise a request for this branch");
     }
 
@@ -137,7 +139,7 @@ export default class StockTransferRequestService {
   /* List — powers "My Requests" / "Requests to Me" / "All" tabs             */
   /* ---------------------------------------------------------------------- */
 
-  static async getBoard(query = {}, scopeCtx) {
+  static async getBoard(query = {}, dataAccess) {
     const { branchId, role, status, search } = query;
 
     const filter = { isActive: true };
@@ -147,7 +149,7 @@ export default class StockTransferRequestService {
     // one of the caller's allowed branches. Explicit ObjectId cast: this
     // filter also feeds the counts .aggregate() below, which — unlike
     // .find() — never auto-casts string ids (see branchObjId above).
-    const scopedBranchIds = resolveBranchIds(scopeCtx);
+    const scopedBranchIds = resolveDimensionAllowList(dataAccess, "branch");
     if (scopedBranchIds !== null) {
       const scopedObjIds = scopedBranchIds.map((id) => new mongoose.Types.ObjectId(id));
       and.push({
@@ -211,13 +213,13 @@ export default class StockTransferRequestService {
     };
   }
 
-  static async getTransferRequestById(id, scopeCtx) {
+  static async getTransferRequestById(id, dataAccess) {
     const request = await StockTransferRequestModel.findOne({ _id: id, isActive: true })
       .populate({ path: "requestingBranchId", select: "name code city state branchRole" })
       .populate({ path: "sourceBranchId", select: "name code city state branchRole" })
       .populate({ path: "lines.transferredInventoryItemIds", select: "fieldValues quantity" })
       .lean();
-    if (!request || !isWithinBranchScope(request, scopeCtx, ["requestingBranchId", "sourceBranchId"])) {
+    if (!request || !isWithinDataScope(request, dataAccess, SCOPE_MODULE_KEY)) {
       throw new Error("Transfer request not found");
     }
     return request;

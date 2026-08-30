@@ -8,8 +8,6 @@ import {
   validateUpdateInvoice,
   validateRejectInvoice,
 } from "../validators/stock.validator.js";
-import { scopeCtxFromReq } from "../helpers/branch.scope.helper.js";
-import { entityCtxFromReq } from "../helpers/entity.scope.helper.js";
 
 const log = getLogger(import.meta.url);
 
@@ -42,8 +40,8 @@ export default class StockInvoiceController {
         body,
         actingUser(req),
         session,
-        scopeCtxFromReq(req),
-        entityCtxFromReq(req)
+        req.dataAccess,
+        req.dataAccess
       );
       await session.commitTransaction();
       log.info("Invoice created");
@@ -62,7 +60,7 @@ export default class StockInvoiceController {
   // scoped to the caller — see StockInvoiceService.getReceivingBranches.
   static async getReceivingBranches(req, res) {
     try {
-      const data = await StockInvoiceService.getReceivingBranches(scopeCtxFromReq(req));
+      const data = await StockInvoiceService.getReceivingBranches(req.dataAccess);
       successResponseHandler(res, data, "Receiving branches fetched successfully");
     } catch (error) {
       log.error("Error fetching receiving branches", error);
@@ -72,7 +70,7 @@ export default class StockInvoiceController {
 
   static async getBoard(req, res) {
     try {
-      const data = await StockInvoiceService.getBoard(req.query, scopeCtxFromReq(req), entityCtxFromReq(req));
+      const data = await StockInvoiceService.getBoard(req.query, req.dataAccess);
       successResponseHandler(res, data, "Invoices fetched successfully");
     } catch (error) {
       log.error("Error fetching invoices board", error);
@@ -82,7 +80,7 @@ export default class StockInvoiceController {
 
   static async getInvoiceById(req, res) {
     try {
-      const data = await StockInvoiceService.getInvoiceById(req.params.id, scopeCtxFromReq(req), entityCtxFromReq(req));
+      const data = await StockInvoiceService.getInvoiceById(req.params.id, req.dataAccess);
       successResponseHandler(res, data, "Invoice fetched successfully");
     } catch (error) {
       log.error("Error fetching invoice", error);
@@ -103,8 +101,8 @@ export default class StockInvoiceController {
         body,
         actingUser(req),
         session,
-        scopeCtxFromReq(req),
-        entityCtxFromReq(req)
+        req.dataAccess,
+        req.dataAccess
       );
       await session.commitTransaction();
       log.info("Invoice updated");
@@ -123,7 +121,7 @@ export default class StockInvoiceController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const data = await StockInvoiceService.approveInvoice(req.params.id, actingUser(req), session, entityCtxFromReq(req));
+      const data = await StockInvoiceService.approveInvoice(req.params.id, actingUser(req), session, req.dataAccess);
       await session.commitTransaction();
       log.info("Invoice approved");
       successResponseHandler(res, data, "Invoice approved");
@@ -146,7 +144,7 @@ export default class StockInvoiceController {
         req.body.reason,
         actingUser(req),
         session,
-        entityCtxFromReq(req)
+        req.dataAccess
       );
       await session.commitTransaction();
       log.info("Invoice rejected");

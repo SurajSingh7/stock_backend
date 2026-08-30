@@ -8,7 +8,6 @@ import {
   validateBulkCreateInventoryItems,
   validateUpdateItemStatus,
 } from "../validators/stock.validator.js";
-import { scopeCtxFromReq } from "../helpers/branch.scope.helper.js";
 
 const log = getLogger(import.meta.url);
 
@@ -76,7 +75,7 @@ export default class StockInventoryItemController {
           search,
           showInactive: showInactive === "true",
         },
-        scopeCtxFromReq(req)
+        req.dataAccess
       );
       successResponseHandler(
         res,
@@ -102,7 +101,7 @@ export default class StockInventoryItemController {
           productDefinitionId,
           branchId,
         },
-        scopeCtxFromReq(req)
+        req.dataAccess
       );
       successResponseHandler(
         res,
@@ -129,7 +128,7 @@ export default class StockInventoryItemController {
           branchId,
           stockStatus,
         },
-        scopeCtxFromReq(req)
+        req.dataAccess
       );
       successResponseHandler(
         res,
@@ -155,7 +154,7 @@ export default class StockInventoryItemController {
 
   static async getInventoryItemById(req, res) {
     try {
-      const data = await StockInventoryItemService.getInventoryItemById(req.params.id, scopeCtxFromReq(req));
+      const data = await StockInventoryItemService.getInventoryItemById(req.params.id, req.dataAccess);
       successResponseHandler(res, data, "Inventory item fetched successfully");
     } catch (error) {
       log.error("Error fetching inventory item", error);

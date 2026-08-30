@@ -8,7 +8,9 @@ import { paginate } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import { QUOTATION_STATUS, TRACKING_STATUS, INVOICE_STATUS } from "../constants/stock.enums.js";
-import { isWithinEntityScope, resolveEntityAliases } from "../helpers/entity.scope.helper.js";
+import { isWithinDataScope, resolveDimensionAllowList } from "../helpers/data.scope.helper.js";
+
+const SCOPE_MODULE_KEY = "tracking-orders";
 
 const log = getLogger(import.meta.url);
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -48,7 +50,7 @@ export default class StockTrackingOrderService {
   /* tracking statuses, unlike the PO board which only shows PO_PENDING+)    */
   /* ---------------------------------------------------------------------- */
 
-  static async getBoard(query = {}, entityAccess) {
+  static async getBoard(query = {}, dataAccess) {
     const { search, vendorId, status, dateFrom, dateTo } = query;
 
     const qFilter = {
@@ -222,7 +224,7 @@ export default class StockTrackingOrderService {
       if (vendorId && String(row.vendorId) !== String(vendorId)) return false;
       // Rows still at ENTITY_PENDING have no alias and stay visible to
       // everyone — they are precisely the ones waiting to be assigned.
-      if (!isWithinEntityScope(row, entityAccess, "entityAlias")) return false;
+      if (!isWithinDataScope({ buyerEntity: { alias: row.entityAlias } }, dataAccess, SCOPE_MODULE_KEY)) return false;
       if (t) {
         const hit =
           (quotationNumber || "").toLowerCase().includes(t) ||
@@ -278,7 +280,7 @@ export default class StockTrackingOrderService {
   /* + Add Entity — ENTITY_PENDING → PO_PENDING                              */
   /* ---------------------------------------------------------------------- */
 
-  static async addEntity(id, payload, actor, session, entityAccess) {
+  static async addEntity(id, payload, actor, session, dataAccess) {
     const tracking = await StockTrackingOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!tracking) throw new Error("Tracking order not found");
     if (tracking.status !== TRACKING_STATUS.ENTITY_PENDING) {
@@ -289,7 +291,7 @@ export default class StockTrackingOrderService {
     // matters is the entity being assigned. Without this, an entity-restricted
     // user could assign an entity they cannot work on and immediately lose
     // sight of the row they just handled.
-    const allowedAliases = resolveEntityAliases(entityAccess);
+    const allowedAliases = resolveDimensionAllowList(dataAccess, "entity");
     const incomingAlias = String(payload.alias || "").toUpperCase();
     if (allowedAliases !== null && !allowedAliases.includes(incomingAlias)) {
       throw new Error("You are not allowed to assign this entity");
@@ -317,10 +319,10 @@ export default class StockTrackingOrderService {
   /* Not Required                                                            */
   /* ---------------------------------------------------------------------- */
 
-  static async markNotRequired(id, reason, actor, session, entityAccess) {
+  static async markNotRequired(id, reason, actor, session, dataAccess) {
     const tracking = await StockTrackingOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!tracking) throw new Error("Tracking order not found");
-    if (!isWithinEntityScope(tracking, entityAccess, "buyerEntity.alias")) {
+    if (!isWithinDataScope(tracking, dataAccess, SCOPE_MODULE_KEY)) {
       throw new Error("Tracking order not found");
     }
     if (![TRACKING_STATUS.ENTITY_PENDING, TRACKING_STATUS.PO_PENDING].includes(tracking.status)) {
@@ -350,10 +352,10 @@ export default class StockTrackingOrderService {
   /* (read-only PO Number/Vendor) and product tabs (one per PO line item).   */
   /* ---------------------------------------------------------------------- */
 
-  static async getDetail(id, entityAccess) {
+  static async getDetail(id, dataAccess) {
     const tracking = await StockTrackingOrderModel.findOne({ _id: id, isActive: true }).lean();
     if (!tracking) throw new Error("Tracking order not found");
-    if (!isWithinEntityScope(tracking, entityAccess, "buyerEntity.alias")) {
+    if (!isWithinDataScope(tracking, dataAccess, SCOPE_MODULE_KEY)) {
       throw new Error("Tracking order not found");
     }
 

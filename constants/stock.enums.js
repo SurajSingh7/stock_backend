@@ -197,26 +197,28 @@ export const CONSUMPTION_REF_TYPE_ARRAY = Object.values(CONSUMPTION_REF_TYPE);
 export const MAIL_MODE = { SENT: "SENT", MANUAL: "MANUAL" };
 export const MAIL_MODE_ARRAY = Object.values(MAIL_MODE);
 
-// ─── Access Control ─────────────────────────────────────────────────────────
-// Determines which records a user can see/act on within a module, on top of
-// whatever actions their role+override already grant them.
-export const ACCESS_SCOPE = {
-  OWN_BRANCH: "OWN_BRANCH",
-  ALL_BRANCHES: "ALL_BRANCHES",
-  SPECIFIC_BRANCHES: "SPECIFIC_BRANCHES", // uses allowedBranchIds
-};
-export const ACCESS_SCOPE_ARRAY = Object.values(ACCESS_SCOPE);
-
-// Which internal company's ("entity") paperwork a user may see and act on.
-// Held per USER, not per module — "Ramesh works on GTEL" is a fact about the
-// person, so it cannot drift between Purchase Orders and Invoices the way a
-// per-module setting could.
+// ─── Data Access Control ────────────────────────────────────────────────────
+// WHICH RECORDS a user may see and act on. Kept entirely separate from the
+// action vocabulary above: actions answer "what may they do", these answer
+// "to whose rows".
 //
-// Deliberately only two states, unlike ACCESS_SCOPE: there is no "own entity",
-// because a user has no entity of their own the way they have a branch.
+// Three independent dimensions (branch / entity / record ownership), each
+// resolved from the user's global data-access row, optionally overridden per
+// module. They combine with AND — a record must pass every dimension that
+// applies to its model (see config/data.scope.registry.js).
+export const DATA_SCOPE = {
+  OWN: "OWN",           // resolved from an attribute on the user
+  SELECTED: "SELECTED", // an explicit allow-list
+  ALL: "ALL",           // unrestricted, and dynamically so
+};
+export const DATA_SCOPE_ARRAY = Object.values(DATA_SCOPE);
+
+// Entity deliberately has no OWN: a user has no entity of their own the way
+// they have a branch, and no such field exists on the HRMS Login. Access is
+// always either an explicit list or everything.
 export const ENTITY_SCOPE = {
-  ALL_ENTITIES: "ALL_ENTITIES",
-  SPECIFIC_ENTITIES: "SPECIFIC_ENTITIES", // uses allowedEntityAliases
+  SELECTED: "SELECTED",
+  ALL: "ALL",
 };
 export const ENTITY_SCOPE_ARRAY = Object.values(ENTITY_SCOPE);
 

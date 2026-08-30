@@ -4,7 +4,6 @@ import { getLogger } from "../helpers/logger.helper.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import StockBranchService from "../services/stock.branch.service.js";
 import { validateCreateBranch, validateUpdateBranch } from "../validators/stock.validator.js";
-import { scopeCtxFromReq } from "../helpers/branch.scope.helper.js";
 
 const log = getLogger(import.meta.url);
 
@@ -38,7 +37,7 @@ export default class StockBranchController {
           search,
           showInactive: showInactive === "true",
         },
-        scopeCtxFromReq(req)
+        req.dataAccess
       );
       successResponseHandler(res, paginateReturn(data, total, page, limit), "Branches fetched successfully");
     } catch (error) {
@@ -59,7 +58,7 @@ export default class StockBranchController {
 
   static async getBranchById(req, res) {
     try {
-      const data = await StockBranchService.getBranchById(req.params.id, scopeCtxFromReq(req));
+      const data = await StockBranchService.getBranchById(req.params.id, req.dataAccess);
       successResponseHandler(res, data, "Branch fetched successfully");
     } catch (error) {
       log.error("Error fetching branch", error);

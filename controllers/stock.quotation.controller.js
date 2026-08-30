@@ -43,7 +43,7 @@ export default class StockQuotationController {
   /* --------------------------------- Read -------------------------------- */
   static async getAllQuotations(req, res) {
     try {
-      const data = await StockQuotationService.getAllQuotations(req.query);
+      const data = await StockQuotationService.getAllQuotations(req.query, req.dataAccess);
       successResponseHandler(res, data, "Quotations fetched");
     } catch (error) {
       errorResponseHandler(res, error);
@@ -52,7 +52,7 @@ export default class StockQuotationController {
 
   static async getStatusSummary(req, res) {
     try {
-      const summary = await StockQuotationService.getStatusSummary();
+      const summary = await StockQuotationService.getStatusSummary(req.dataAccess);
       successResponseHandler(res, summary, "Status summary fetched");
     } catch (error) {
       errorResponseHandler(res, error);
@@ -61,7 +61,7 @@ export default class StockQuotationController {
 
   static async getQuotationById(req, res) {
     try {
-      const quotation = await StockQuotationService.getQuotationById(req.params.id);
+      const quotation = await StockQuotationService.getQuotationById(req.params.id, req.dataAccess);
       successResponseHandler(res, quotation, "Quotation fetched");
     } catch (error) {
       errorResponseHandler(res, error);

@@ -11,6 +11,7 @@ import StockTrackingOrderService from "./stock.tracking.order.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
+import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import {
   QUOTATION_STATUS,
@@ -23,6 +24,8 @@ const ENTITY_TYPE = "quotations";
 const escapeRegex = (str = "") =>
   String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+const SCOPE_MODULE_KEY = "quotations";
 
 export default class StockQuotationService {
   /* ---------------------------------------------------------------------- */
@@ -436,7 +439,7 @@ export default class StockQuotationService {
   /* Read                                                                    */
   /* ---------------------------------------------------------------------- */
 
-  static async getAllQuotations(query) {
+  static async getAllQuotations(query, dataAccess) {
     const { search, status, categoryId, vendorId, productId, dateFrom, dateTo } = query;
     const { skip, limit, page } = paginate(query);
 
@@ -445,6 +448,7 @@ export default class StockQuotationService {
     if (categoryId) filter.categoryIds = categoryId;
     if (vendorId) filter["items.vendorId"] = vendorId;
     if (productId) filter["items.productDefinitionId"] = productId;
+    applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
     if (search) {
       const regex = new RegExp(escapeRegex(search.trim()), "i");
       filter.$or = [
@@ -476,9 +480,9 @@ export default class StockQuotationService {
     return paginateReturn(data, total, page, limit);
   }
 
-  static async getStatusSummary() {
+  static async getStatusSummary(dataAccess) {
     const rows = await StockQuotationModel.aggregate([
-      { $match: { isActive: true } },
+      { $match: applyDataScope({ isActive: true }, dataAccess, SCOPE_MODULE_KEY) },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
     const summary = {
@@ -495,13 +499,15 @@ export default class StockQuotationService {
     return summary;
   }
 
-  static async getQuotationById(id) {
+  static async getQuotationById(id, dataAccess) {
     const quotation = await StockQuotationModel.findOne({ _id: id, isActive: true })
       .populate("items.productDefinitionId", "name trackingMethod unit")
       .populate("items.vendorId", "name")
       .populate("items.categoryId", "name")
       .lean();
-    if (!quotation) throw new Error("Quotation not found");
+    if (!quotation || !isWithinDataScope(quotation, dataAccess, SCOPE_MODULE_KEY)) {
+      throw new Error("Quotation not found");
+    }
     return quotation;
   }
 

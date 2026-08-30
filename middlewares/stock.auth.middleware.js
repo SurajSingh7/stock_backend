@@ -96,6 +96,11 @@ export async function authenticate(req, res, next) {
       phone: hrmsUser.personal?.phone,
       roleId: hrmsUser.role?._id,
       roleName: hrmsUser.role?.name,
+      // HRMS has always returned department in the user context; captured here
+      // because the permission layer intersects role actions with the
+      // department's restriction (see stock.permission.middleware.js).
+      departmentId: hrmsUser.department?._id ?? null,
+      departmentName: hrmsUser.department?.name ?? "",
       branchId,
       isAdmin: hrmsUser.role?._id?.toString() === adminRoleId,
       ipAddress: req.ip || req.connection?.remoteAddress || null,
