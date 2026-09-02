@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { INPUT_TYPES_ARRAY, TRACKING_METHODS_ARRAY } from "../constants/stock.enums.js";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const stockFieldDefinitionSchema = new mongoose.Schema(
   {
@@ -74,6 +75,9 @@ stockFieldDefinitionSchema.index({ code: 1 }, { unique: true });
 stockFieldDefinitionSchema.index({ isActive: 1 });
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.
+// who created / last touched this — see the plugin for why it is a hook
+stockFieldDefinitionSchema.plugin(actorStampPlugin);
+
 const StockFieldDefinitionModel = mongoose.model(
   "field_definitions",
   stockFieldDefinitionSchema,

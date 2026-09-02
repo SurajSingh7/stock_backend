@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockBranchModel from "../models/stock.branch.model.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
@@ -6,6 +7,14 @@ import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.
 const MODULE_KEY = "branches";
 
 const ENTITY_TYPE = "branches";
+
+// Guard for every mutation. Throws the resource's normal "not found" rather
+// than a 403 — a 403 would confirm a branch outside the caller's scope exists.
+const assertDataScope = (branch, dataAccess) => {
+  if (!isWithinDataScope(branch, dataAccess, MODULE_KEY)) {
+    throw new Error("Branch not found");
+  }
+};
 
 export default class StockBranchService {
   static async assertCodeNotDuplicate({ code, session, excludeId = null }) {
@@ -120,9 +129,10 @@ export default class StockBranchService {
     return branch;
   }
 
-  static async updateBranch(id, body, actor, session) {
+  static async updateBranch(id, body, actor, session, dataAccess) {
     const branch = await StockBranchModel.findOne({ _id: id, isActive: true }).session(session);
     if (!branch) throw new Error("Branch not found");
+    assertDataScope(branch, dataAccess);
     const before = branch.toObject();
 
     if (body.code !== undefined && String(body.code).trim().toUpperCase() !== branch.code) {
@@ -152,14 +162,15 @@ export default class StockBranchService {
     return branch;
   }
 
-  static async softDeleteBranch(id, actor, session) {
+  static async softDeleteBranch(id, actor, session, dataAccess) {
     const branch = await StockBranchModel.findOne({ _id: id, isActive: true }).session(session);
     if (!branch) throw new Error("Branch not found");
+    assertDataScope(branch, dataAccess);
     const before = branch.toObject();
 
     branch.isActive = false;
     branch.deletedAt = new Date();
-    branch.deletedBy = actor?._id ?? null;
+    branch.deletedBy = actorSnapshot(actor);
     await branch.save({ session });
 
     await StockAuditLogService.recordAudit({
@@ -174,9 +185,10 @@ export default class StockBranchService {
     return branch;
   }
 
-  static async restoreBranch(id, actor, session) {
+  static async restoreBranch(id, actor, session, dataAccess) {
     const branch = await StockBranchModel.findOne({ _id: id }).session(session);
     if (!branch) throw new Error("Branch not found");
+    assertDataScope(branch, dataAccess);
     if (branch.isActive) throw new Error("Branch is already active");
     const before = branch.toObject();
 

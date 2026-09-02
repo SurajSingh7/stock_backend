@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
@@ -18,6 +19,15 @@ import {
 } from "../constants/stock.enums.js";
 
 const ENTITY_TYPE = "inventory-items";
+
+// Guard for every by-id read AND every mutation. Throws the resource's normal
+// "not found" rather than a 403 — a 403 would confirm that an item outside the
+// caller's branch exists, which is exactly what the scope is meant to hide.
+const assertDataScope = (item, dataAccess) => {
+  if (!isWithinDataScope(item, dataAccess, SCOPE_MODULE_KEY)) {
+    throw new Error("Inventory item not found");
+  }
+};
 
 export default class StockInventoryItemService {
   // ─── Validate fieldValues against productDefinition ──────────────────────────
@@ -430,7 +440,7 @@ export default class StockInventoryItemService {
   /* for this product. Powers Feature 3's History screen.                    */
   /* ---------------------------------------------------------------------- */
 
-  static async getReceivingHistory(productDefinitionId, { branchId } = {}) {
+  static async getReceivingHistory(productDefinitionId, { branchId } = {}, dataAccess) {
     const match = {
       productDefinitionId: new mongoose.Types.ObjectId(productDefinitionId),
       isActive: true,
@@ -439,6 +449,9 @@ export default class StockInventoryItemService {
       invoiceId: { $ne: null },
     };
     if (branchId) match.branchId = new mongoose.Types.ObjectId(branchId);
+    // Aggregation $match does not auto-cast, so the helper is handed an
+    // already-cast filter — see toObjectIds() inside it.
+    applyDataScope(match, dataAccess, SCOPE_MODULE_KEY);
 
     const grouped = await StockInventoryItemModel.aggregate([
       { $match: match },
@@ -489,7 +502,7 @@ export default class StockInventoryItemService {
 
   // ─── Stock summary ────────────────────────────────────────────────────────────
 
-  static async getStockSummary(defId) {
+  static async getStockSummary(defId, dataAccess) {
     try {
       const def = await StockProductDefinitionModel.findOne({
         _id: defId,
@@ -501,11 +514,15 @@ export default class StockInventoryItemService {
         const statuses = ["AVAILABLE", "ALLOCATED", "IN_REPAIR", "SCRAPPED", "IN_TRANSIT"];
         const counts = await Promise.all(
           statuses.map((s) =>
-            StockInventoryItemModel.countDocuments({
-              productDefinitionId: defId,
-              isActive: true,
-              status: s,
-            })
+            StockInventoryItemModel.countDocuments(
+              // Fresh object per status — applyDataScope pushes into $and,
+              // so a shared filter would accumulate clauses across the loop.
+              applyDataScope(
+                { productDefinitionId: defId, isActive: true, status: s },
+                dataAccess,
+                SCOPE_MODULE_KEY
+              )
+            )
           )
         );
         const total = counts.reduce((a, b) => a + b, 0);
@@ -521,7 +538,13 @@ export default class StockInventoryItemService {
       } else {
         // quantity mode — aggregate
         const pipeline = [
-          { $match: { productDefinitionId: def._id, isActive: true } },
+          {
+            $match: applyDataScope(
+              { productDefinitionId: def._id, isActive: true },
+              dataAccess,
+              SCOPE_MODULE_KEY
+            ),
+          },
           {
             $group: {
               _id: "$status",
@@ -550,13 +573,14 @@ export default class StockInventoryItemService {
 
   // ─── Update field values ──────────────────────────────────────────────────────
 
-  static async updateInventoryItem(id, body, actor, session) {
+  static async updateInventoryItem(id, body, actor, session, dataAccess) {
     try {
       const item = await StockInventoryItemModel.findOne({
         _id: id,
         isActive: true,
       }).session(session);
       if (!item) throw new Error("Inventory item not found");
+      assertDataScope(item, dataAccess);
       const before = item.toObject();
 
       if (body.fieldValues !== undefined) item.fieldValues = body.fieldValues;
@@ -574,7 +598,7 @@ export default class StockInventoryItemService {
 
   // ─── Update status ────────────────────────────────────────────────────────────
 
-  static async updateItemStatus(id, status, actor, session) {
+  static async updateItemStatus(id, status, actor, session, dataAccess) {
     try {
       if (!ITEM_STATUS_ARRAY.includes(status))
         throw new Error(`Invalid status: ${status}`);
@@ -584,6 +608,7 @@ export default class StockInventoryItemService {
         isActive: true,
       }).session(session);
       if (!item) throw new Error("Inventory item not found");
+      assertDataScope(item, dataAccess);
       const before = item.toObject();
 
       item.status = status;
@@ -599,18 +624,19 @@ export default class StockInventoryItemService {
 
   // ─── Soft delete ──────────────────────────────────────────────────────────────
 
-  static async softDeleteInventoryItem(id, actor, session) {
+  static async softDeleteInventoryItem(id, actor, session, dataAccess) {
     try {
       const item = await StockInventoryItemModel.findOne({
         _id: id,
         isActive: true,
       }).session(session);
       if (!item) throw new Error("Inventory item not found");
+      assertDataScope(item, dataAccess);
       const before = item.toObject();
 
       item.isActive = false;
       item.deletedAt = new Date();
-      item.deletedBy = actor?._id ?? null;
+      item.deletedBy = actorSnapshot(actor);
       await item.save({ session });
       await StockAuditLogService.recordAudit({
         entityType: ENTITY_TYPE, entityId: item._id, action: "DELETE", actor, before, after: item.toObject(),
@@ -623,10 +649,11 @@ export default class StockInventoryItemService {
 
   // ─── Restore ──────────────────────────────────────────────────────────────────
 
-  static async restoreInventoryItem(id, actor, session) {
+  static async restoreInventoryItem(id, actor, session, dataAccess) {
     try {
       const item = await StockInventoryItemModel.findOne({ _id: id }).session(session);
       if (!item) throw new Error("Inventory item not found");
+      assertDataScope(item, dataAccess);
       if (item.isActive) throw new Error("Inventory item is already active");
       const before = item.toObject();
 

@@ -9,7 +9,8 @@
     "check:routes": "node scripts/check-route-permissions.js",
     "dev": "pm2 start app.js --name stock-backend --watch",
     "check:scope": "node scripts/check-data-scope.js",
-    "check:all": "npm run check:routes && npm run check:scope"
+    "check:all": "npm run check:routes && npm run check:scope && npm run check:stamp",
+    "check:stamp": "node scripts/check-actor-stamp.js"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

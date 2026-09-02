@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 import {
   TRACKING_METHODS_ARRAY,
   UNIT_TYPES_ARRAY,
@@ -69,6 +70,10 @@ transferRequestSchema.index({ requestNumber: 1 }, { unique: true });
 transferRequestSchema.index({ requestingBranchId: 1 });
 transferRequestSchema.index({ sourceBranchId: 1 });
 transferRequestSchema.index({ status: 1 });
+
+
+// who created / last touched this — see the plugin for why it is a hook
+transferRequestSchema.plugin(actorStampPlugin);
 
 const StockTransferRequestModel = mongoose.model(
   "inventory_transfer_requests",

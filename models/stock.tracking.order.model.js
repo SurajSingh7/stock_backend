@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { TRACKING_STATUS, TRACKING_STATUS_ARRAY, MAIL_MODE_ARRAY } from "../constants/stock.enums.js";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const { Schema } = mongoose;
 
@@ -61,6 +62,10 @@ const trackingOrderSchema = new Schema(
 trackingOrderSchema.index({ sourceQuotationId: 1, vendorId: 1 }, { unique: true });
 trackingOrderSchema.index({ status: 1, isActive: 1 });
 trackingOrderSchema.index({ poId: 1 });
+
+
+// who created / last touched this — see the plugin for why it is a hook
+trackingOrderSchema.plugin(actorStampPlugin);
 
 const StockTrackingOrderModel = mongoose.model(
   "tracking_orders",

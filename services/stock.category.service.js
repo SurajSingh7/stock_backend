@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockCategoryModel from "../models/stock.category.model.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
@@ -413,7 +414,7 @@ export default class StockCategoryService {
       const now = new Date();
       category.isActive = false;
       category.deletedAt = now;
-      category.deletedBy = actor?._id ?? null;
+      category.deletedBy = actorSnapshot(actor);
       await category.save({ session });
       await StockAuditLogService.recordAudit({
         entityType: ENTITY_TYPE, entityId: category._id, action: "DELETE", actor, before, after: category.toObject(),
@@ -449,8 +450,18 @@ export default class StockCategoryService {
 
   // ─── Reorder siblings ─────────────────────────────────────────────────────────
 
-  static async reorderCategories(siblings, session) {
+  static async reorderCategories(siblings, session, actor) {
     try {
+      // Reorder is a granted action (categories:REORDER), so it belongs in the
+      // history like any other change. One audit row for the whole reorder
+      // rather than one per sibling — the user performed a single action, and
+      // N rows saying "sortOrder changed" would bury the real events.
+      const ids = siblings.map((s) => s._id);
+      const before = await StockCategoryModel.find({ _id: { $in: ids } })
+        .select("name sortOrder parentId")
+        .session(session)
+        .lean();
+
       for (const s of siblings) {
         await StockCategoryModel.updateOne(
           { _id: s._id },
@@ -458,6 +469,24 @@ export default class StockCategoryService {
           { session }
         );
       }
+
+      const after = await StockCategoryModel.find({ _id: { $in: ids } })
+        .select("name sortOrder parentId")
+        .session(session)
+        .lean();
+
+      await StockAuditLogService.recordAudit({
+        entityType: ENTITY_TYPE,
+        // The reorder spans siblings, so it is filed against their shared
+        // parent — that is the record whose History tab should show it.
+        entityId: before[0]?.parentId ?? ids[0],
+        action: "REORDER",
+        actor,
+        before: { siblings: before },
+        after: { siblings: after },
+        reason: `reordered ${ids.length} categor${ids.length === 1 ? "y" : "ies"}`,
+      });
+
       return true;
     } catch (error) {
       throw error;

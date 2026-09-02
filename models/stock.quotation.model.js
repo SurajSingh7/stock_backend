@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 import {
   QUOTATION_STATUS,
   QUOTATION_STATUS_ARRAY,
@@ -137,17 +138,9 @@ const quotationSchema = new Schema(
     // Vendors excluded from the PO Management board for this quotation.
     disabledVendors: { type: [disabledVendorSchema], default: [] },
 
-    notes: { type: String, trim: true, default: "" },
-
-    createdBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
-    createdByName: { type: String, trim: true, default: "" },
-    updatedBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
-    updatedByName: { type: String, trim: true, default: "" },
-
+    notes: { type: String, trim: true, default: "" },
     isActive: { type: Boolean, default: true },
-    deletedAt: { type: Date, default: null },
-    deletedBy: { type: Schema.Types.ObjectId, default: null },
-  },
+    deletedAt: { type: Date, default: null },  },
   { timestamps: true }
 );
 
@@ -157,7 +150,10 @@ quotationSchema.index({ categoryIds: 1 });
 quotationSchema.index({ "items.vendorId": 1 });
 quotationSchema.index({ "items.productDefinitionId": 1 });
 quotationSchema.index({ "categoryApprovals.selections.vendorId": 1 });
-quotationSchema.index({ createdBy: 1 });
+
+
+// who created / last touched this — see the plugin for why it is a hook
+quotationSchema.plugin(actorStampPlugin);
 
 const StockQuotationModel = mongoose.model("quotations", quotationSchema, "quotations");
 

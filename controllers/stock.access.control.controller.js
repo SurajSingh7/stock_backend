@@ -5,10 +5,12 @@ import StockAccessControlService from "../services/stock.access.control.service.
 const log = getLogger(import.meta.url);
 const service = new StockAccessControlService();
 
-const actingUser = (req) => ({
-  id: req.user?._id || req.userId || null,
-  name: req.user?.name || req.user?.fullName || "",
-});
+// req.user already carries everything the audit trail wants — role, branch,
+// IP, user agent. This used to return only { id, name }, which is why the
+// purchase-order, quotation, invoice and transfer-request audit rows recorded
+// an empty role and no IP. `id` is kept alongside `_id` so older call sites
+// that read actor.id keep working.
+const actingUser = (req) => (req.user ? { ...req.user, id: req.user._id } : null);
 
 export default class StockAccessControlController {
   static async getAllModules(req, res) {

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 
 import StockQuotationModel from "../models/stock.quotation.model.js";
 import StockVendorModel from "../models/stock.vendor.model.js";
@@ -26,6 +27,15 @@ const escapeRegex = (str = "") =>
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
 const SCOPE_MODULE_KEY = "quotations";
+
+// Guard for every by-id read AND every mutation. Throws the resource's normal
+// "not found" rather than a 403 — a 403 would confirm that a quotation the
+// caller may not see exists, which is what the scope is meant to hide.
+const assertDataScope = (quotation, dataAccess) => {
+  if (!isWithinDataScope(quotation, dataAccess, SCOPE_MODULE_KEY)) {
+    throw new Error("Quotation not found");
+  }
+};
 
 export default class StockQuotationService {
   /* ---------------------------------------------------------------------- */
@@ -238,10 +248,7 @@ export default class StockQuotationService {
           categoryIds,
           items,
           categoryApprovals: [],
-          notes: typeof body.notes === "string" ? body.notes : "",
-          createdBy: user?.id || user?._id || null,
-          createdByName: user?.name || "",
-        },
+          notes: typeof body.notes === "string" ? body.notes : "",        },
       ],
       { session }
     );
@@ -253,12 +260,13 @@ export default class StockQuotationService {
     return quotation;
   }
 
-  static async updateQuotation(id, body, user, session) {
+  static async updateQuotation(id, body, user, session, dataAccess) {
     const quotation = await StockQuotationModel.findOne({
       _id: id,
       isActive: true,
     }).session(session);
     if (!quotation) throw new Error("Quotation not found");
+    assertDataScope(quotation, dataAccess);
     const before = quotation.toObject();
 
     if (quotation.status !== QUOTATION_STATUS.PENDING) {
@@ -281,8 +289,6 @@ export default class StockQuotationService {
     }
     if (typeof body.notes === "string") quotation.notes = body.notes;
 
-    quotation.updatedBy = user?.id || user?._id || null;
-    quotation.updatedByName = user?.name || "";
     await quotation.save({ session });
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE, entityId: quotation._id, action: "UPDATE", actor: user, before, after: quotation.toObject(),
@@ -294,12 +300,13 @@ export default class StockQuotationService {
   /* Review — one decision PER CATEGORY, all at once                         */
   /* ---------------------------------------------------------------------- */
 
-  static async reviewQuotation(id, decisions, user, session) {
+  static async reviewQuotation(id, decisions, user, session, dataAccess) {
     const quotation = await StockQuotationModel.findOne({
       _id: id,
       isActive: true,
     }).session(session);
     if (!quotation) throw new Error("Quotation not found");
+    assertDataScope(quotation, dataAccess);
     const before = quotation.toObject();
 
     if (quotation.status !== QUOTATION_STATUS.PENDING) {
@@ -404,8 +411,6 @@ export default class StockQuotationService {
 
     quotation.categoryApprovals = categoryApprovals;
     quotation.status = StockQuotationService.computeDocStatus(categoryApprovals);
-    quotation.updatedBy = actorId;
-    quotation.updatedByName = actorName;
     await quotation.save({ session });
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE, entityId: quotation._id, action: "REVIEW", actor: user, before, after: quotation.toObject(),
@@ -454,7 +459,7 @@ export default class StockQuotationService {
       filter.$or = [
         { quotationNumber: regex },
         { "items.vendorName": regex },
-        { createdByName: regex },
+        { "createdBy.name": regex },
       ];
     }
 
@@ -515,12 +520,13 @@ export default class StockQuotationService {
   /* Soft delete / restore                                                   */
   /* ---------------------------------------------------------------------- */
 
-  static async softDeleteQuotation(id, user, session) {
+  static async softDeleteQuotation(id, user, session, dataAccess) {
     const quotation = await StockQuotationModel.findOne({
       _id: id,
       isActive: true,
     }).session(session);
     if (!quotation) throw new Error("Quotation not found");
+    assertDataScope(quotation, dataAccess);
     const before = quotation.toObject();
 
     // Protect the financial trail — block once anything has been approved.
@@ -533,7 +539,7 @@ export default class StockQuotationService {
 
     quotation.isActive = false;
     quotation.deletedAt = new Date();
-    quotation.deletedBy = user?.id || user?._id || null;
+    quotation.deletedBy = actorSnapshot(user);
     await quotation.save({ session });
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE, entityId: quotation._id, action: "DELETE", actor: user, before, after: quotation.toObject(),
@@ -541,12 +547,13 @@ export default class StockQuotationService {
     return quotation;
   }
 
-  static async restoreQuotation(id, actor, session) {
+  static async restoreQuotation(id, actor, session, dataAccess) {
     const quotation = await StockQuotationModel.findOne({
       _id: id,
       isActive: false,
     }).session(session);
     if (!quotation) throw new Error("Inactive quotation not found");
+    assertDataScope(quotation, dataAccess);
     const before = quotation.toObject();
 
     quotation.isActive = true;

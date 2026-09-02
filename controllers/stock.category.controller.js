@@ -181,7 +181,7 @@ export default class StockCategoryController {
     try {
       session.startTransaction();
       validateReorderCategories(req.body);
-      await StockCategoryService.reorderCategories(req.body.siblings, session);
+      await StockCategoryService.reorderCategories(req.body.siblings, session, req.user);
       await session.commitTransaction();
       log.info("Stock categories reordered");
       successResponseHandler(res, null, "Categories reordered successfully");

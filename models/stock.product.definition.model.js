@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 import {
   TRACKING_METHODS_ARRAY,
   PRODUCT_DEF_STATUS_ARRAY,
@@ -162,6 +163,10 @@ stockProductDefinitionSchema.index({ name: 1 });
 stockProductDefinitionSchema.index({ "branchThresholds.branchId": 1 });
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.
+
+// who created / last touched this — see the plugin for why it is a hook
+stockProductDefinitionSchema.plugin(actorStampPlugin);
+
 const StockProductDefinitionModel = mongoose.model(
   "product_definitions",
   stockProductDefinitionSchema,

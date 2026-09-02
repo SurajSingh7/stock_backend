@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockCategoryModel from "../models/stock.category.model.js";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
@@ -287,7 +288,7 @@ export default class StockProductDefinitionService {
 
       def.isActive = false;
       def.deletedAt = new Date();
-      def.deletedBy = actor?._id ?? null;
+      def.deletedBy = actorSnapshot(actor);
       await def.save({ session });
       await StockAuditLogService.recordAudit({
         entityType: ENTITY_TYPE, entityId: def._id, action: "DELETE", actor, before, after: def.toObject(),

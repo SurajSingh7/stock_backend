@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { BRANCH_ROLE, BRANCH_ROLE_ARRAY } from "../constants/stock.enums.js";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const { Schema } = mongoose;
 
@@ -31,6 +32,9 @@ branchSchema.index({ code: 1 }, { unique: true });
 branchSchema.index({ isActive: 1 });
 branchSchema.index({ name: 1 });
 branchSchema.index({ branchRole: 1 });
+
+// who created / last touched this — see the plugin for why it is a hook
+branchSchema.plugin(actorStampPlugin);
 
 const StockBranchModel = mongoose.model("branches", branchSchema, "branches");
 

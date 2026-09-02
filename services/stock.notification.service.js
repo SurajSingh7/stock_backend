@@ -1,4 +1,5 @@
 import StockNotificationModel from "../models/stock.notification.model.js";
+import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import { NOTIFICATION_CHANNEL } from "../constants/stock.enums.js";
 
@@ -133,7 +134,7 @@ export default class StockNotificationService {
 
       notification.isActive = false;
       notification.deletedAt = new Date();
-      notification.deletedBy = actor?._id ?? null;
+      notification.deletedBy = actorSnapshot(actor);
       await notification.save({ session });
       await StockAuditLogService.recordAudit({
         entityType: ENTITY_TYPE, entityId: notification._id, action: "DELETE", actor, before, after: notification.toObject(),

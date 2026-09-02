@@ -18,6 +18,14 @@ import {
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const ENTITY_TYPE = "transfer-requests";
 
+// Guard for every mutation. A transfer is in scope if EITHER of its two
+// branches is — the registry declares both fields, the helper ORs them.
+const assertDataScope = (request, dataAccess) => {
+  if (!isWithinDataScope(request, dataAccess, SCOPE_MODULE_KEY)) {
+    throw new Error("Transfer request not found");
+  }
+};
+
 export default class StockTransferRequestService {
   static async generateRequestNumber(session) {
     const year = new Date().getFullYear();
@@ -55,7 +63,7 @@ export default class StockTransferRequestService {
     const scopedIds =
       branchIds === null ? [...activeIds] : branchIds.filter((id) => activeIds.has(id));
 
-    const ownBranchId = dataAccess?.branchId ? String(dataAccess.branchId) : null;
+    const ownBranchId = dataAccess?.userBranchId ? String(dataAccess.userBranchId) : null;
     // Own branch when it is in scope; otherwise only an unambiguous single
     // scoped branch counts — never an arbitrary pick out of several.
     const defaultBranchId = scopedIds.includes(ownBranchId)
@@ -304,9 +312,10 @@ export default class StockTransferRequestService {
   /* always ends COMPLETED (use reject() instead to decline everything).    */
   /* ---------------------------------------------------------------------- */
 
-  static async processTransferRequest(id, body, user, session) {
+  static async processTransferRequest(id, body, user, session, dataAccess) {
     const request = await StockTransferRequestModel.findOne({ _id: id, isActive: true }).session(session);
     if (!request) throw new Error("Transfer request not found");
+    assertDataScope(request, dataAccess);
     if (request.status !== TRANSFER_REQUEST_STATUS.PENDING)
       throw new Error("Only pending requests can be processed");
     const before = request.toObject();
@@ -372,9 +381,10 @@ export default class StockTransferRequestService {
   /* Reject — Branch B declines the whole request, nothing transferred.      */
   /* ---------------------------------------------------------------------- */
 
-  static async rejectTransferRequest(id, body, user, session) {
+  static async rejectTransferRequest(id, body, user, session, dataAccess) {
     const request = await StockTransferRequestModel.findOne({ _id: id, isActive: true }).session(session);
     if (!request) throw new Error("Transfer request not found");
+    assertDataScope(request, dataAccess);
     if (request.status !== TRANSFER_REQUEST_STATUS.PENDING)
       throw new Error("Only pending requests can be rejected");
     const before = request.toObject();

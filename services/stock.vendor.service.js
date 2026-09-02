@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockVendorModel from "../models/stock.vendor.model.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
@@ -227,7 +228,7 @@ export default class StockVendorService {
 
       vendor.isActive = false;
       vendor.deletedAt = new Date();
-      vendor.deletedBy = actor?._id ?? null;
+      vendor.deletedBy = actorSnapshot(actor);
       await vendor.save({ session });
       await StockAuditLogService.recordAudit({
         entityType: ENTITY_TYPE, entityId: vendor._id, action: "DELETE", actor, before, after: vendor.toObject(),

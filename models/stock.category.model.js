@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { CATEGORY_TYPES_ARRAY } from "../constants/stock.enums.js";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const stockCategorySchema = new mongoose.Schema(
   {
@@ -68,6 +69,9 @@ stockCategorySchema.index(
 );
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.
+// who created / last touched this — see the plugin for why it is a hook
+stockCategorySchema.plugin(actorStampPlugin);
+
 const StockCategoryModel = mongoose.model(
   "categories",
   stockCategorySchema,

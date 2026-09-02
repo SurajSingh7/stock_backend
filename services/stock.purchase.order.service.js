@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 
 import StockPurchaseOrderModel from "../models/stock.purchase.order.model.js";
 import StockQuotationModel from "../models/stock.quotation.model.js";
@@ -247,9 +248,14 @@ export default class StockPurchaseOrderService {
         let statusVal, items, poId = null, poNumber = "";
         const entityAlias = tracking.buyerEntity?.alias || "";
         let totalAmount = 0, totalQuantity = 0, rejectedReason = "", filterDate = approvalDate;
+        let createdBy = null;
 
         if (po) {
           poId = po._id; poNumber = po.poNumber; statusVal = po.status;
+          // Carried so the ownership filter below has something to read. Without
+          // it row.createdBy was undefined and every OWN-scoped user saw an
+          // empty board.
+          createdBy = po.createdBy || null;
           items = (po.items || []).map((it) => ({
             quotationItemId: it.quotationItemId, categoryId: it.categoryId, categoryName: it.categoryName,
             productDefinitionId: it.productDefinitionId, productName: it.productName,
@@ -276,7 +282,7 @@ export default class StockPurchaseOrderService {
           vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email, contactName: row.contactName,
           gstNumber: row.gstNumber, address: row.address, state: row.state, stateCode: row.stateCode,
           paymentTerms: row.paymentTerms,
-          poId, poNumber, status: statusVal, entityAlias,
+          poId, poNumber, status: statusVal, entityAlias, createdBy,
           buyerEntity: tracking.buyerEntity || {},
           items, totalAmount, totalQuantity, skipped: row._skipped, filterDate,
           disabled: row.disabled, disabledReason: row.disabledReason, rejectedReason,
@@ -613,8 +619,6 @@ export default class StockPurchaseOrderService {
           gstTotal,
           grandTotal,
           status: PO_STATUS.GENERATED,
-          createdBy: user?.id || user?._id || null,
-          createdByName: user?.name || "",
         },
       ],
       { session }
@@ -733,8 +737,6 @@ export default class StockPurchaseOrderService {
     // and after edit it goes back to GENERATED for a fresh review.
     po.status = PO_STATUS.GENERATED;
     po.rejectedReason = "";
-    po.updatedBy = user?.id || user?._id || null;
-    po.updatedByName = user?.name || "";
 
     po.pdfPath = await generatePOPdf(po.toObject());
     await po.save({ session });
@@ -903,7 +905,7 @@ export default class StockPurchaseOrderService {
 
     po.isActive = false;
     po.deletedAt = new Date();
-    po.deletedBy = user?.id || user?._id || null;
+    po.deletedBy = actorSnapshot(user);
     await po.save({ session });
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE, entityId: po._id, action: "DELETE", actor: user, before, after: po.toObject(),

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const { Schema } = mongoose;
 const stateSchema = new Schema(
@@ -136,6 +137,10 @@ stockVendorSchema.index({ isActive: 1 });
 
 stockVendorSchema.index({ "assignedProducts.categoryId": 1 });
 stockVendorSchema.index({ "assignedProducts.products.productId": 1 });
+
+
+// who created / last touched this — see the plugin for why it is a hook
+stockVendorSchema.plugin(actorStampPlugin);
 
 const StockVendorModel = mongoose.model(
   "vendors",

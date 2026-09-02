@@ -39,14 +39,14 @@ export const DATA_SCOPE_REGISTRY = {
   "transfer-requests": { branch: ["requestingBranchId", "sourceBranchId"] },
 
   // ── Ownership-scoped ─────────────────────────────────────────────────────
-  quotations: { ownership: "createdBy" },
+  quotations: { ownership: "createdBy.userId" },
 
   // ── Entity-scoped ────────────────────────────────────────────────────────
   "tracking-orders": { entity: "buyerEntity.alias" },
-  "purchase-orders": { entity: "buyerEntity.alias", ownership: "createdBy" },
+  "purchase-orders": { entity: "buyerEntity.alias", ownership: "createdBy.userId" },
 
   // ── All three ────────────────────────────────────────────────────────────
-  invoices: { branch: "branchId", entity: "entityAlias", ownership: "createdBy" },
+  invoices: { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
 };
 
 /**

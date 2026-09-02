@@ -1,4 +1,5 @@
 import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
+import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import { TRACKING_METHODS_ARRAY } from "../constants/stock.enums.js";
@@ -161,7 +162,7 @@ export default class StockFieldDefinitionService {
 
       field.isActive = false;
       field.deletedAt = new Date();
-      field.deletedBy = actor?._id ?? null;
+      field.deletedBy = actorSnapshot(actor);
       await field.save({ session });
       await StockAuditLogService.recordAudit({
         entityType: ENTITY_TYPE, entityId: field._id, action: "DELETE", actor, before, after: field.toObject(),

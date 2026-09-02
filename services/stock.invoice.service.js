@@ -193,8 +193,6 @@ export default class StockInvoiceService {
               productDefinitionId: line.productDefinitionId,
               rating: line.rating.rating,
               comment: line.rating.notes || "",
-              createdBy: user?.id || user?._id || null,
-              createdByName: user?.name || "",
             },
           ],
           { session }
@@ -260,7 +258,7 @@ export default class StockInvoiceService {
   static async getReceivingBranches(dataAccess) {
     const branches = await StockBranchService.getScopedActiveBranches(dataAccess);
 
-    const ownBranchId = dataAccess?.branchId ? String(dataAccess.branchId) : null;
+    const ownBranchId = dataAccess?.userBranchId ? String(dataAccess.userBranchId) : null;
     const ownInScope = ownBranchId && branches.some((w) => String(w._id) === ownBranchId);
     const defaultBranchId = ownInScope
       ? ownBranchId
@@ -330,8 +328,6 @@ export default class StockInvoiceService {
           lines,
           amount: StockInvoiceService._computeAmount(lines, body.extraCharges),
           status: INVOICE_STATUS.PENDING,
-          createdBy: user?.id || user?._id || null,
-          createdByName: user?.name || "",
         },
       ],
       { session }
@@ -470,8 +466,6 @@ export default class StockInvoiceService {
             purchasePrice: line.unitPrice,
             purchaseDate: invoice.invoiceDate,
             sourceQuotationId: tracking?.sourceQuotationId || null,
-            createdBy: user?.id || user?._id || null,
-            createdByName: user?.name || "",
           },
         ],
         { session }

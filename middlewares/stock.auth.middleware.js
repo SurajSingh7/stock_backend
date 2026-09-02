@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { runWithActor } from "../helpers/request.context.js";
 import {
   hrmsApiUrl,
   hrmsSvcApiKey,
@@ -107,7 +108,12 @@ export async function authenticate(req, res, next) {
       userAgent: req.headers["user-agent"] || "",
     };
 
-    next();
+    // Everything downstream of here runs inside a context carrying the actor,
+    // so the actor-stamp plugin can fill createdBy/updatedBy on any write
+    // without every service having to thread the user down to the model layer.
+    // runWithActor wraps next(), so the context covers the whole rest of the
+    // request — including work that resumes after an await.
+    return runWithActor(req.user, () => next());
   } catch (err) {
     console.error("Auth middleware error:", err);
     return res.status(500).json({ success: false, message: "Authentication failed" });

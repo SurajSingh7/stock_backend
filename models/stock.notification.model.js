@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { NOTIFICATION_CHANNEL_ARRAY } from "../constants/stock.enums.js";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const { Schema } = mongoose;
 
@@ -40,6 +41,9 @@ stockNotificationSchema.index(
     name: "uniq_active_default_notification_per_channel",
   }
 );
+
+// who created / last touched this — see the plugin for why it is a hook
+stockNotificationSchema.plugin(actorStampPlugin);
 
 const StockNotificationModel = mongoose.model(
   "notifications",

@@ -144,7 +144,7 @@ export default class StockInventoryItemController {
   static async getReceivingHistory(req, res) {
     try {
       const { branchId } = req.query;
-      const data = await StockInventoryItemService.getReceivingHistory(req.params.defId, { branchId });
+      const data = await StockInventoryItemService.getReceivingHistory(req.params.defId, { branchId }, req.dataAccess);
       successResponseHandler(res, data, "Receiving history fetched successfully");
     } catch (error) {
       log.error("Error fetching receiving history", error);
@@ -164,7 +164,7 @@ export default class StockInventoryItemController {
 
   static async getStockSummary(req, res) {
     try {
-      const data = await StockInventoryItemService.getStockSummary(req.params.defId);
+      const data = await StockInventoryItemService.getStockSummary(req.params.defId, req.dataAccess);
       successResponseHandler(res, data, "Stock summary fetched successfully");
     } catch (error) {
       log.error("Error fetching stock summary", error);
@@ -180,7 +180,8 @@ export default class StockInventoryItemController {
         req.params.id,
         req.body,
         req.user,
-        session
+        session,
+        req.dataAccess
       );
       await session.commitTransaction();
       log.info("Stock inventory item updated");
@@ -203,7 +204,8 @@ export default class StockInventoryItemController {
         req.params.id,
         req.body.status,
         req.user,
-        session
+        session,
+        req.dataAccess
       );
       await session.commitTransaction();
       log.info("Stock inventory item status updated");
@@ -224,7 +226,8 @@ export default class StockInventoryItemController {
       const data = await StockInventoryItemService.softDeleteInventoryItem(
         req.params.id,
         req.user,
-        session
+        session,
+        req.dataAccess
       );
       await session.commitTransaction();
       log.info("Stock inventory item soft deleted");
@@ -242,7 +245,7 @@ export default class StockInventoryItemController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const data = await StockInventoryItemService.restoreInventoryItem(req.params.id, req.user, session);
+      const data = await StockInventoryItemService.restoreInventoryItem(req.params.id, req.user, session, req.dataAccess);
       await session.commitTransaction();
       log.info("Stock inventory item restored");
       successResponseHandler(res, data, "Inventory item restored successfully");

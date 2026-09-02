@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { TERMS_STATUS_ARRAY } from "../constants/stock.enums.js";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const { Schema } = mongoose;
 
@@ -47,6 +48,9 @@ stockTermsConditionSchema.index(
 );
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.
+// who created / last touched this — see the plugin for why it is a hook
+stockTermsConditionSchema.plugin(actorStampPlugin);
+
 const StockTermsConditionModel = mongoose.model(
   "terms_conditions",
   stockTermsConditionSchema,

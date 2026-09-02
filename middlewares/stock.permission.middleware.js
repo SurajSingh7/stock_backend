@@ -16,7 +16,7 @@ const resolveEffectiveActions = (roleDefault, departmentRestriction, override) =
 
   const base = departmentRestriction
     ? roleActions.filter((a) => (departmentRestriction.allowedActions ?? []).includes(a))
-    : roleActions;
+  : roleActions;
 
   const effective = new Set(base);
   // Applied after the intersection, so an override can deliberately restore

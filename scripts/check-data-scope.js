@@ -60,12 +60,29 @@ for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
     failures.push(`Module "${key}" declares scope fields but has no model mapping in this script.`);
     continue;
   }
-  const src = fs.readFileSync(path.join(ROOT, "models", file), "utf8");
+  // Ask the COMPILED schema, not the source text. Fields can arrive from a
+  // plugin (createdBy/updatedBy do), in which case they appear nowhere in the
+  // model file and a grep would wrongly report them missing.
+  let Model;
+  try {
+    Model = (await import(`../models/${file}`)).default;
+  } catch (err) {
+    failures.push(`models/${file} could not be loaded: ${err.message.split("\n")[0]}`);
+    continue;
+  }
+
   for (const p of paths) {
-    // A dotted path lives in a sub-schema, so check only its leaf.
-    const leaf = p.split(".").pop();
-    if (leaf === "_id") continue; // always present
-    if (!new RegExp(`\\b${leaf}\\s*:`).test(src)) {
+    if (p === "_id") continue; // always present
+    // Resolve a dotted path one segment at a time, stepping into sub-schemas.
+    const segments = p.split(".");
+    let schema = Model.schema;
+    let ok = true;
+    for (let i = 0; i < segments.length; i++) {
+      const at = schema?.path(segments[i]);
+      if (!at) { ok = false; break; }
+      if (i < segments.length - 1) schema = at.schema ?? at.caster?.schema;
+    }
+    if (!ok) {
       failures.push(`Module "${key}" scopes on "${p}", but ${file} has no such field.`);
     }
   }
@@ -103,6 +120,70 @@ for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
   }
 }
 
+/* ── 4. per-METHOD enforcement ────────────────────────────────────────────
+ * Check 3 only proves a service mentions the helper SOMEWHERE. That is not
+ * enough: a service can scope its list and leave every mutation open, which
+ * is exactly the gap that shipped once already. So walk each static method
+ * and require any that queries its OWN model to either apply the scope or
+ * declare itself internal.
+ */
+const OWN_MODEL = {
+  branches: "StockBranchModel",
+  "inventory-items": "StockInventoryItemModel",
+  "transfer-requests": "StockTransferRequestModel",
+  quotations: "StockQuotationModel",
+  "tracking-orders": "StockTrackingOrderModel",
+  "purchase-orders": "StockPurchaseOrderModel",
+  invoices: "StockInvoiceModel",
+};
+
+// Internal mechanics that legitimately see every row. Each is named here
+// rather than pattern-matched, so adding one is a deliberate, reviewable act.
+const UNSCOPED_BY_DESIGN = {
+  branches: {
+    assertCodeNotDuplicate: "uniqueness must consider every branch",
+    getActiveBranches: "dropdown for picking the OTHER branch of a transfer",
+  },
+  "transfer-requests": { generateRequestNumber: "sequence spans all branches" },
+  quotations: { generateQuotationNumber: "sequence spans all users" },
+  "purchase-orders": { generatePONumber: "sequence spans all entities" },
+  "tracking-orders": {
+    createForQuotationVendors: "internal fan-out at quotation approval",
+    getById: "internal lookup, not routed",
+    recalculateStatus: "internal recalculation",
+    getByQuotationAndVendor: "internal lookup, not routed",
+  },
+  invoices: { _sumNonRejectedQtyByLine: "over-receipt cap must sum every invoice" },
+};
+
+const SCOPE_CALL = /applyDataScope|isWithinDataScope|assertDataScope|resolveDimensionAllowList|unscopedInternalQuery/;
+
+for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
+  if (!Object.keys(dims).length) continue;
+  const file = SERVICE_FILE[key];
+  const model = OWN_MODEL[key];
+  if (!file || !model) continue;
+
+  const full = path.join(ROOT, "services", file);
+  if (!fs.existsSync(full)) continue;
+  const src = fs.readFileSync(full, "utf8");
+  const allowed = UNSCOPED_BY_DESIGN[key] || {};
+
+  const methods = src.split(/\n {2}static (?:async )?/);
+  for (let i = 1; i < methods.length; i++) {
+    const body = methods[i];
+    const name = body.split(/[(\s]/)[0];
+    if (!new RegExp(`${model}\\.(find|findOne|findById|aggregate|countDocuments|distinct)`).test(body)) continue;
+    if (SCOPE_CALL.test(body)) continue;
+    if (allowed[name]) continue;
+
+    failures.push(
+      `services/${file} → ${name}() queries ${model} but neither applies the data ` +
+        `scope nor is listed in UNSCOPED_BY_DESIGN. Add the scope check, or ` +
+        `register it there with a reason.`
+    );
+  }
+}
 /* ── report ───────────────────────────────────────────────────────────────── */
 console.log(`Registry: ${Object.keys(DATA_SCOPE_REGISTRY).length} module(s), ${seededKeys.length} seeded.`);
 for (const w of warnings) console.warn(`  warning: ${w}`);

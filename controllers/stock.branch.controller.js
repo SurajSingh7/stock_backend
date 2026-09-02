@@ -71,7 +71,7 @@ export default class StockBranchController {
     try {
       session.startTransaction();
       validateUpdateBranch(req.body);
-      const data = await StockBranchService.updateBranch(req.params.id, req.body, req.user, session);
+      const data = await StockBranchService.updateBranch(req.params.id, req.body, req.user, session, req.dataAccess);
       await session.commitTransaction();
       log.info("Branch updated");
       successResponseHandler(res, data, "Branch updated successfully");
@@ -88,7 +88,7 @@ export default class StockBranchController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const data = await StockBranchService.softDeleteBranch(req.params.id, req.user, session);
+      const data = await StockBranchService.softDeleteBranch(req.params.id, req.user, session, req.dataAccess);
       await session.commitTransaction();
       log.info("Branch soft deleted");
       successResponseHandler(res, data, "Branch deleted successfully");
@@ -105,7 +105,7 @@ export default class StockBranchController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const data = await StockBranchService.restoreBranch(req.params.id, req.user, session);
+      const data = await StockBranchService.restoreBranch(req.params.id, req.user, session, req.dataAccess);
       await session.commitTransaction();
       log.info("Branch restored");
       successResponseHandler(res, data, "Branch restored successfully");

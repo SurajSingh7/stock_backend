@@ -1,4 +1,5 @@
 import StockTermsConditionModel from "../models/stock.terms.condition.model.js";
+import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import { TERMS_STATUS, TERMS_SOURCE } from "../constants/stock.enums.js";
 
@@ -143,7 +144,7 @@ export default class StockTermsConditionService {
 
       term.isActive = false;
       term.deletedAt = new Date();
-      term.deletedBy = actor?._id ?? null;
+      term.deletedBy = actorSnapshot(actor);
       await term.save({ session });
       await StockAuditLogService.recordAudit({
         entityType: ENTITY_TYPE, entityId: term._id, action: "DELETE", actor, before, after: term.toObject(),

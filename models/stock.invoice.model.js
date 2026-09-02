@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { INVOICE_STATUS, INVOICE_STATUS_ARRAY } from "../constants/stock.enums.js";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const { Schema } = mongoose;
 
@@ -101,12 +102,8 @@ const invoiceSchema = new Schema(
     reviewedByName: { type: String, trim: true, default: "" },
     reviewedAt: { type: Date, default: null },
 
-    createdBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
-    createdByName: { type: String, trim: true, default: "" },
-
     isActive: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null },
-    deletedBy: { type: Schema.Types.ObjectId, default: null },
   },
   { timestamps: true }
 );
@@ -115,6 +112,10 @@ invoiceSchema.index({ trackingOrderId: 1, status: 1 });
 invoiceSchema.index({ poId: 1 });
 invoiceSchema.index({ vendorId: 1 });
 invoiceSchema.index({ status: 1, isActive: 1 });
+
+
+// who created / last touched this — see the plugin for why it is a hook
+invoiceSchema.plugin(actorStampPlugin);
 
 const StockInvoiceModel = mongoose.model("invoices", invoiceSchema, "invoices");
 

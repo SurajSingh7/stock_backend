@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { ITEM_STATUS_ARRAY, ITEM_APPROVAL_STATUS_ARRAY, ITEM_APPROVAL_STATUS } from "../constants/stock.enums.js";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const stockInventoryItemSchema = new mongoose.Schema(
   {
@@ -93,6 +94,9 @@ stockInventoryItemSchema.index({ "fieldValues.imei": 1 }, { sparse: true });
 stockInventoryItemSchema.index({ "fieldValues.serial_no": 1 }, { sparse: true });
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.
+// who created / last touched this — see the plugin for why it is a hook
+stockInventoryItemSchema.plugin(actorStampPlugin);
+
 const StockInventoryItemModel = mongoose.model(
   "inventory_items",
   stockInventoryItemSchema,

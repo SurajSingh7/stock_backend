@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { PO_STATUS, PO_STATUS_ARRAY, PO_TAX_TYPE, TERMS_SOURCE_ARRAY, TERMS_SOURCE } from "../constants/stock.enums.js";
+import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const { Schema } = mongoose;
 
@@ -108,17 +109,9 @@ const purchaseOrderSchema = new Schema(
 
     pdfPath: { type: String, trim: true, default: "" },     // relative public path
     emailedTo: { type: String, trim: true, default: "" },   // future
-    emailedAt: { type: Date, default: null },               // future
-
-    createdBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
-    createdByName: { type: String, trim: true, default: "" },
-    updatedBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
-    updatedByName: { type: String, trim: true, default: "" },
-
+    emailedAt: { type: Date, default: null },               // future
     isActive: { type: Boolean, default: true },
-    deletedAt: { type: Date, default: null },
-    deletedBy: { type: Schema.Types.ObjectId, default: null },
-  },
+    deletedAt: { type: Date, default: null },  },
   { timestamps: true }
 );
 
@@ -126,6 +119,10 @@ purchaseOrderSchema.index({ poNumber: 1 }, { unique: true, sparse: true });
 purchaseOrderSchema.index({ sourceQuotationId: 1 });
 purchaseOrderSchema.index({ vendorId: 1 });
 purchaseOrderSchema.index({ status: 1, isActive: 1 });
+
+
+// who created / last touched this — see the plugin for why it is a hook
+purchaseOrderSchema.plugin(actorStampPlugin);
 
 const StockPurchaseOrderModel = mongoose.model(
   "purchase_orders",
