@@ -215,6 +215,19 @@ export default class StockPurchaseOrderService {
               byVendor.set(vId, {
                 vendorId: vId, vendorName: sel.vendorName || v.name || "",
                 phone: primary.phone || "", email: primary.email || "", contactName: primary.name || "",
+                // Full recipient list, split the way the vendor was configured.
+                // The Send Mail dialog shows these instead of guessing from the
+                // primary contact alone.
+                mailTo: (v.contacts || [])
+                  // No "|| TO" fallback: the default is NONE now, so treating a
+                  // missing value as TO would mail people who opted out. Rows
+                  // written before this field existed were backfilled — see
+                  // scripts/backfill-contact-recipient-type.js.
+                  .filter((c) => c.recipientType === "TO" && c.email)
+                  .map((c) => ({ name: c.name || "", email: c.email })),
+                mailCc: (v.contacts || [])
+                  .filter((c) => c.recipientType === "CC" && c.email)
+                  .map((c) => ({ name: c.name || "", email: c.email })),
                 gstNumber: v.gst?.gstNumber || "", address: v.address?.fullAddress || "",
                 state: v.gst?.state?.name || v.address?.state?.name || "",
                 stateCode: v.gst?.state?.code || v.address?.state?.code || "",
@@ -280,6 +293,7 @@ export default class StockPurchaseOrderService {
 
         rows.push({
           vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email, contactName: row.contactName,
+          mailTo: row.mailTo || [], mailCc: row.mailCc || [],
           gstNumber: row.gstNumber, address: row.address, state: row.state, stateCode: row.stateCode,
           paymentTerms: row.paymentTerms,
           poId, poNumber, status: statusVal, entityAlias, createdBy,
@@ -818,8 +832,22 @@ export default class StockPurchaseOrderService {
       session
     );
 
+    // One or many. A string is still accepted so an older caller keeps working.
+    const toList = (Array.isArray(to) ? to : [to])
+      .map((t) => String(t || "").trim())
+      .filter(Boolean);
+
     let mailResult;
     if (sendEmail) {
+      // Checked here, not only in the dialog: the recipient list comes from the
+      // vendor's contacts, and a vendor with every contact marked CC would
+      // otherwise send a mail addressed to nobody.
+      if (!toList.length) {
+        throw new Error(
+          "This vendor has no contact marked To. Edit the vendor and set at least one contact's Recipient Type to To."
+        );
+      }
+
       // No per-notification From address anymore — sending always goes out
       // as MAIL_FROM_DEFAULT (see mail.helper.js) unless a caller explicitly
       // passes one.
@@ -829,20 +857,20 @@ export default class StockPurchaseOrderService {
       const pdfAbs = po.pdfPath ? poPdfAbsolutePath(po.pdfPath) : null;
       await sendMailTransport({
         from: resolvedFrom,
-        to,
+        to: toList.join(","),
         cc: resolvedCc,
         subject: `Purchase Order ${po.poNumber}`,
         html: `<p>Please find attached Purchase Order <strong>${po.poNumber}</strong>.</p>`,
         attachments: pdfAbs ? [{ filename: `${po.poNumber}.pdf`, path: pdfAbs }] : undefined,
       });
 
-      po.emailedTo = to;
+      po.emailedTo = toList.join(", ");
       po.emailedAt = new Date();
       mailResult = {
         mode: MAIL_MODE.SENT,
         channel: NOTIFICATION_CHANNEL.EMAIL,
         notificationId: notification?._id || null,
-        to,
+        to: toList,
         cc: resolvedCc,
         from: resolvedFrom || "",
       };

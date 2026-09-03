@@ -1,4 +1,5 @@
 import StockNotificationModel from "../models/stock.notification.model.js";
+import StockVendorModel from "../models/stock.vendor.model.js";
 import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import { NOTIFICATION_CHANNEL } from "../constants/stock.enums.js";
@@ -8,6 +9,63 @@ const ENTITY_TYPE = "notifications";
 const escapeRegex = (str = "") => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export default class StockNotificationService {
+  /**
+   * A vendor may hold at most ONE non-default notification per channel.
+   *
+   * resolveForVendor() looks the vendor up with findOne().sort({ updatedAt: -1 }),
+   * so two matches do not error — the newer one silently wins, and the admin has
+   * no way to tell which template a PO will actually go out on. Exclusivity is
+   * per channel on purpose: the same vendor legitimately has one EMAIL and one
+   * WHATSAPP notification, and those resolve independently.
+   */
+  static async assertNoVendorOverlap(channel, vendorIds, excludeId, session) {
+    const ids = (vendorIds || []).map(String);
+    if (!ids.length) return;
+
+    const filter = {
+      isActive: true,
+      isDefault: false,
+      channel,
+      applicableVendors: { $in: ids },
+    };
+    if (excludeId) filter._id = { $ne: excludeId };
+
+    const clash = await StockNotificationModel.findOne(filter)
+      .populate("applicableVendors", "name")
+      .session(session ?? null)
+      .lean();
+    if (!clash) return;
+
+    const taken = (clash.applicableVendors || [])
+      .filter((v) => ids.includes(String(v._id)))
+      .map((v) => v.name)
+      .join(", ");
+    throw new Error(
+      `${taken || "A selected vendor"} already belongs to "${clash.name}" on this channel. ` +
+        `Remove it there first, or pick a different vendor.`
+    );
+  }
+
+  /**
+   * Vendors this notification may still choose: active vendors minus the ones
+   * already spoken for on this channel. When editing, the notification keeps
+   * its OWN vendors in the list — otherwise its saved selection would vanish
+   * from its own form.
+   */
+  static async getAssignableVendors({ channel, excludeNotificationId, search } = {}) {
+    const filter = { isActive: true, isDefault: false, channel };
+    if (excludeNotificationId) filter._id = { $ne: excludeNotificationId };
+
+    const taken = await StockNotificationModel.find(filter).select("applicableVendors").lean();
+    const takenIds = taken.flatMap((x) => (x.applicableVendors || []).map(String));
+
+    const vendorFilter = { isActive: true };
+    if (takenIds.length) vendorFilter._id = { $nin: takenIds };
+    if (search) vendorFilter.name = { $regex: escapeRegex(search), $options: "i" };
+
+    return StockVendorModel.find(vendorFilter).select("name").sort({ name: 1 }).limit(50).lean();
+  }
+
   // ─── Create ──────────────────────────────────────────────────────────────
 
   static async createNotification(body, actor, session) {
@@ -17,6 +75,17 @@ export default class StockNotificationService {
 
       // Only one ACTIVE default per channel — demote whatever currently
       // holds it for this channel rather than making the admin do it first.
+      // Validated BEFORE the demote below: if this throws afterwards, another
+      // notification has already lost its default and nothing put it back.
+      if (!wantsDefault) {
+        await StockNotificationService.assertNoVendorOverlap(
+          channel,
+          applicableVendors,
+          null,
+          session
+        );
+      }
+
       if (wantsDefault) {
         await StockNotificationModel.updateMany(
           { isActive: true, isDefault: true, channel },
@@ -111,6 +180,17 @@ export default class StockNotificationService {
       if (ccEmails !== undefined) {
         notification.ccEmails = (ccEmails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean);
       }
+      if (!nextIsDefault) {
+        // excludeId is this record: its own vendors must not count as a clash
+        // with itself.
+        await StockNotificationService.assertNoVendorOverlap(
+          nextChannel,
+          applicableVendors,
+          notification._id,
+          session
+        );
+      }
+
       notification.isDefault = nextIsDefault;
       notification.applicableVendors = nextIsDefault ? [] : applicableVendors || [];
 

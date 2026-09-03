@@ -110,6 +110,25 @@ export default class StockNotificationController {
   }
 
   // Read-only lookup the Send Mail popup calls to prefill From/CC before send.
+  // Feeds the "Assign Vendors" picker. Without it the picker offers vendors
+  // that are already spoken for on this channel, and saving then fails
+  // validation — the list has to agree with the rule.
+  static async getAssignableVendors(req, res) {
+    try {
+      const { channel, excludeNotificationId, search } = req.query;
+      if (!channel) throw new Error("channel is required");
+      const data = await StockNotificationService.getAssignableVendors({
+        channel,
+        excludeNotificationId: excludeNotificationId || null,
+        search: search || "",
+      });
+      successResponseHandler(res, data, "Assignable vendors fetched successfully");
+    } catch (error) {
+      log.error("Error fetching assignable vendors", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
   static async resolveForVendor(req, res) {
     try {
       const channel = req.query.channel || "EMAIL";

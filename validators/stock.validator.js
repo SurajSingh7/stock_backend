@@ -207,6 +207,11 @@ export const validateCreateVendor = (body) => {
     if (!c?.name || !String(c.name).trim()) throw new Error(`${label}: name is required`);
     if (!c?.email || !String(c.email).trim()) throw new Error(`${label}: email is required`);
     if (!c?.phone || !String(c.phone).trim()) throw new Error(`${label}: phone is required`);
+    // Left optional: the schema defaults it to TO, so an older payload that
+    // omits it still saves and the contact keeps receiving mail.
+    if (c?.recipientType && !["TO", "CC", "NONE"].includes(String(c.recipientType).toUpperCase())) {
+      throw new Error(`${label}: recipientType must be TO, CC or None`);
+    }
   });
 
   if (!address || !address.fullAddress || !String(address.fullAddress).trim()) {
@@ -589,7 +594,22 @@ export const validateUpdateNotification = (body) => {
 export const validateSendMail = (body) => {
   const { sendEmail, to, cc } = body || {};
   if (sendEmail) {
-    if (!to || !isValidEmail(to)) throw new Error("A valid To email is required");
+    // A list now: a vendor may have several contacts marked To. A bare
+    // string is still accepted so an older caller keeps working.
+    const toList = (Array.isArray(to) ? to : [to])
+      .map((t) => String(t || '').trim())
+      .filter(Boolean);
+    if (!toList.length) {
+      // Says what to DO about it: the recipient list is configured on the
+      // vendor, not typed here, so 'a To email is required' would leave the
+      // user with nowhere to enter one.
+      throw new Error(
+        "This vendor has no contact marked To. Edit the vendor and set at least one contact’s Recipient Type to To."
+      );
+    }
+    toList.forEach((t) => {
+      if (!isValidEmail(t)) throw new Error('Invalid To email: ' + t);
+    });
     if (cc !== undefined) {
       if (!Array.isArray(cc)) throw new Error("cc must be an array");
       cc.forEach((e) => {

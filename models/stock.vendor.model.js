@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { CONTACT_RECIPIENT_TYPE, CONTACT_RECIPIENT_TYPE_ARRAY } from "../constants/stock.enums.js";
 import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const { Schema } = mongoose;
@@ -33,6 +34,21 @@ const contactSchema = new Schema(
     phone: { type: String, required: true, trim: true },
     designation: { type: String, trim: true, default: "" },
     department: { type: String, trim: true, default: "" },
+    // Where this person lands on a PO mail: the To line, the CC line, or
+    // nowhere. Most contacts on a vendor are reference people who should not
+    // be mailed at all, so emailing is opt-IN — except for PRIMARY, which is
+    // by definition the person you write to. Defaulting every contact to NONE
+    // would block the first PO on every newly created vendor.
+    recipientType: {
+      type: String,
+      enum: CONTACT_RECIPIENT_TYPE_ARRAY,
+      default: function () {
+        return this.label === "PRIMARY"
+          ? CONTACT_RECIPIENT_TYPE.TO
+          : CONTACT_RECIPIENT_TYPE.NONE;
+      },
+      uppercase: true,
+    },
   },
   { _id: false }
 );

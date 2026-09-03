@@ -228,6 +228,12 @@ export const ENTITY_SCOPE_ARRAY = Object.values(ENTITY_SCOPE);
 export const STANDARD_ACTIONS = ["CREATE", "READ", "UPDATE", "DELETE", "RESTORE"];
 
 // ─── Notification master ───────────────────────────────────────────────────
+// Which line of an outgoing vendor mail a contact belongs on. Held per
+// contact, not per vendor, so one vendor can have a buyer on To and their
+// accounts desk on CC.
+export const CONTACT_RECIPIENT_TYPE = { TO: "TO", CC: "CC", NONE: "NONE" };
+export const CONTACT_RECIPIENT_TYPE_ARRAY = Object.values(CONTACT_RECIPIENT_TYPE);
+
 export const NOTIFICATION_CHANNEL = {
   EMAIL: "EMAIL",
   WHATSAPP: "WHATSAPP",

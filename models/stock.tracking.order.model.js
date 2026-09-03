@@ -25,7 +25,10 @@ const mailResultSchema = new Schema(
     channel: { type: String, trim: true, default: "" },
     sentAt: { type: Date, default: null },
     notificationId: { type: Schema.Types.ObjectId, ref: "notifications", default: null },
-    to: { type: String, trim: true, default: "" },
+    // Array like cc: a PO can address several of the vendor's contacts.
+    // Mongoose casts an older single-string value into a one-element array on
+    // read, so existing rows keep working.
+    to: { type: [String], default: [] },
     cc: { type: [String], default: [] },
     from: { type: String, trim: true, default: "" },
   },

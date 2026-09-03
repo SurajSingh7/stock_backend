@@ -225,6 +225,9 @@ router.patch("/transfer-requests/:id/reject", authenticate, requirePermission("t
 // /resolve/:vendorId BEFORE /:id — same static-before-dynamic rule as terms-conditions.
 router.post("/notifications", authenticate, requirePermission("notifications", "CREATE"), StockNotificationController.createNotification);
 router.get("/notifications", authenticate, requirePermission("notifications", "READ"), StockNotificationController.getAllNotifications);
+// Static path, so above /:id. Vendors still selectable for a notification
+// on this channel — excludeNotificationId keeps an edit form showing its own.
+router.get("/notifications/assignable-vendors", authenticate, requirePermission("notifications", "READ"), StockNotificationController.getAssignableVendors);
 router.get("/notifications/resolve/:vendorId", authenticate, requirePermission("notifications", "READ"), StockNotificationController.resolveForVendor);
 router.get("/notifications/:id", authenticate, requirePermission("notifications", "READ"), StockNotificationController.getNotificationById);
 router.put("/notifications/:id", authenticate, requirePermission("notifications", "UPDATE"), StockNotificationController.updateNotification);
