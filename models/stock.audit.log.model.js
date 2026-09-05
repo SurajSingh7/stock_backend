@@ -13,6 +13,7 @@ const auditLogSchema = new Schema(
     action: { type: String, required: true, trim: true }, // matches the module's action vocabulary
     actor: {
       userId: { type: Schema.Types.ObjectId, default: null },
+      employeeCode: { type: String, default: "" }, // company id — reads better than a name two people share
       name: { type: String, default: "" },
       email: { type: String, default: "" },
       roleName: { type: String, default: "" },

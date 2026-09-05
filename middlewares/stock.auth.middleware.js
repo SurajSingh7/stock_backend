@@ -92,6 +92,10 @@ export async function authenticate(req, res, next) {
       // `_id` — matches the actingUser(req) shape already used across the
       // existing controllers (req.user?._id, req.user?.name).
       _id: hrmsUser._id,
+      // The company-facing identifier (payroll / ID card). Snapshotted onto
+      // every createdBy-updatedBy-deletedBy stamp, so a row names the person
+      // the way HR does, not just by a display name two people can share.
+      employeeCode: hrmsUser.basicemployees?.employeeCode ?? "",
       name: `${hrmsUser.basicemployees?.firstName ?? ""} ${hrmsUser.basicemployees?.lastName ?? ""}`.trim(),
       email: hrmsUser.email,
       phone: hrmsUser.personal?.phone,

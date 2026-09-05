@@ -28,7 +28,7 @@ const MODEL_FILE = {
   invoices: "stock.invoice.model.js",
 };
 
-const ACTOR_FIELDS = ["userId", "name", "email", "phone", "roleName"];
+const ACTOR_FIELDS = ["userId", "employeeCode", "name", "email", "phone", "roleName"];
 const ACTOR_PATHS = ["createdBy", "updatedBy", "deletedBy"];
 
 const failures = [];

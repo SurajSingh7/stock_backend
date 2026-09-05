@@ -27,6 +27,7 @@ export default class StockAuditLogService {
           // Handles both req.user (`_id`) and the older `actingUser(req)`
           // helper's minimal `{ id, name }` shape used by a few controllers.
           userId: actor?._id ?? actor?.id ?? null,
+          employeeCode: actor?.employeeCode ?? "",
           name: actor?.name ?? "",
           email: actor?.email ?? "",
           roleName: actor?.roleName ?? "",

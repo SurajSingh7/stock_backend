@@ -10,8 +10,9 @@ const { Schema } = mongoose;
  *
  * Identity: two people are called "Manoj Kumar". A name alone is ambiguous the
  * moment the company has a second one, and "created by Manoj Kumar" then means
- * nothing on a screen. Email is unique, phone is unique, role reads best — so
- * the record carries enough to name exactly one person without a lookup.
+ * nothing on a screen. Employee code is the identifier the company itself uses
+ * on payroll and ID cards, email is unique, phone is unique, role reads best —
+ * so the record carries enough to name exactly one person without a lookup.
  *
  * Locality: users live in HRMS, not in this database. There is no `users`
  * collection here, so `ref: "users"` cannot populate — a bare ObjectId renders
@@ -26,6 +27,7 @@ const { Schema } = mongoose;
 const actorSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, default: null },
+    employeeCode: { type: String, trim: true, default: "" },
     name: { type: String, trim: true, default: "" },
     email: { type: String, trim: true, default: "" },
     phone: { type: String, trim: true, default: "" },
@@ -39,6 +41,7 @@ export const actorSnapshot = (user) => {
   if (!user) return null;
   return {
     userId: user._id ?? user.id ?? null,
+    employeeCode: user.employeeCode ?? "",
     name: user.name ?? "",
     email: user.email ?? "",
     phone: user.phone ?? "",

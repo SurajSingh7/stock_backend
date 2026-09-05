@@ -24,12 +24,14 @@ const DRY = process.argv.includes("--dry");
 
 // Real HRMS users seen in this database's audit trail.
 // Pulled from HRMS /internal/user-context, not invented — these are the four
-// people who actually appear in this database's audit trail.
+// people who actually appear in this database's audit trail. employeeCode is
+// blank because neither source carries one; it is only ever filled by a real
+// request from here on, and inventing a code would be worse than an empty one.
 const USERS = [
-  { userId: "67fcaeefd7d3b3e80fa8d8ab", name: "Suraj  Singh",   email: "surajsingh@gtel.in",      phone: "9695215220", roleName: "Developer" },
-  { userId: "683412faf69da640da90df73", name: "Amit Batra",     email: "amit@gtel.in",            phone: "8860606963", roleName: "Admin" },
-  { userId: "67fcaee4d7d3b3e80fa8d4db", name: "PRADUMM  KUMAR", email: "GISPL056@gtel.in",        phone: "7409918796", roleName: "Standard Role" },
-  { userId: "6979fe225aab35a29ffdbc70", name: "Abhay Tiwari",   email: "abhaykanttiwari@gtel.in", phone: "6393216862", roleName: "Standard Role" },
+  { userId: "67fcaeefd7d3b3e80fa8d8ab", employeeCode: "", name: "Suraj  Singh",   email: "surajsingh@gtel.in",      phone: "9695215220", roleName: "Developer" },
+  { userId: "683412faf69da640da90df73", employeeCode: "", name: "Amit Batra",     email: "amit@gtel.in",            phone: "8860606963", roleName: "Admin" },
+  { userId: "67fcaee4d7d3b3e80fa8d4db", employeeCode: "", name: "PRADUMM  KUMAR", email: "GISPL056@gtel.in",        phone: "7409918796", roleName: "Standard Role" },
+  { userId: "6979fe225aab35a29ffdbc70", employeeCode: "", name: "Abhay Tiwari",   email: "abhaykanttiwari@gtel.in", phone: "6393216862", roleName: "Standard Role" },
 ];
 const BY_ID = new Map(USERS.map((u) => [u.userId, u]));
 
@@ -76,10 +78,11 @@ for (const name of COLLECTIONS) {
 
     let creator;
     if (created) {
-      // The audit log has no phone, so fill the rest from the known user
-      // where we have them — otherwise keep what the audit recorded.
+      // The audit log has no phone or employee code, so fill the rest from the
+      // known user where we have them — otherwise keep what the audit recorded.
       creator = BY_ID.get(String(created.actor.userId)) ?? {
         userId: String(created.actor.userId),
+        employeeCode: "",
         name: created.actor.name || "",
         email: created.actor.email || "",
         phone: "",
@@ -93,6 +96,7 @@ for (const name of COLLECTIONS) {
     const updater = latest
       ? BY_ID.get(String(latest.actor.userId)) ?? {
           userId: String(latest.actor.userId),
+          employeeCode: "",
           name: latest.actor.name || "",
           email: latest.actor.email || "",
           phone: "",
