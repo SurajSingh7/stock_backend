@@ -1,6 +1,7 @@
 import { successResponseHandler, errorResponseHandler } from "../helpers/response.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockAccessControlService from "../services/stock.access.control.service.js";
+import StockBranchModel from "../models/stock.branch.model.js";
 
 const log = getLogger(import.meta.url);
 const service = new StockAccessControlService();
@@ -177,7 +178,19 @@ export default class StockAccessControlController {
         departmentId: req.user.departmentId,
         branchId: req.user.branchId,
       });
-      const data = { isAdmin: req.user.isAdmin, branchId: req.user.branchId, modules };
+      // branchName travels with branchId so a screen can SHOW the user their
+      // own branch without calling /branches/active, which needs branches:READ
+      // — a permission most staff have no reason to hold.
+      const branch = req.user.branchId
+        ? await StockBranchModel.findById(req.user.branchId).select("name").lean()
+        : null;
+
+      const data = {
+        isAdmin: req.user.isAdmin,
+        branchId: req.user.branchId,
+        branchName: branch?.name || "",
+        modules,
+      };
       successResponseHandler(res, data, "Your permissions fetched successfully");
     } catch (error) {
       log.error("Error fetching own permissions", error);

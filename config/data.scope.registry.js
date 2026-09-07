@@ -26,7 +26,11 @@ export const DATA_SCOPE_REGISTRY = {
   "field-definitions": {},
   "product-definitions": {}, // its branchId lives inside branchThresholds[] — an
                              // alert setting per branch, not an owning branch.
-  vendors: {},
+  // Each branch keeps its own vendor list; central staff hold branch: ALL and
+  // see everyone's. Registered only after every vendor had a branch assigned
+  // (scripts/backfill-vendor-branch.js) — a null here is invisible to anyone
+  // on OWN, with no error to explain it.
+  vendors: { branch: "branchId" },
   "terms-conditions": {},
   notifications: {},
 

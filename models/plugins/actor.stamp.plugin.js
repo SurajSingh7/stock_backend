@@ -32,6 +32,17 @@ const actorSchema = new Schema(
     email: { type: String, trim: true, default: "" },
     phone: { type: String, trim: true, default: "" },
     roleName: { type: String, trim: true, default: "" },
+    // The creator's branch AT THE TIME — provenance, not a permission.
+    // Nothing filters on it today. It is recorded because it cannot be
+    // recovered later: if the business ever asks "which branch created this
+    // category / T&C / notification", the answer has to have been written down
+    // when it happened. A filter can be added any day (registry, one line);
+    // history cannot be reconstructed.
+    //
+    // Distinct from a model's own branchId (see stock.vendor.model.js), which
+    // says which branch a record BELONGS to and is editable. This one is a
+    // fact about the past and never changes.
+    branchId: { type: Schema.Types.ObjectId, default: null },
   },
   { _id: false }
 );
@@ -46,6 +57,7 @@ export const actorSnapshot = (user) => {
     email: user.email ?? "",
     phone: user.phone ?? "",
     roleName: user.roleName ?? "",
+    branchId: user.branchId ?? null,
   };
 };
 

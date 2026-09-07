@@ -126,6 +126,16 @@ const stockVendorSchema = new Schema(
     paymentTerms: { type: String, required: true, trim: true },
     notes: { type: String, trim: true, default: "" },
 
+    // Which branch this vendor BELONGS to — Chandigarh's vendors are not
+    // Azadpur's. Filled from the creator's branch, but editable: a vendor can
+    // be reassigned, and someone from head office may add a vendor on a
+    // branch's behalf.
+    //
+    // Stored rather than derived from createdBy.branchId on purpose. If the
+    // person who added it later transfers, their vendors must stay with the
+    // branch they were added for, not follow them.
+    branchId: { type: Schema.Types.ObjectId, ref: "branches", default: null },
+
     contacts: { type: [contactSchema], default: [] },
 
     address: { type: addressSchema, default: () => ({}) },
@@ -150,6 +160,7 @@ stockVendorSchema.index(
 
 stockVendorSchema.index({ "gst.gstNumber": 1 }, { sparse: true });
 stockVendorSchema.index({ isActive: 1 });
+stockVendorSchema.index({ branchId: 1 });
 
 stockVendorSchema.index({ "assignedProducts.categoryId": 1 });
 stockVendorSchema.index({ "assignedProducts.products.productId": 1 });

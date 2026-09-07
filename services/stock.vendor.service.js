@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockVendorModel from "../models/stock.vendor.model.js";
+import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
@@ -10,6 +11,16 @@ const ENTITY_TYPE = "vendors";
 
 
 const escapeRegex = (str = "") => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const SCOPE_MODULE_KEY = "vendors";
+
+// Throws the resource's normal "not found" rather than a 403 — a 403 would
+// confirm that a vendor outside the caller's branch exists.
+const assertDataScope = (vendor, dataAccess) => {
+  if (!isWithinDataScope(vendor, dataAccess, SCOPE_MODULE_KEY)) {
+    throw new Error("Vendor not found");
+  }
+};
 
 export default class StockVendorService {
 
@@ -62,8 +73,23 @@ export default class StockVendorService {
         session,
       });
 
+      // Always the creator's branch. body.branchId is deliberately ignored:
+      // the form shows the field disabled, and a UI that says "you cannot
+      // change this" while the API happily accepts a different value is not a
+      // rule, it is decoration. Reassignment happens on edit, admin only.
+      const branchId = actor?.branchId || null;
+      if (!branchId) {
+        // Refused rather than saved with a null branch: such a vendor is
+        // invisible to every user on Own-branch scope, with nothing on screen
+        // to explain why it never appears.
+        throw new Error(
+          "Your account has no branch assigned, so this vendor would belong to no branch and stay hidden. Ask an administrator to set your branch in HRMS."
+        );
+      }
+
       const docData = {
         name: body.name,
+        branchId,
         vendorAlias: body.vendorAlias || "",
         gst: body.gst || {},
         panNumber: body.panNumber || "",
@@ -101,7 +127,7 @@ export default class StockVendorService {
     }
   }
 
- static async getAllVendors(query) {
+ static async getAllVendors(query, dataAccess) {
     try {
       const { search, showInactive, categoryId, productId } = query;
       const { skip, limit, page } = paginate(query);
@@ -112,6 +138,7 @@ export default class StockVendorService {
       // everything" vs "active only" here. There is no server-side
       // "inactive only" mode — that tab is handled client-side in Vendors.jsx.
       if (showInactive !== "true") filter.isActive = true;
+      applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
 
       if (search) {
         const regex = new RegExp(escapeRegex(search.trim()), "i");
@@ -149,20 +176,30 @@ export default class StockVendorService {
     }
   }
 
-  static async getVendorById(id) {
+  static async getVendorById(id, dataAccess) {
     try {
       const vendor = await StockVendorModel.findOne({ _id: id, isActive: true })
         .populate("assignedProducts.categoryId", "name type")
         .populate("assignedProducts.products.productId", "name warrantyYears")
+        // Name only, and flattened below — the form binds branchId to a select,
+        // so the field itself has to stay a plain id.
+        .populate("branchId", "name")
         .lean();
       if (!vendor) throw new Error("Vendor not found");
+      assertDataScope(vendor, dataAccess);
+
+      // Flatten the populated branch back into id + name.
+      if (vendor.branchId && typeof vendor.branchId === "object") {
+        vendor.branchName = vendor.branchId.name || "";
+        vendor.branchId = vendor.branchId._id;
+      }
       return vendor;
     } catch (error) {
       throw error;
     }
   }
 
-  static async updateVendor(id, body, actor, session) {
+  static async updateVendor(id, body, actor, session, dataAccess) {
     try {
       if (Object.prototype.hasOwnProperty.call(body, "vendorCode")) {
         throw new Error("vendorCode cannot be updated once set");
@@ -170,6 +207,13 @@ export default class StockVendorService {
 
       const vendor = await StockVendorModel.findOne({ _id: id, isActive: true }).session(session);
       if (!vendor) throw new Error("Vendor not found");
+      assertDataScope(vendor, dataAccess);
+
+      // Flatten the populated branch back into id + name.
+      if (vendor.branchId && typeof vendor.branchId === "object") {
+        vendor.branchName = vendor.branchId.name || "";
+        vendor.branchId = vendor.branchId._id;
+      }
       const before = vendor.toObject();
 
       await StockVendorService.assertVendorNotDuplicate({
@@ -179,7 +223,12 @@ export default class StockVendorService {
         session,
       });
 
+      // Reassigning a vendor to another branch is admin-only. Everyone else
+      // sees the field disabled, and the list here is what actually enforces
+      // it. Admins already bypass data scope entirely, so this grants them
+      // nothing they did not have.
       const updatableFields = [
+        ...(actor?.isAdmin ? ["branchId"] : []),
         "name",
         "vendorAlias",
         "gst",
@@ -207,10 +256,17 @@ export default class StockVendorService {
     }
   }
 
-  static async softDeleteVendor(id, actor, session) {
+  static async softDeleteVendor(id, actor, session, dataAccess) {
     try {
       const vendor = await StockVendorModel.findOne({ _id: id, isActive: true }).session(session);
       if (!vendor) throw new Error("Vendor not found");
+      assertDataScope(vendor, dataAccess);
+
+      // Flatten the populated branch back into id + name.
+      if (vendor.branchId && typeof vendor.branchId === "object") {
+        vendor.branchName = vendor.branchId.name || "";
+        vendor.branchId = vendor.branchId._id;
+      }
       const before = vendor.toObject();
 
       // NOTE: stock_inventory_items is not built yet (spec Section 8.5).
@@ -239,10 +295,11 @@ export default class StockVendorService {
     }
   }
 
-  static async restoreVendor(id, actor, session) {
+  static async restoreVendor(id, actor, session, dataAccess) {
     try {
       const vendor = await StockVendorModel.findOne({ _id: id, isActive: false }).session(session);
       if (!vendor) throw new Error("Inactive vendor not found");
+      assertDataScope(vendor, dataAccess);
       const before = vendor.toObject();
 
       vendor.isActive = true;

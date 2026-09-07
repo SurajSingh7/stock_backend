@@ -43,6 +43,7 @@ for (const key of Object.keys(DATA_SCOPE_REGISTRY)) {
 // handful that differ rather than guessing.
 const MODEL_FILE = {
   branches: "stock.branch.model.js",
+  vendors: "stock.vendor.model.js",
   "inventory-items": "stock.inventory.item.model.js",
   "transfer-requests": "stock.transfer.request.model.js",
   quotations: "stock.quotation.model.js",
@@ -91,6 +92,7 @@ for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
 /* ── 3. scoped services actually enforce ──────────────────────────────────── */
 const SERVICE_FILE = {
   branches: "stock.branch.service.js",
+  vendors: "stock.vendor.service.js",
   "inventory-items": "stock.inventory.item.service.js",
   "transfer-requests": "stock.transfer.request.service.js",
   quotations: "stock.quotation.service.js",
@@ -129,6 +131,7 @@ for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
  */
 const OWN_MODEL = {
   branches: "StockBranchModel",
+  vendors: "StockVendorModel",
   "inventory-items": "StockInventoryItemModel",
   "transfer-requests": "StockTransferRequestModel",
   quotations: "StockQuotationModel",
@@ -143,6 +146,10 @@ const UNSCOPED_BY_DESIGN = {
   branches: {
     assertCodeNotDuplicate: "uniqueness must consider every branch",
     getActiveBranches: "dropdown for picking the OTHER branch of a transfer",
+  },
+  vendors: {
+    assertVendorNotDuplicate: "a duplicate name or GST must be caught across every branch",
+    generateNextVendorCode: "sequence spans all branches",
   },
   "transfer-requests": { generateRequestNumber: "sequence spans all branches" },
   quotations: { generateQuotationNumber: "sequence spans all users" },

@@ -78,14 +78,7 @@ export async function authenticate(req, res, next) {
       setCachedUser(userId, hrmsUser);
     }
 
-    // Branch comes from HRMS and nowhere else — it's whatever an admin picked
-    // in the staff-registration Login step. null is a legitimate value: most
-    // HRMS users (sales, HR) are not branch staff and never get one.
-    //
-    // Deliberately NOT a 403 here. Blocking at this layer would also lock out
-    // admins and anyone holding ALL_BRANCHES scope, since authenticate runs
-    // before requirePermission. A branchless user is let through and the scope
-    // layer resolves them to zero rows — restrictive, but not a lockout.
+
     const branchId = hrmsUser.branch ?? null;
 
     req.user = {

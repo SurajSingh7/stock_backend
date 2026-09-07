@@ -26,7 +26,7 @@ export default class StockVendorController {
 
   static async getAllVendors(req, res) {
     try {
-      const data = await StockVendorService.getAllVendors(req.query);
+      const data = await StockVendorService.getAllVendors(req.query, req.dataAccess);
       successResponseHandler(res, data, "Vendors fetched successfully");
     } catch (error) {
       log.error("Error fetching vendors", error);
@@ -36,7 +36,7 @@ export default class StockVendorController {
 
   static async getVendorById(req, res) {
     try {
-      const vendor = await StockVendorService.getVendorById(req.params.id);
+      const vendor = await StockVendorService.getVendorById(req.params.id, req.dataAccess);
       successResponseHandler(res, vendor, "Vendor fetched successfully");
     } catch (error) {
       log.error("Error fetching vendor", error);
@@ -49,7 +49,7 @@ export default class StockVendorController {
     try {
       session.startTransaction();
       validateUpdateVendor(req.body);
-      const vendor = await StockVendorService.updateVendor(req.params.id, req.body, req.user, session);
+      const vendor = await StockVendorService.updateVendor(req.params.id, req.body, req.user, session, req.dataAccess);
       await session.commitTransaction();
       successResponseHandler(res, vendor, "Vendor updated successfully");
     } catch (error) {
@@ -65,7 +65,7 @@ export default class StockVendorController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      await StockVendorService.softDeleteVendor(req.params.id, req.user, session);
+      await StockVendorService.softDeleteVendor(req.params.id, req.user, session, req.dataAccess);
       await session.commitTransaction();
       successResponseHandler(res, null, "Vendor deleted successfully");
     } catch (error) {
@@ -81,7 +81,7 @@ export default class StockVendorController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      const vendor = await StockVendorService.restoreVendor(req.params.id, req.user, session);
+      const vendor = await StockVendorService.restoreVendor(req.params.id, req.user, session, req.dataAccess);
       await session.commitTransaction();
       successResponseHandler(res, vendor, "Vendor restored successfully");
     } catch (error) {
