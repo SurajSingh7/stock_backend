@@ -425,18 +425,36 @@ export const validateMarkNotRequired = (body) => {
 
 // ─── Branch Validators ─────────────────────────────────────────────────────
 
+// The client picks the state from the shared Indian-state list and fills the
+// GST state code from that same entry, so the two always travel together: a
+// state with no code (or a code with no state) means the payload was hand-built
+// rather than picked, and would break any later CGST/IGST comparison.
+const assertBranchState = (state, stateCode) => {
+  const hasState = state !== undefined && state !== null && String(state).trim() !== "";
+  const hasCode = stateCode !== undefined && stateCode !== null && String(stateCode).trim() !== "";
+
+  if (hasCode && !/^[0-9]{2}$/.test(String(stateCode).trim()))
+    throw new Error("Invalid state code — it must be the 2-digit GST state code");
+  if (hasState && !hasCode) throw new Error("State code is required when a state is selected");
+  if (hasCode && !hasState) throw new Error("State is required when a state code is given");
+};
+
 export const validateCreateBranch = (body) => {
-  const { name, code, branchRole } = body || {};
+  const { name, code, state, stateCode, branchRole } = body || {};
   if (!name || !String(name).trim()) throw new Error("name is required");
   if (!code || !String(code).trim()) throw new Error("code is required");
+  assertBranchState(state, stateCode);
   if (branchRole !== undefined && branchRole !== null && !BRANCH_ROLE_ARRAY.includes(branchRole))
     throw new Error(`branchRole must be one of: ${BRANCH_ROLE_ARRAY.join(", ")}`);
 };
 
 export const validateUpdateBranch = (body) => {
-  const { name, code, branchRole } = body || {};
+  const { name, code, state, stateCode, branchRole } = body || {};
   if (name !== undefined && !String(name).trim()) throw new Error("name cannot be empty");
   if (code !== undefined && !String(code).trim()) throw new Error("code cannot be empty");
+  // The pair is checked only when at least one half is sent — an update that
+  // touches neither must not trip the "both or neither" rule.
+  if (state !== undefined || stateCode !== undefined) assertBranchState(state, stateCode);
   if (branchRole !== undefined && branchRole !== null && !BRANCH_ROLE_ARRAY.includes(branchRole))
     throw new Error(`branchRole must be one of: ${BRANCH_ROLE_ARRAY.join(", ")}`);
 };

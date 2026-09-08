@@ -12,7 +12,12 @@ const branchSchema = new Schema(
     description: { type: String, trim: true, default: "" },
 
     city: { type: String, trim: true, default: "" },
+    // State is picked from the shared Indian-state list on the client, which is
+    // also the only place that knows the GST state code — so both halves are
+    // stored together (flat, the same shape purchase/tracking orders use for
+    // their buyer entity) rather than re-deriving the code here.
     state: { type: String, trim: true, default: "" },
+    stateCode: { type: String, trim: true, default: "" },
     // Descriptive role in the network (CENTRAL/REGIONAL/NORMAL) — used for
     // reporting/filtering only, never restricts transfer eligibility.
     branchRole: {

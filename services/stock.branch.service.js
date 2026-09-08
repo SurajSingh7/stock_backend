@@ -32,7 +32,7 @@ export default class StockBranchService {
   }
 
   static async createBranch(body, actor, session) {
-    const { name, code, address, description, city, state, branchRole } = body;
+    const { name, code, address, description, city, state, stateCode, branchRole } = body;
     await StockBranchService.assertCodeNotDuplicate({ code, session });
 
     const branch = new StockBranchModel({
@@ -42,6 +42,7 @@ export default class StockBranchService {
       description: description || "",
       city: city || "",
       state: state || "",
+      stateCode: stateCode || "",
       branchRole: branchRole || undefined,
     });
     await branch.save({ session });
@@ -143,7 +144,7 @@ export default class StockBranchService {
       });
     }
 
-    const allowed = ["name", "code", "address", "description", "city", "state", "branchRole"];
+    const allowed = ["name", "code", "address", "description", "city", "state", "stateCode", "branchRole"];
     allowed.forEach((key) => {
       if (body[key] !== undefined) branch[key] = body[key];
     });
