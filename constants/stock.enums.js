@@ -231,6 +231,13 @@ export const STANDARD_ACTIONS = ["CREATE", "READ", "UPDATE", "DELETE", "RESTORE"
 // Which line of an outgoing vendor mail a contact belongs on. Held per
 // contact, not per vendor, so one vendor can have a buyer on To and their
 // accounts desk on CC.
+// Whether this module appears in the navigation, held as an action so it
+// flows through the same role -> department -> user-override stack every
+// other permission does. Deliberately separate from READ: a user can need a
+// module's data on other screens (filters, dropdowns) while having no reason
+// to open its management page from the menu.
+export const VIEW_MENU_ACTION = "VIEW_MENU";
+
 export const CONTACT_RECIPIENT_TYPE = { TO: "TO", CC: "CC", NONE: "NONE" };
 export const CONTACT_RECIPIENT_TYPE_ARRAY = Object.values(CONTACT_RECIPIENT_TYPE);
 

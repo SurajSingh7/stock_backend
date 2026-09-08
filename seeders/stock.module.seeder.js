@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import StockModuleModel from "../models/stock.module.model.js";
-import { STANDARD_ACTIONS } from "../constants/stock.enums.js";
+import { STANDARD_ACTIONS, VIEW_MENU_ACTION } from "../constants/stock.enums.js";
 dotenv.config();
 
 // One entry per resource in routes/v1.stock.routes.js. `key` matches the
@@ -9,20 +9,25 @@ dotenv.config();
 // call site. Only inserts what's missing — an admin's later edits to a
 // module's action list (via the access-control API) are never overwritten
 // on restart.
+// VIEW_MENU is appended to every module below rather than written out
+// thirteen times — it applies to all of them, and a module quietly missing it
+// would be permanently unreachable from the navigation.
+const withMenu = (actions) => [...actions, VIEW_MENU_ACTION];
+
 const MODULE_DEFINITIONS = [
-  { key: "field-definitions", name: "Field Definitions", actions: STANDARD_ACTIONS },
-  { key: "categories", name: "Categories", actions: [...STANDARD_ACTIONS, "REORDER", "MOVE", "TOGGLE_TYPE"] },
-  { key: "product-definitions", name: "Product Definitions", actions: STANDARD_ACTIONS },
-  { key: "vendors", name: "Vendors", actions: STANDARD_ACTIONS },
-  { key: "terms-conditions", name: "Terms & Conditions", actions: STANDARD_ACTIONS },
-  { key: "inventory-items", name: "Inventory Items", actions: [...STANDARD_ACTIONS, "BULK_CREATE", "UPDATE_STATUS"] },
-  { key: "quotations", name: "Quotations", actions: [...STANDARD_ACTIONS, "REVIEW", "DISABLE_VENDOR", "ENABLE_VENDOR"] },
-  { key: "purchase-orders", name: "Purchase Orders", actions: ["CREATE", "READ", "UPDATE", "DELETE", "APPROVE", "REJECT", "SEND_MAIL"] },
-  { key: "tracking-orders", name: "Tracking Orders", actions: ["READ", "ADD_ENTITY", "MARK_NOT_REQUIRED"] },
-  { key: "invoices", name: "Invoices", actions: ["CREATE", "READ", "UPDATE", "APPROVE", "REJECT"] },
-  { key: "branches", name: "Branches", actions: STANDARD_ACTIONS },
-  { key: "transfer-requests", name: "Transfer Requests", actions: ["CREATE", "READ", "PROCESS", "REJECT"] },
-  { key: "notifications", name: "Notifications", actions: STANDARD_ACTIONS },
+  { key: "field-definitions", name: "Field Definitions", actions: withMenu(STANDARD_ACTIONS) },
+  { key: "categories", name: "Categories", actions: withMenu([...STANDARD_ACTIONS, "REORDER", "MOVE", "TOGGLE_TYPE"]) },
+  { key: "product-definitions", name: "Product Definitions", actions: withMenu(STANDARD_ACTIONS) },
+  { key: "vendors", name: "Vendors", actions: withMenu(STANDARD_ACTIONS) },
+  { key: "terms-conditions", name: "Terms & Conditions", actions: withMenu(STANDARD_ACTIONS) },
+  { key: "inventory-items", name: "Inventory Items", actions: withMenu([...STANDARD_ACTIONS, "BULK_CREATE", "UPDATE_STATUS"]) },
+  { key: "quotations", name: "Quotations", actions: withMenu([...STANDARD_ACTIONS, "REVIEW", "DISABLE_VENDOR", "ENABLE_VENDOR"]) },
+  { key: "purchase-orders", name: "Purchase Orders", actions: withMenu(["CREATE", "READ", "UPDATE", "DELETE", "APPROVE", "REJECT", "SEND_MAIL"]) },
+  { key: "tracking-orders", name: "Tracking Orders", actions: withMenu(["READ", "ADD_ENTITY", "MARK_NOT_REQUIRED"]) },
+  { key: "invoices", name: "Invoices", actions: withMenu(["CREATE", "READ", "UPDATE", "APPROVE", "REJECT"]) },
+  { key: "branches", name: "Branches", actions: withMenu(STANDARD_ACTIONS) },
+  { key: "transfer-requests", name: "Transfer Requests", actions: withMenu(["CREATE", "READ", "PROCESS", "REJECT"]) },
+  { key: "notifications", name: "Notifications", actions: withMenu(STANDARD_ACTIONS) },
 ];
 
 export const seedModules = async () => {
