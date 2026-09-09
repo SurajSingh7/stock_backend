@@ -31,6 +31,40 @@ function setCachedUser(userId, user) {
   userContextCache.set(userId, { user, expiresAt: Date.now() + USER_CONTEXT_TTL_MS });
 }
 
+/* ── Branch prerequisite ───────────────────────────────────────────────────
+ * Stock is branch-scoped from top to bottom: inventory, transfers and invoices
+ * all filter on branchId, and vendors/products are written against one. A user
+ * with no branch is not a restricted user — they are an unusable one. Every
+ * list comes back empty with nothing on screen to explain why, and any write
+ * that stores a branch either fails deep in a service or saves a row its own
+ * author can no longer read back.
+ *
+ * So it is refused once, here, rather than surfacing as ten different
+ * confusing symptoms. The branch itself lives in HRMS (see routes/internal.routes.js
+ * — HRMS reads the branch list from this service and stores the chosen id), so
+ * this is the only place that can see it arrive missing.
+ *
+ * WHY IN authenticate: every stock route calls authenticate individually — there
+ * is no app-level auth layer to hang this off. A router.use() would re-run
+ * authenticate for every request, and adding a middleware to 120+ route lines
+ * would be a large diff for one rule. This is the single choke point.
+ *
+ * The two exempt paths are what lets the frontend explain the problem rather
+ * than just breaking: /access-control/my-permissions is what PermissionContext
+ * calls on boot, and it must be able to answer with branchId: null so the UI can
+ * show the "no branch assigned" screen. /me is the matching diagnostic. Both are
+ * read-only and return nothing but the caller's own identity.
+ *
+ * Admins are NOT exempt, deliberately: an admin with no branch hits the same
+ * empty lists and unusable writes as anyone else, and the fix lives in HRMS
+ * rather than in this app, so blocking them locks nobody out of anything they
+ * could have repaired from here. To exempt them, add `&& !req.user.isAdmin`
+ * to the condition below.
+ */
+const BRANCH_EXEMPT_PATHS = new Set(["/me", "/access-control/my-permissions"]);
+
+export const BRANCH_REQUIRED_CODE = "BRANCH_NOT_ASSIGNED";
+
 export async function authenticate(req, res, next) {
   try {
     const token = req.cookies?.userSession;
@@ -104,6 +138,19 @@ export async function authenticate(req, res, next) {
       ipAddress: req.ip || req.connection?.remoteAddress || null,
       userAgent: req.headers["user-agent"] || "",
     };
+
+    // Checked AFTER req.user is built, so the exempt endpoints still answer with
+    // a fully populated user (carrying branchId: null) instead of a bare 403 the
+    // frontend could not interpret. `code` is what the client keys off — the
+    // message is for humans and may be reworded.
+    if (!req.user.branchId && !BRANCH_EXEMPT_PATHS.has(req.path)) {
+      return res.status(403).json({
+        success: false,
+        code: BRANCH_REQUIRED_CODE,
+        message:
+          "Your account has no branch assigned, so Stock cannot be used yet. Ask an administrator to set your branch in HRMS, then sign in again.",
+      });
+    }
 
     // Everything downstream of here runs inside a context carrying the actor,
     // so the actor-stamp plugin can fill createdBy/updatedBy on any write
