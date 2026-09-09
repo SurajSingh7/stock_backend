@@ -159,12 +159,17 @@ stockVendorSchema.index(
 );
 
 stockVendorSchema.index({ "gst.gstNumber": 1 }, { sparse: true });
+// Backs the duplicate-PAN lookup in assertVendorNotDuplicate. Sparse, and NOT
+// unique: the rule is "no two ACTIVE vendors share a PAN", and a unique index
+// cannot express that — it would also block a soft-deleted vendor's PAN from
+// ever being used again. The service holds the rule; this just makes it fast.
+stockVendorSchema.index({ panNumber: 1 }, { sparse: true });
 stockVendorSchema.index({ isActive: 1 });
 stockVendorSchema.index({ branchId: 1 });
 
 stockVendorSchema.index({ "assignedProducts.categoryId": 1 });
 stockVendorSchema.index({ "assignedProducts.products.productId": 1 });
-
+
 
 // who created / last touched this — see the plugin for why it is a hook
 stockVendorSchema.plugin(actorStampPlugin);

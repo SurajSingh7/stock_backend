@@ -198,12 +198,25 @@ export const validateUpdateItemStatus = (body) => {
 
 // ─── Vendor Validators ────────────────────────────────────────────────────────
 
+// Five letters, four digits, one letter — e.g. ABCDE1234F. Same shape the
+// vendor form checks client-side, restated here because a validator that
+// trusts the client is not a validator.
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+
 export const validateCreateVendor = (body) => {
-  const { name, paymentTerms, contacts, address, bankAccounts, gst } = body || {};
+  const { name, paymentTerms, contacts, address, bankAccounts, gst, panNumber } = body || {};
 
   if (!name || !String(name).trim()) throw new Error("name is required");
   if (!paymentTerms || !String(paymentTerms).trim()) {
     throw new Error("paymentTerms is required");
+  }
+
+  // Required: a vendor is a legal payee, and PAN is what identifies one for
+  // TDS and reporting. Uniqueness needs the collection, so that half lives in
+  // StockVendorService.assertVendorNotDuplicate.
+  if (!panNumber || !String(panNumber).trim()) throw new Error("panNumber is required");
+  if (!PAN_RE.test(String(panNumber).trim().toUpperCase())) {
+    throw new Error("panNumber must be a valid PAN (e.g. ABCDE1234F)");
   }
 
   if (!Array.isArray(contacts) || contacts.length === 0) {

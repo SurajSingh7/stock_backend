@@ -24,7 +24,16 @@ const assertDataScope = (vendor, dataAccess) => {
 
 export default class StockVendorService {
 
-  static async assertVendorNotDuplicate({ name, gstNumber, excludeId, session }) {
+  // Identity guards. All three match case-insensitively against ACTIVE vendors
+  // only — a soft-deleted vendor does not block reuse of its name, GST or PAN,
+  // which is the long-standing behaviour here.
+  //
+  // NOTE ON PAN: one PAN can legitimately hold several GSTINs — a company
+  // registered in more than one state has the same PAN throughout. This rule
+  // rejects that outright, one PAN one vendor, as specified. If a multi-state
+  // vendor ever needs separate rows, the check to relax is this one: allow a
+  // repeat PAN when the GST numbers differ.
+  static async assertVendorNotDuplicate({ name, gstNumber, panNumber, excludeId, session }) {
     if (name) {
       const nameFilter = {
         name: new RegExp(`^${escapeRegex(name.trim())}$`, "i"),
@@ -43,6 +52,25 @@ export default class StockVendorService {
       if (excludeId) gstFilter._id = { $ne: excludeId };
       const existingGst = await StockVendorModel.findOne(gstFilter).session(session).lean();
       if (existingGst) throw new Error("A vendor with this GST number already exists.");
+    }
+
+    if (panNumber) {
+      const panFilter = {
+        panNumber: new RegExp(`^${escapeRegex(panNumber.trim())}$`, "i"),
+        isActive: true,
+      };
+      if (excludeId) panFilter._id = { $ne: excludeId };
+      const existingPan = await StockVendorModel.findOne(panFilter).session(session).lean();
+      if (existingPan) {
+        // Names the holder: "PAN already exists" leaves the user hunting for
+        // which vendor has it, and the answer is usually a near-duplicate row
+        // they meant to edit.
+        throw new Error(
+          `A vendor with this PAN already exists: ${existingPan.name}${
+            existingPan.vendorCode ? ` (${existingPan.vendorCode})` : ""
+          }.`
+        );
+      }
     }
   }
 
@@ -70,6 +98,7 @@ export default class StockVendorService {
       await StockVendorService.assertVendorNotDuplicate({
         name: body.name,
         gstNumber: body?.gst?.gstNumber,
+        panNumber: body.panNumber,
         session,
       });
 
@@ -219,6 +248,7 @@ export default class StockVendorService {
       await StockVendorService.assertVendorNotDuplicate({
         name: body.name,
         gstNumber: body?.gst?.gstNumber,
+        panNumber: body.panNumber,
         excludeId: id,
         session,
       });
