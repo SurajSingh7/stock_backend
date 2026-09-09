@@ -5,7 +5,8 @@ import StockCategoryModel from "../models/stock.category.model.js";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
 import StockBranchModel from "../models/stock.branch.model.js";
-import { CATEGORY_TYPES, GST_RATES_ARRAY } from "../constants/stock.enums.js";
+import StockGstRateService from "./stock.gst.rate.service.js";
+import { CATEGORY_TYPES } from "../constants/stock.enums.js";
 import { deleteProductImageFile } from "../helpers/stock.upload.helper.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 
@@ -106,6 +107,9 @@ export default class StockProductDefinitionService {
 
       await StockProductDefinitionService.assertSelectedFieldsApplicable(trackingMethod, selectedFields, session);
       await StockProductDefinitionService.assertBranchThresholdsComplete(branchThresholds, session);
+      // Returns the rate as a Number (or null) — the same normalisation the
+      // priced-line models already apply, done once here.
+      const normalizedGstRate = await StockGstRateService.assertRateAllowed(gstRate, session);
 
       const def = new StockProductDefinitionModel({
         categoryId,
@@ -113,7 +117,7 @@ export default class StockProductDefinitionService {
         trackingMethod,
         selectedFields,
         status: status ?? "ACTIVE",
-        gstRate: gstRate ?? null,
+        gstRate: normalizedGstRate,
         // Independent of trackingMethod — validated (required, pieces/meter)
         // in validateCreateProductDefinition.
         unit,
@@ -237,6 +241,12 @@ export default class StockProductDefinitionService {
         await StockProductDefinitionService.assertBranchThresholdsComplete(body.branchThresholds, session);
       }
 
+      // Only when the edit actually touches it — an update that leaves gstRate
+      // alone must keep working after the product's slab has been retired.
+      if (body.gstRate !== undefined) {
+        body.gstRate = await StockGstRateService.assertRateAllowed(body.gstRate, session);
+      }
+
       const allowed = [
         "name",
         "trackingMethod",
@@ -323,14 +333,4 @@ export default class StockProductDefinitionService {
     }
   }
 
-  static async getGstRates() {
-    try {
-      return GST_RATES_ARRAY.map((rate) => ({
-        value: rate,
-        label: `${rate}%`,
-      }));
-    } catch (error) {
-      throw error;
-    }
-  }
 }

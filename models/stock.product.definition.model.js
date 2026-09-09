@@ -4,7 +4,6 @@ import {
   TRACKING_METHODS_ARRAY,
   PRODUCT_DEF_STATUS_ARRAY,
   UNIT_TYPES_ARRAY,
-  GST_RATES_ARRAY,
 } from "../constants/stock.enums.js";
 
 const selectedFieldSchema = new mongoose.Schema(
@@ -69,9 +68,26 @@ const stockProductDefinitionSchema = new mongoose.Schema(
     },
 
     // ── FIELDS added earlier for billing/GST/unit UI ──
+    // The slab as a NUMBER, matching how quotations and purchase orders have
+    // always stored it — this field used to be a String, which made "18" !== 18
+    // every time a product's default was copied onto a priced line.
+    //
+    // A plain value, never a ref to the gstrates collection: that is what lets
+    // an admin retire a slab without touching products already defined on it.
+    // No enum either — the allowed set is the active rows in gstrates, checked
+    // on write by StockGstRateService.assertRateAllowed.
+    //
+    // Required in validateProductDefinitionExtras, NOT with `required: true`
+    // here, unlike `unit` below. Rows predating that rule still hold null, and
+    // softDelete/restore both go through def.save() — a schema-level require
+    // would make those documents impossible to delete or restore, failing with
+    // a GST error on an operation that never touched GST. The validator covers
+    // every create and update, which is where the rule actually belongs.
+    // Backfill the remaining nulls and this can become `required: true`.
     gstRate: {
-      type: String,
-      enum: GST_RATES_ARRAY,
+      type: Number,
+      min: 0,
+      max: 100,
       default: null,
     },
     // Independent of trackingMethod — both are explicit client choices

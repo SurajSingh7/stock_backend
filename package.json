@@ -6,6 +6,7 @@
     "start": "node app.js",
     "seed": "node seeders/stock.field.definition.seeder.js",
     "seed:modules": "node seeders/stock.module.seeder.js",
+    "seed:gst": "node seeders/stock.gst.rate.seeder.js",
     "check:routes": "node scripts/check-route-permissions.js",
     "dev": "pm2 start app.js --name stock-backend --watch",
     "check:scope": "node scripts/check-data-scope.js",

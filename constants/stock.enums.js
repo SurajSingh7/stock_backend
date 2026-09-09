@@ -55,7 +55,10 @@ export const UNIT_TYPES = {
 };
 
 export const UNIT_TYPES_ARRAY = Object.values(UNIT_TYPES);
-export const GST_RATES_ARRAY = ["0", "5", "12", "18", "28"];
+
+// GST_RATES_ARRAY used to live here. It is now the `gstrates` collection —
+// see models/stock.gst.rate.model.js for why a hardcoded slab list was the
+// wrong shape, and seeders/stock.gst.rate.seeder.js for the starting rows.
 
 // ─── Quotation status ─────────────────────────────────────────────────────────
 // DERIVED from categoryApprovals[] and re-stored on review:

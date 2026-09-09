@@ -85,16 +85,6 @@ export default class StockProductDefinitionController {
     }
   }
 
-  static async getGstRates(req, res) {
-    try {
-      const data = await StockProductDefinitionService.getGstRates();
-      successResponseHandler(res, data, "GST rates fetched successfully");
-    } catch (error) {
-      log.error("Error fetching GST rates", error);
-      errorResponseHandler(res, error);
-    }
-  }
-
   static async getProductDefinitionById(req, res) {
     try {
       const data = await StockProductDefinitionService.getProductDefinitionById(req.params.id);

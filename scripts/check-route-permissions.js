@@ -10,6 +10,11 @@ import router from "../routes/v1.stock.routes.js";
 const AUTH_ONLY_ROUTES = [
   { path: "/me", method: "get" },
   { path: "/access-control/my-permissions", method: "get" },
+  // Reference data with no per-user dimension, read by every GST dropdown in
+  // the app. Gating it on `gst-rates:READ` would make the Master > GST Rates
+  // management permission a prerequisite for pricing anything — see the route
+  // comment in routes/v1.stock.routes.js.
+  { path: "/gst-rates/active", method: "get" },
 ];
 
 const ADMIN_ONLY_PREFIXES = ["/access-control", "/audit-log"];

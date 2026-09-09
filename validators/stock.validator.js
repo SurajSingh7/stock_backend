@@ -4,7 +4,6 @@ import {
   ITEM_STATUS_ARRAY,
   CATEGORY_TYPES_ARRAY,
   UNIT_TYPES_ARRAY,
-  GST_RATES_ARRAY,
   CATEGORY_APPROVAL_STATUS_ARRAY,
   TERMS_STATUS_ARRAY,
   NOTIFICATION_CHANNEL_ARRAY,
@@ -100,8 +99,18 @@ const validateProductDefinitionExtras = (body) => {
   if (!UNIT_TYPES_ARRAY.includes(unit))
     throw new Error(`unit must be one of: ${UNIT_TYPES_ARRAY.join(", ")}`);
 
-  if (gstRate !== undefined && gstRate !== null && !GST_RATES_ARRAY.includes(String(gstRate)))
-    throw new Error(`gstRate must be one of: ${GST_RATES_ARRAY.join(", ")}`);
+  // Required: every product is billed, so it needs a slab. 0 is a legitimate
+  // answer (exempt goods), which is why this is an explicit empty-check and
+  // not a falsy one — `!gstRate` would reject 0.
+  //
+  // Shape only. That the number is an ACTIVE slab needs the gstrates
+  // collection, so it lives in the service (StockGstRateService
+  // .assertRateAllowed), same split as branchThresholds below.
+  if (gstRate === undefined || gstRate === null || gstRate === "")
+    throw new Error("gstRate is required");
+  const rate = Number(gstRate);
+  if (!Number.isFinite(rate) || rate < 0 || rate > 100)
+    throw new Error("gstRate must be a number between 0 and 100");
 
   // Shape only. That every ACTIVE branch is actually covered needs the
   // branch collection, so it lives in the service
@@ -457,6 +466,31 @@ export const validateUpdateBranch = (body) => {
   if (state !== undefined || stateCode !== undefined) assertBranchState(state, stateCode);
   if (branchRole !== undefined && branchRole !== null && !BRANCH_ROLE_ARRAY.includes(branchRole))
     throw new Error(`branchRole must be one of: ${BRANCH_ROLE_ARRAY.join(", ")}`);
+};
+
+// ─── GST Rate Validators ─────────────────────────────────────────────────────
+
+// Shape only, as everywhere else here: that the slab is not a duplicate needs
+// the collection, so that half lives in StockGstRateService.
+const assertGstRateValue = (rate) => {
+  if (rate === undefined || rate === null || rate === "") throw new Error("rate is required");
+  const num = Number(rate);
+  if (!Number.isFinite(num)) throw new Error("rate must be a number");
+  if (num < 0 || num > 100) throw new Error("rate must be between 0 and 100");
+};
+
+export const validateCreateGstRate = (body) => {
+  const { rate, order } = body || {};
+  assertGstRateValue(rate);
+  if (order !== undefined && order !== null && order !== "" && !Number.isFinite(Number(order)))
+    throw new Error("order must be a number");
+};
+
+export const validateUpdateGstRate = (body) => {
+  const { rate, order } = body || {};
+  if (rate !== undefined) assertGstRateValue(rate);
+  if (order !== undefined && order !== null && order !== "" && !Number.isFinite(Number(order)))
+    throw new Error("order must be a number");
 };
 
 // ─── Inventory Transfer Request Validators ───────────────────────────────────

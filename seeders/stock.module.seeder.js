@@ -26,6 +26,7 @@ const MODULE_DEFINITIONS = [
   { key: "tracking-orders", name: "Tracking Orders", actions: withMenu(["READ", "ADD_ENTITY", "MARK_NOT_REQUIRED"]) },
   { key: "invoices", name: "Invoices", actions: withMenu(["CREATE", "READ", "UPDATE", "APPROVE", "REJECT"]) },
   { key: "branches", name: "Branches", actions: withMenu(STANDARD_ACTIONS) },
+  { key: "gst-rates", name: "GST Rates", actions: withMenu(STANDARD_ACTIONS) },
   { key: "transfer-requests", name: "Transfer Requests", actions: withMenu(["CREATE", "READ", "PROCESS", "REJECT"]) },
   { key: "notifications", name: "Notifications", actions: withMenu(STANDARD_ACTIONS) },
 ];

@@ -20,6 +20,7 @@ const MODEL_FILE = {
   "terms-conditions": "stock.terms.condition.model.js",
   notifications: "stock.notification.model.js",
   branches: "stock.branch.model.js",
+  "gst-rates": "stock.gst.rate.model.js",
   "inventory-items": "stock.inventory.item.model.js",
   "transfer-requests": "stock.transfer.request.model.js",
   quotations: "stock.quotation.model.js",

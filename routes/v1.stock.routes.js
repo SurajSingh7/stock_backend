@@ -11,6 +11,7 @@ import StockTermsConditionController from "../controllers/stock.terms.condition.
 import StockTrackingOrderController from "../controllers/stock.tracking.order.controller.js";
 import StockNotificationController from "../controllers/stock.notification.controller.js";
 import StockBranchController from "../controllers/stock.branch.controller.js";
+import StockGstRateController from "../controllers/stock.gst.rate.controller.js";
 import StockInvoiceController from "../controllers/stock.invoice.controller.js";
 import { uploadInvoiceFile } from "../helpers/stock.invoice.upload.helper.js";
 import StockTransferRequestController from "../controllers/stock.transfer.request.controller.js";
@@ -84,7 +85,6 @@ router.post(
   StockProductDefinitionController.createProductDefinition
 );
 router.get("/product-definitions", authenticate, requirePermission("product-definitions", "READ"), StockProductDefinitionController.getAllProductDefinitions);
-router.get("/product-definitions/gst-rates", authenticate, requirePermission("product-definitions", "READ"), StockProductDefinitionController.getGstRates);
 router.get("/product-definitions/by-category/:catId", authenticate, requirePermission("product-definitions", "READ"), StockProductDefinitionController.getProductDefinitionsByCategory);
 router.get("/product-definitions/:id", authenticate, requirePermission("product-definitions", "READ"), StockProductDefinitionController.getProductDefinitionById);
 router.put(
@@ -209,6 +209,23 @@ router.get("/branches/:id", authenticate, requirePermission("branches", "READ"),
 router.put("/branches/:id", authenticate, requirePermission("branches", "UPDATE"), StockBranchController.updateBranch);
 router.delete("/branches/:id", authenticate, requirePermission("branches", "DELETE"), StockBranchController.softDeleteBranch);
 router.patch("/branches/:id/restore", authenticate, requirePermission("branches", "RESTORE"), StockBranchController.restoreBranch);
+
+// ─── GST Rates ──────────────────────────────────────────────────────────────
+// /active BEFORE /:id — same static-before-dynamic rule as everywhere else.
+//
+// /active is authenticate-only on purpose: it is the feed behind every GST
+// dropdown (product definition, quotation lines, purchase orders), and gating
+// it on `gst-rates:READ` would force a purchaser to hold the Master > GST Rates
+// management permission — and the nav entry it unlocks — just to pick a slab.
+// Same reasoning as /invoices/receiving-branches above. Listed in
+// scripts/check-route-permissions.js so the safety net expects it.
+router.get("/gst-rates/active", authenticate, StockGstRateController.getActiveGstRates);
+router.post("/gst-rates", authenticate, requirePermission("gst-rates", "CREATE"), StockGstRateController.createGstRate);
+router.get("/gst-rates", authenticate, requirePermission("gst-rates", "READ"), StockGstRateController.getAllGstRates);
+router.get("/gst-rates/:id", authenticate, requirePermission("gst-rates", "READ"), StockGstRateController.getGstRateById);
+router.put("/gst-rates/:id", authenticate, requirePermission("gst-rates", "UPDATE"), StockGstRateController.updateGstRate);
+router.delete("/gst-rates/:id", authenticate, requirePermission("gst-rates", "DELETE"), StockGstRateController.softDeleteGstRate);
+router.patch("/gst-rates/:id/restore", authenticate, requirePermission("gst-rates", "RESTORE"), StockGstRateController.restoreGstRate);
 
 // ─── Inventory Transfer Requests ──────────────────────────────────────────────
 // /board BEFORE /:id — same static-before-dynamic rule as everywhere else.
