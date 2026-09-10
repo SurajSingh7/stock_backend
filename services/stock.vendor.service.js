@@ -205,9 +205,12 @@ export default class StockVendorService {
     }
   }
 
-  static async getVendorById(id, dataAccess) {
+  // includeInactive is opt-in so the edit route keeps refusing soft-deleted
+  // vendors; only the read-only detail view asks for them, which is what makes
+  // "inspect before restoring" possible from the Inactive tab.
+  static async getVendorById(id, dataAccess, { includeInactive = false } = {}) {
     try {
-      const vendor = await StockVendorModel.findOne({ _id: id, isActive: true })
+      const vendor = await StockVendorModel.findOne({ _id: id, ...(includeInactive ? {} : { isActive: true }) })
         .populate("assignedProducts.categoryId", "name type")
         .populate("assignedProducts.products.productId", "name warrantyYears")
         // Name only, and flattened below — the form binds branchId to a select,

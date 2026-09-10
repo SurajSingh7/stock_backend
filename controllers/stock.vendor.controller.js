@@ -36,7 +36,9 @@ export default class StockVendorController {
 
   static async getVendorById(req, res) {
     try {
-      const vendor = await StockVendorService.getVendorById(req.params.id, req.dataAccess);
+      const vendor = await StockVendorService.getVendorById(req.params.id, req.dataAccess, {
+        includeInactive: req.query.includeInactive === "true",
+      });
       successResponseHandler(res, vendor, "Vendor fetched successfully");
     } catch (error) {
       log.error("Error fetching vendor", error);
