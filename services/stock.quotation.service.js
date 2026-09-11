@@ -203,7 +203,7 @@ export default class StockQuotationService {
   }
 
   /*
-    Shared item builder (create + update). Turns the product-level payload
+    Item builder for create. Turns the product-level payload
     (see validateQuotationPayload) into the flat items[] the quotation stores —
     one line per (product, vendor) offer — so review, PO, tracking and invoice
     keep reading the same shape. The client supplies only what a person typed:
@@ -314,7 +314,8 @@ export default class StockQuotationService {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Create / Update (both PENDING-only)                                     */
+  /* Create — there is no update: a quotation is never edited. A mistake is  */
+  /* rejected at review and entered again as a new quotation.                */
   /* ---------------------------------------------------------------------- */
 
   static async createQuotation(body, user, session, dataAccess) {
@@ -334,7 +335,8 @@ export default class StockQuotationService {
           categoryIds,
           items,
           categoryApprovals: [],
-          notes: typeof body.notes === "string" ? body.notes : "",        },
+          notes: typeof body.notes === "string" ? body.notes : "",
+        },
       ],
       { session }
     );
@@ -342,43 +344,6 @@ export default class StockQuotationService {
     log.info(`Quotation created: ${quotationNumber}`);
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE, entityId: quotation._id, action: "CREATE", actor: user, before: null, after: quotation.toObject(),
-    });
-    return quotation;
-  }
-
-  static async updateQuotation(id, body, user, session, dataAccess) {
-    const quotation = await StockQuotationModel.findOne({
-      _id: id,
-      isActive: true,
-    }).session(session);
-    if (!quotation) throw new Error("Quotation not found");
-    assertDataScope(quotation, dataAccess);
-    const before = quotation.toObject();
-
-    if (quotation.status !== QUOTATION_STATUS.PENDING) {
-      throw new Error("Only pending quotations can be edited");
-    }
-    if (Object.prototype.hasOwnProperty.call(body, "quotationNumber")) {
-      throw new Error("quotationNumber cannot be changed");
-    }
-    if (Object.prototype.hasOwnProperty.call(body, "status")) {
-      throw new Error("status cannot be changed here — use the review endpoint");
-    }
-
-    // The whole offer pool is replaced, same payload as create (validated by
-    // validateQuotationPayload in the controller).
-    const { items, categoryIds } = await StockQuotationService.buildItems(
-      body.products,
-      dataAccess,
-      session
-    );
-    quotation.items = items;
-    quotation.categoryIds = categoryIds;
-    if (typeof body.notes === "string") quotation.notes = body.notes;
-
-    await quotation.save({ session });
-    await StockAuditLogService.recordAudit({
-      entityType: ENTITY_TYPE, entityId: quotation._id, action: "UPDATE", actor: user, before, after: quotation.toObject(),
     });
     return quotation;
   }
@@ -653,26 +618,9 @@ export default class StockQuotationService {
     return quotation;
   }
 
-  /* ---------------------------------------------------------------------- */
-  /* Form reads — the quotation form renders exactly this shape              */
-  /* ---------------------------------------------------------------------- */
 
-  /*
-    One category block, grouped the way the form shows it:
-
-      { categoryId, categoryName,
-        products: [
-          { productDefinitionId, name, trackingMethod, unit, gstRate,
-            vendors: [
-              { vendorId, vendorName, defaultWarrantyMonths,
-                previousQuantity, previousPrice, averageRating } ] } ] }
-
-    Products come from the category itself (product.categoryId is the source
-    of truth); vendors are the active, in-branch-scope vendors that supply
-    each one. A product no such vendor supplies is left out — it cannot be
-    quoted. Both lists are name-sorted, case-insensitively.
-  */
-  static async buildCategoryForm(categoryId, categoryName, dataAccess) {
+  static async getVendorsForCategory(categoryId, dataAccess) {
+    const names = await StockQuotationService.resolveCategoryNames([categoryId]);
     const byName = { locale: "en", strength: 2 };
     const products = await StockProductDefinitionModel.find({ categoryId, isActive: true })
       .select("name trackingMethod unit gstRate warrantyMonths")
@@ -700,7 +648,7 @@ export default class StockQuotationService {
 
     return {
       categoryId,
-      categoryName,
+      categoryName: names.get(String(categoryId)),
       products: products
         .map((product) => ({
           productDefinitionId: product._id,
@@ -722,88 +670,6 @@ export default class StockQuotationService {
             .filter(Boolean),
         }))
         .filter((p) => p.vendors.length > 0),
-    };
-  }
-
-  // Add-category on a NEW quotation: the block, with nothing priced yet.
-  static async getVendorsForCategory(categoryId, dataAccess) {
-    const names = await StockQuotationService.resolveCategoryNames([categoryId]);
-    return StockQuotationService.buildCategoryForm(
-      categoryId,
-      names.get(String(categoryId)),
-      dataAccess
-    );
-  }
-
-  /*
-    Edit: the same blocks, rebuilt LIVE for every category on the quotation,
-    with what was saved laid over them —
-      product.quantity                       the saved quantity (null if the
-                                             product had no offer)
-      vendor.checked / unitPrice / warrantyMonths
-                                             the saved offer; checked:false for
-                                             vendors that were left out, so they
-                                             can be added back
-    unavailableOffers lists saved offers that can no longer be made (vendor
-    deactivated or out of scope, product unassigned or retired) — they drop
-    out when the quotation is saved again, and the form says so.
-  */
-  static async getQuotationForm(id, dataAccess) {
-    const quotation = await StockQuotationModel.findOne({ _id: id, isActive: true }).lean();
-    if (!quotation) throw new Error("Quotation not found");
-    assertDataScope(quotation, dataAccess);
-    if (quotation.status !== QUOTATION_STATUS.PENDING) {
-      throw new Error("Only pending quotations can be edited");
-    }
-
-    // Category order = first appearance among the saved lines.
-    const categoryOrder = [];
-    const savedByCategory = new Map();
-    (quotation.items || []).forEach((it) => {
-      const catId = String(it.categoryId);
-      if (!savedByCategory.has(catId)) {
-        savedByCategory.set(catId, { name: it.categoryName, offers: new Map() });
-        categoryOrder.push(catId);
-      }
-      savedByCategory.get(catId).offers.set(pairKey(it.vendorId, it.productDefinitionId), it);
-    });
-
-    const categories = [];
-    for (const catId of categoryOrder) {
-      const saved = savedByCategory.get(catId);
-      const block = await StockQuotationService.buildCategoryForm(catId, saved.name, dataAccess);
-      const shown = new Set();
-
-      block.products = block.products.map((product) => {
-        let quantity = null;
-        const vendors = product.vendors.map((vendor) => {
-          const key = pairKey(vendor.vendorId, product.productDefinitionId);
-          const line = saved.offers.get(key);
-          if (!line) return { ...vendor, checked: false, unitPrice: null, warrantyMonths: null };
-          shown.add(key);
-          quantity = line.quantity;
-          return {
-            ...vendor,
-            checked: true,
-            unitPrice: line.unitPrice,
-            warrantyMonths: line.warrantyMonths ?? null,
-          };
-        });
-        return { ...product, quantity, vendors };
-      });
-
-      block.unavailableOffers = [...saved.offers.entries()]
-        .filter(([key]) => !shown.has(key))
-        .map(([, line]) => ({ productName: line.productName, vendorName: line.vendorName }));
-
-      categories.push(block);
-    }
-
-    return {
-      _id: quotation._id,
-      quotationNumber: quotation.quotationNumber,
-      notes: quotation.notes || "",
-      categories,
     };
   }
 }

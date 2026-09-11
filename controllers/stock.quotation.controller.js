@@ -83,38 +83,6 @@ export default class StockQuotationController {
     }
   }
 
-  static async getQuotationForm(req, res) {
-    try {
-      const data = await StockQuotationService.getQuotationForm(req.params.id, req.dataAccess);
-      successResponseHandler(res, data, "Quotation form fetched");
-    } catch (error) {
-      errorResponseHandler(res, error);
-    }
-  }
-
-  /* -------------------------------- Update ------------------------------- */
-  static async updateQuotation(req, res) {
-    const session = await mongoose.startSession();
-    try {
-      session.startTransaction();
-      validateQuotationPayload(req.body);
-      const quotation = await StockQuotationService.updateQuotation(
-        req.params.id,
-        req.body,
-        actingUser(req),
-        session,
-        req.dataAccess
-      );
-      await session.commitTransaction();
-      successResponseHandler(res, quotation, "Quotation updated");
-    } catch (error) {
-      await session.abortTransaction();
-      errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
-    }
-  }
-
   /* -------------------------------- Review ------------------------------- */
   static async reviewQuotation(req, res) {
     const session = await mongoose.startSession();

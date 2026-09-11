@@ -139,10 +139,6 @@ router.get("/quotations", authenticate, requirePermission("quotations", "READ"),
 router.get("/quotations/status-summary", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getStatusSummary);
 router.get("/quotations/vendors-for-category/:catId", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getVendorsForCategory);
 router.get("/quotations/:id", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getQuotationById);
-// Edit form's data — only someone who may save the edit needs it.
-router.get("/quotations/:id/form", authenticate, requirePermission("quotations", "UPDATE"), StockQuotationController.getQuotationForm);
-router.put("/quotations/:id", authenticate, requirePermission("quotations", "UPDATE"), StockQuotationController.updateQuotation);
-// Approver submits one decision per category, all at once.
 router.patch("/quotations/:id/review", authenticate, requirePermission("quotations", "REVIEW"), StockQuotationController.reviewQuotation);
 router.patch("/quotations/:quotationId/disable-vendor", authenticate, requirePermission("quotations", "DISABLE_VENDOR"), StockPurchaseOrderController.disableVendor);
 router.patch("/quotations/:quotationId/enable-vendor", authenticate, requirePermission("quotations", "ENABLE_VENDOR"), StockPurchaseOrderController.enableVendor);

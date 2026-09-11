@@ -287,11 +287,10 @@ const isPositiveNumber = (v) => typeof v === "number" && Number.isFinite(v) && v
 const isNonNegativeNumber = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
 
 /*
-  Create AND update — both replace the whole offer pool, so both send the
-  full payload. Shape only; everything that needs the database (product and
-  vendor exist, vendor is in the caller's branch scope, vendor supplies the
-  product, category, GST, default warranty, history) is resolved in
-  StockQuotationService.buildItems.
+  Create payload (a quotation is never updated). Shape only; everything that
+  needs the database (product and vendor exist, vendor is in the caller's
+  branch scope, vendor supplies the product, category, GST, default warranty,
+  history) is resolved in StockQuotationService.buildItems.
 
   {
     notes?: string,
