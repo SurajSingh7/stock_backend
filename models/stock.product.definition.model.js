@@ -110,7 +110,7 @@ const stockProductDefinitionSchema = new mongoose.Schema(
     // product (the form pre-fills that new branch's row with it).
     //
     // Neither is `required: true` at the schema level, for the same reason as
-    // warrantyYears below — Mongoose re-validates the whole document on every
+    // warrantyMonths below — Mongoose re-validates the whole document on every
     // .save() (soft-delete, restore, unrelated field edits), so a schema-level
     // `required` would permanently block those on any product saved before
     // these fields existed. Required is enforced at the API layer instead.
@@ -123,17 +123,18 @@ const stockProductDefinitionSchema = new mongoose.Schema(
       type: [branchThresholdSchema],
       default: [],
     },
-    // Default warranty (years) for this product — vendors may override this
-    // per assignment (see Vendor.assignedProducts.overrides.warrantyYears),
-    // and that override is snapshotted onto quotation items.
+    // Default warranty for this product, in whole MONTHS — vendors may
+    // override it per assignment (Vendor.assignedProducts.overrides
+    // .warrantyMonths), and that is snapshotted onto quotation items. Months,
+    // not years, so 6 or 18 months need no fractions (stock.warranty.helper.js).
     //
     // Deliberately NOT `required: true` here: Mongoose re-validates the whole
     // document on every .save() (soft-delete, restore, unrelated field edits
     // — not just create), so a schema-level `required` would permanently
     // block those operations on any product saved before this field existed.
-    // "Required" is enforced instead at the API layer for create/update
-    // (validateProductDefinitionExtras in stock.validator.js).
-    warrantyYears: {
+    // "Required" and the 1–120 range are enforced instead at the API layer
+    // for create/update (validateProductDefinitionExtras in stock.validator.js).
+    warrantyMonths: {
       type: Number,
       default: null,
       min: 1,

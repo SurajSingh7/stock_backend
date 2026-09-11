@@ -4,6 +4,7 @@ import { getLogger } from "../helpers/logger.helper.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import StockProductDefinitionService from "../services/stock.product.definition.service.js";
 import { toPublicImagePath, deleteProductImageFile } from "../helpers/stock.upload.helper.js";
+import { upgradeLegacyWarranty } from "../helpers/stock.warranty.helper.js";
 import {
   validateCreateProductDefinition,
   validateUpdateProductDefinition,
@@ -15,11 +16,13 @@ const log = getLogger(import.meta.url);
 // alongside the rest of the payload), so the JSON body is sent as a single
 // "data" field and parsed here. Plain JSON bodies (no file, no multipart) are
 // still supported as a fallback for callers that never send an image.
+//
+// upgradeLegacyWarranty is TEMPORARY (see stock.warranty.helper.js): an older
+// frontend still sends warrantyYears, converted here to warrantyMonths.
 function parseBody(req) {
-  if (req.body && typeof req.body.data === "string") {
-    return JSON.parse(req.body.data);
-  }
-  return req.body || {};
+  const body =
+    req.body && typeof req.body.data === "string" ? JSON.parse(req.body.data) : req.body || {};
+  return upgradeLegacyWarranty(body);
 }
 
 export default class StockProductDefinitionController {

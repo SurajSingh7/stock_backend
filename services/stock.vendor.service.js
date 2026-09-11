@@ -212,7 +212,7 @@ export default class StockVendorService {
     try {
       const vendor = await StockVendorModel.findOne({ _id: id, ...(includeInactive ? {} : { isActive: true }) })
         .populate("assignedProducts.categoryId", "name type")
-        .populate("assignedProducts.products.productId", "name warrantyYears")
+        .populate("assignedProducts.products.productId", "name warrantyMonths")
         // Name only, and flattened below — the form binds branchId to a select,
         // so the field itself has to stay a plain id.
         .populate("branchId", "name")

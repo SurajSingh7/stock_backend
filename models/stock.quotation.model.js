@@ -26,10 +26,17 @@ const quotationLineItemSchema = new Schema(
     // priced quantities
     quantity: { type: Number, required: true, min: 1 },
     unitPrice: { type: Number, required: true, min: 0 },
-    // Snapshotted at creation from the vendor's assignment override (falling
-    // back to the product's default) — never re-read live, same posture as
-    // unitPrice/gstRate, so a later vendor edit can't retroactively change it.
-    warrantyYears: { type: Number, default: null, min: 1 },
+    // Warranty in whole MONTHS (see helpers/stock.warranty.helper.js), both
+    // snapshotted at save and never re-read live — a later vendor edit can't
+    // retroactively change a priced line.
+    //   defaultWarrantyMonths — what the vendor offers by default (assignment
+    //     override, else the product default).
+    //   warrantyMonths — what was quoted. Equal to the default unless the
+    //     creator overrode it for THIS quotation only; the vendor's own
+    //     assignment is never touched. Both are kept so the approver can see
+    //     an override, since L1 ranking puts warranty before price.
+    warrantyMonths: { type: Number, default: null, min: 1 },
+    defaultWarrantyMonths: { type: Number, default: null },
     gstRate: { type: Number, default: 0, min: 0 },
     baseAmount: { type: Number, default: 0, min: 0 },
     gstAmount: { type: Number, default: 0, min: 0 },
@@ -69,7 +76,7 @@ const categorySelectionSchema = new Schema(
 
     quantity: { type: Number, default: 0 },
     unitPrice: { type: Number, default: 0 },
-    warrantyYears: { type: Number, default: null },
+    warrantyMonths: { type: Number, default: null },
     gstRate: { type: Number, default: 0 },
     baseAmount: { type: Number, default: 0 },
     gstAmount: { type: Number, default: 0 },
@@ -138,7 +145,7 @@ const quotationSchema = new Schema(
     // Vendors excluded from the PO Management board for this quotation.
     disabledVendors: { type: [disabledVendorSchema], default: [] },
 
-    notes: { type: String, trim: true, default: "" },
+    notes: { type: String, trim: true, default: "" },
     isActive: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null },  },
   { timestamps: true }
@@ -150,7 +157,7 @@ quotationSchema.index({ categoryIds: 1 });
 quotationSchema.index({ "items.vendorId": 1 });
 quotationSchema.index({ "items.productDefinitionId": 1 });
 quotationSchema.index({ "categoryApprovals.selections.vendorId": 1 });
-
+
 
 // who created / last touched this — see the plugin for why it is a hook
 quotationSchema.plugin(actorStampPlugin);

@@ -84,7 +84,7 @@ export default class StockProductDefinitionService {
         unit,
         defaultStockAlertThreshold,
         branchThresholds,
-        warrantyYears,
+        warrantyMonths,
         image, // NEW — public path set by controller from req.file, or null
       } = body;
 
@@ -123,7 +123,7 @@ export default class StockProductDefinitionService {
         unit,
         defaultStockAlertThreshold,
         branchThresholds,
-        warrantyYears,
+        warrantyMonths,
         image: image ?? null,
       });
 
@@ -256,7 +256,7 @@ export default class StockProductDefinitionService {
         "unit",
         "defaultStockAlertThreshold",
         "branchThresholds",
-        "warrantyYears",
+        "warrantyMonths",
         "image", // NEW
       ];
       allowed.forEach((key) => {

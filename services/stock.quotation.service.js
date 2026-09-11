@@ -4,15 +4,20 @@ import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockQuotationModel from "../models/stock.quotation.model.js";
 import StockVendorModel from "../models/stock.vendor.model.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
-// Side-effect imports so populate never hits an unregistered model (Section 20 #7)
-import "../models/stock.category.model.js";
+import StockCategoryModel from "../models/stock.category.model.js";
+import StockCounterModel from "../models/stock.counter.model.js";
 import StockVendorPurchaseHistoryModel from "../models/stock.vendor.purchase.history.model.js";
 import StockVendorReviewModel from "../models/stock.vendor.review.model.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
+import StockCategoryService from "./stock.category.service.js";
 
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
-import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
+import {
+  applyDataScope,
+  isWithinDataScope,
+  resolveDimensionAllowList,
+} from "../helpers/data.scope.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import {
   QUOTATION_STATUS,
@@ -37,48 +42,125 @@ const assertDataScope = (quotation, dataAccess) => {
   }
 };
 
+// Vendors a user may quote follow their BRANCH scope on the Quotations module
+// (ALL → every branch's vendors, OWN → their branch, SELECTED → those
+// branches; admin bypasses). Applied on the form reads AND on save, so a
+// crafted request cannot price a vendor the form would never have shown.
+const vendorScopeFilter = (dataAccess) => {
+  const allowed = resolveDimensionAllowList(dataAccess, "branch");
+  return allowed === null ? {} : { branchId: { $in: allowed } };
+};
+
+const pairKey = (vendorId, productId) => `${vendorId}::${productId}`;
+const EMPTY_HISTORY = Object.freeze({ previousQuantity: null, previousPrice: null, averageRating: null });
+
+// A vendor's own warranty for a product: its assignment override, else the
+// product's default. Null when the vendor does not supply the product.
+const vendorAssignment = (vendor, productId) =>
+  (vendor.assignedProducts || [])
+    .flatMap((ap) => ap.products || [])
+    .find((p) => String(p.productId) === String(productId)) || null;
+
+const defaultWarrantyOf = (assignment, product) =>
+  assignment?.overrides?.warrantyMonths ?? product.warrantyMonths ?? null;
+
+const gstOf = (product) =>
+  typeof product.gstRate === "number" ? product.gstRate : Number(product.gstRate) || 0;
+
 export default class StockQuotationService {
   /* ---------------------------------------------------------------------- */
   /* Helpers                                                                 */
   /* ---------------------------------------------------------------------- */
 
+  // Atomic: a single $inc on this year's counter row, so two concurrent
+  // submits can never draw the same number (counting existing quotations and
+  // adding one — the old scheme — gave both the same value). The first number
+  // of a year seeds the row from the highest number already issued, so the
+  // switch-over never re-issues one.
   static async generateQuotationNumber(session) {
     const year = new Date().getFullYear();
     const prefix = `QTN-${year}-`;
-    const count = await StockQuotationModel.countDocuments({
-      quotationNumber: new RegExp(`^${prefix}`),
-    }).session(session);
-    const next = String(count + 1).padStart(4, "0");
-    return `${prefix}${next}`;
+    const key = `QTN-${year}`;
+
+    const bumped = await StockCounterModel.findOneAndUpdate(
+      { _id: key },
+      { $inc: { seq: 1 } },
+      { new: true, session }
+    ).lean();
+    let seq = bumped?.seq;
+
+    if (seq === undefined) {
+      const [top] = await StockQuotationModel.aggregate([
+        { $match: { quotationNumber: { $regex: `^${prefix}\\d+$` } } },
+        {
+          $group: {
+            _id: null,
+            max: { $max: { $toInt: { $substrCP: ["$quotationNumber", prefix.length, 12] } } },
+          },
+        },
+      ]).session(session);
+      const start = top?.max || 0;
+      const seeded = await StockCounterModel.findOneAndUpdate(
+        { _id: key },
+        [{ $set: { seq: { $add: [{ $ifNull: ["$seq", start] }, 1] } } }],
+        { new: true, upsert: true, session }
+      ).lean();
+      seq = seeded.seq;
+    }
+
+    return `${prefix}${String(seq).padStart(4, "0")}`;
   }
 
-  static async getPreviousPurchase(vendorId, productDefinitionId, session) {
-    const last = await StockVendorPurchaseHistoryModel.findOne({
-      vendorId,
-      productDefinitionId,
+  // Latest purchase (qty + price) and average rating for every (vendor,
+  // product) pair among the given ids — two queries in total, not two per
+  // pair. Returns Map pairKey -> { previousQuantity, previousPrice, averageRating };
+  // pairs with no history are simply absent (use EMPTY_HISTORY).
+  //
+  // Awaited one after the other, not Promise.all: with a transaction session
+  // the driver rejects concurrent operations (see buildItems).
+  static async getOfferHistory(vendorIds, productIds, session = null) {
+    const history = new Map();
+    if (!vendorIds.length || !productIds.length) return history;
+
+    const toIds = (ids) => [...new Set(ids.map(String))].map((id) => new mongoose.Types.ObjectId(id));
+    const match = {
+      vendorId: { $in: toIds(vendorIds) },
+      productDefinitionId: { $in: toIds(productIds) },
       isActive: true,
-    })
-      .sort({ purchaseDate: -1 })
-      .session(session)
-      .lean();
-    return {
-      previousQuantity: last ? last.receivedQuantity : null,
-      previousPrice: last ? last.purchasePrice : null,
     };
-  }
+    const groupId = { vendorId: "$vendorId", productDefinitionId: "$productDefinitionId" };
+    const entry = ({ vendorId, productDefinitionId }) => {
+      const key = pairKey(vendorId, productDefinitionId);
+      if (!history.has(key)) history.set(key, { ...EMPTY_HISTORY });
+      return history.get(key);
+    };
 
-  static async getAverageRating(vendorId, productDefinitionId, session) {
-    const result = await StockVendorReviewModel.aggregate([
+    const purchases = await StockVendorPurchaseHistoryModel.aggregate([
+      { $match: match },
+      { $sort: { purchaseDate: -1 } },
       {
-        $match: {
-          vendorId: new mongoose.Types.ObjectId(vendorId),
-          productDefinitionId: new mongoose.Types.ObjectId(productDefinitionId),
-          isActive: true,
+        $group: {
+          _id: groupId,
+          receivedQuantity: { $first: "$receivedQuantity" },
+          purchasePrice: { $first: "$purchasePrice" },
         },
       },
-      { $group: { _id: null, avg: { $avg: "$rating" } } },
     ]).session(session);
-    return result.length ? round2(result[0].avg) : null;
+    purchases.forEach((r) => {
+      const e = entry(r._id);
+      e.previousQuantity = r.receivedQuantity;
+      e.previousPrice = r.purchasePrice;
+    });
+
+    const ratings = await StockVendorReviewModel.aggregate([
+      { $match: match },
+      { $group: { _id: groupId, avg: { $avg: "$rating" } } },
+    ]).session(session);
+    ratings.forEach((r) => {
+      entry(r._id).averageRating = round2(r.avg);
+    });
+
+    return history;
   }
 
   static computeTotals(quantity, unitPrice, gstRate) {
@@ -102,13 +184,40 @@ export default class StockQuotationService {
     return QUOTATION_STATUS.REJECTED;
   }
 
+  // Active categories by id -> { name: display path ("A / B / Leaf") }.
+  // Throws when any is missing or soft-deleted.
+  static async resolveCategoryNames(categoryIds, session = null) {
+    const ids = [...new Set(categoryIds.map(String))];
+    const categories = await StockCategoryModel.find({ _id: { $in: ids }, isActive: true })
+      .select("name path")
+      .session(session)
+      .lean();
+    if (categories.length !== ids.length) throw new Error("Category not found or inactive");
+
+    const names = new Map();
+    for (const c of categories) {
+      const displayPath = c.path ? await StockCategoryService.buildDisplayPath(c.path, session) : "";
+      names.set(String(c._id), displayPath || c.name);
+    }
+    return names;
+  }
+
   /*
-    Shared item builder (create + update). Rebuilds the priced offer pool:
-      - re-fetches vendors + products (never trusts client names/gst)
-      - enforces the vendor↔product assignment rule (Postman cannot bypass)
-      - clamps quantity (>=1) and unitPrice (>0)
-      - snapshots previousQty/Price + averageRating
-      - computes totals server-side
+    Shared item builder (create + update). Turns the product-level payload
+    (see validateQuotationPayload) into the flat items[] the quotation stores —
+    one line per (product, vendor) offer — so review, PO, tracking and invoice
+    keep reading the same shape. The client supplies only what a person typed:
+    which products and vendors, one quantity per product, prices, and an
+    optional warranty override. Everything else is resolved here:
+      - product must be active; its category (and the category's display path)
+        comes from the product itself, never from the client
+      - vendor must be active AND inside the caller's branch scope, and must
+        supply the product (Postman cannot bypass either)
+      - GST from the product; default warranty from the vendor's assignment
+        override, else the product; a sent warrantyMonths overrides it for
+        this quotation only
+      - previous qty/price and average rating, batched
+      - totals
 
     NOTE: All queries below that pass `.session(session)` are awaited
     sequentially, not via Promise.all. The MongoDB driver does not support
@@ -119,122 +228,99 @@ export default class StockQuotationService {
 
     Returns { items, categoryIds }.
   */
-  static async buildItems(rawItems, session) {
-    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+  static async buildItems(rawProducts, dataAccess, session) {
+    if (!Array.isArray(rawProducts) || rawProducts.length === 0) {
       throw new Error("At least one product must be selected");
     }
 
-    const vendorIds = [...new Set(rawItems.map((i) => String(i.vendorId)))];
-    const productIds = [
-      ...new Set(rawItems.map((i) => String(i.productDefinitionId))),
-    ];
+    const productIds = rawProducts.map((p) => String(p.productDefinitionId));
+    const vendorIds = [...new Set(rawProducts.flatMap((p) => p.offers.map((o) => String(o.vendorId))))];
 
+    const products = await StockProductDefinitionModel.find({ _id: { $in: productIds }, isActive: true })
+      .select("name categoryId gstRate warrantyMonths")
+      .session(session)
+      .lean();
     const vendors = await StockVendorModel.find({
       _id: { $in: vendorIds },
       isActive: true,
+      ...vendorScopeFilter(dataAccess),
     })
-      .session(session)
-      .lean();
-    const products = await StockProductDefinitionModel.find({
-      _id: { $in: productIds },
-      isActive: true,
-    })
+      .select("name assignedProducts")
       .session(session)
       .lean();
 
-    const vendorMap = new Map(vendors.map((v) => [String(v._id), v]));
     const productMap = new Map(products.map((p) => [String(p._id), p]));
+    const vendorMap = new Map(vendors.map((v) => [String(v._id), v]));
 
-    const categoryIdSet = new Set();
+    const missingProduct = productIds.find((id) => !productMap.has(id));
+    if (missingProduct) throw new Error(`Product not found or inactive: ${missingProduct}`);
+    // Same message for "inactive" and "outside your branch scope" — the
+    // difference is not the caller's business.
+    const missingVendor = vendorIds.find((id) => !vendorMap.has(id));
+    if (missingVendor) throw new Error(`Vendor not found or inactive: ${missingVendor}`);
+
+    const categoryNames = await StockQuotationService.resolveCategoryNames(
+      products.map((p) => p.categoryId),
+      session
+    );
+    const history = await StockQuotationService.getOfferHistory(vendorIds, productIds, session);
+
     const items = [];
-    const seenPairs = new Set();
-
-    for (const raw of rawItems) {
-      const vendor = vendorMap.get(String(raw.vendorId));
+    for (const raw of rawProducts) {
       const product = productMap.get(String(raw.productDefinitionId));
+      const categoryId = String(product.categoryId);
+      const gstRate = gstOf(product);
+      const quantity = raw.quantity;
 
-      if (!vendor) throw new Error(`Vendor not found or inactive: ${raw.vendorId}`);
-      if (!product)
-        throw new Error(`Product not found or inactive: ${raw.productDefinitionId}`);
+      for (const offer of raw.offers) {
+        const vendor = vendorMap.get(String(offer.vendorId));
+        const assignment = vendorAssignment(vendor, product._id);
+        if (!assignment) {
+          throw new Error(`${product.name} is not an approved product for vendor ${vendor.name}`);
+        }
 
-      const pairKey = `${raw.vendorId}::${raw.productDefinitionId}`;
-      if (seenPairs.has(pairKey)) {
-        throw new Error(`Duplicate item: ${product.name} for vendor ${vendor.name}`);
+        const defaultWarrantyMonths = defaultWarrantyOf(assignment, product);
+        const warrantyMonths = offer.warrantyMonths ?? defaultWarrantyMonths;
+        const unitPrice = Number(offer.unitPrice);
+        const { baseAmount, gstAmount, lineTotal } =
+          StockQuotationService.computeTotals(quantity, unitPrice, gstRate);
+        const { previousQuantity, previousPrice, averageRating } =
+          history.get(pairKey(vendor._id, product._id)) || EMPTY_HISTORY;
+
+        items.push({
+          productDefinitionId: product._id,
+          vendorId: vendor._id,
+          categoryId: product.categoryId,
+          productName: product.name || "",
+          vendorName: vendor.name || "",
+          categoryName: categoryNames.get(categoryId) || "",
+          quantity,
+          unitPrice,
+          warrantyMonths,
+          defaultWarrantyMonths,
+          gstRate,
+          baseAmount,
+          gstAmount,
+          lineTotal,
+          previousQuantity,
+          previousPrice,
+          averageRating,
+          isApproved: false,
+        });
       }
-      seenPairs.add(pairKey);
-
-      const assignedEntry = (vendor.assignedProducts || [])
-        .flatMap((ap) => ap.products || [])
-        .find((p) => String(p.productId) === String(raw.productDefinitionId));
-      if (!assignedEntry) {
-        throw new Error(
-          `${product.name} is not an approved product for vendor ${vendor.name}`
-        );
-      }
-
-      const quantity = Math.max(1, Math.floor(Number(raw.quantity) || 0));
-      const unitPrice = Math.max(0, Number(raw.unitPrice) || 0);
-      if (unitPrice <= 0) throw new Error(`Enter a valid price for ${product.name}`);
-
-      const gstRate =
-        typeof product.gstRate === "number"
-          ? product.gstRate
-          : Number(product.gstRate) || 0;
-
-      // Server-authoritative, same posture as gstRate above — never trust a
-      // client-sent warrantyYears, always resolve from the vendor's override
-      // (falling back to the product default) at snapshot time.
-      const warrantyYears =
-        assignedEntry.overrides?.warrantyYears ?? product.warrantyYears ?? null;
-
-      const { baseAmount, gstAmount, lineTotal } =
-        StockQuotationService.computeTotals(quantity, unitPrice, gstRate);
-
-      const { previousQuantity, previousPrice } =
-        await StockQuotationService.getPreviousPurchase(
-          raw.vendorId,
-          raw.productDefinitionId,
-          session
-        );
-      const averageRating = await StockQuotationService.getAverageRating(
-        raw.vendorId,
-        raw.productDefinitionId,
-        session
-      );
-
-      categoryIdSet.add(String(raw.categoryId));
-
-      items.push({
-        productDefinitionId: raw.productDefinitionId,
-        vendorId: raw.vendorId,
-        categoryId: raw.categoryId,
-        productName: product.name || "",
-        vendorName: vendor.name || "",
-        categoryName: raw.categoryName || "",
-        quantity,
-        unitPrice,
-        warrantyYears,
-        gstRate,
-        baseAmount,
-        gstAmount,
-        lineTotal,
-        previousQuantity,
-        previousPrice,
-        averageRating,
-        isApproved: false,
-      });
     }
 
-    return { items, categoryIds: [...categoryIdSet] };
+    return { items, categoryIds: [...categoryNames.keys()] };
   }
 
   /* ---------------------------------------------------------------------- */
   /* Create / Update (both PENDING-only)                                     */
   /* ---------------------------------------------------------------------- */
 
-  static async createQuotation(body, user, session) {
+  static async createQuotation(body, user, session, dataAccess) {
     const { items, categoryIds } = await StockQuotationService.buildItems(
-      body.items,
+      body.products,
+      dataAccess,
       session
     );
     const quotationNumber =
@@ -279,14 +365,15 @@ export default class StockQuotationService {
       throw new Error("status cannot be changed here — use the review endpoint");
     }
 
-    if (Array.isArray(body.items) && body.items.length > 0) {
-      const { items, categoryIds } = await StockQuotationService.buildItems(
-        body.items,
-        session
-      );
-      quotation.items = items;
-      quotation.categoryIds = categoryIds;
-    }
+    // The whole offer pool is replaced, same payload as create (validated by
+    // validateQuotationPayload in the controller).
+    const { items, categoryIds } = await StockQuotationService.buildItems(
+      body.products,
+      dataAccess,
+      session
+    );
+    quotation.items = items;
+    quotation.categoryIds = categoryIds;
     if (typeof body.notes === "string") quotation.notes = body.notes;
 
     await quotation.save({ session });
@@ -396,7 +483,7 @@ export default class StockQuotationService {
             vendorName: item.vendorName,
             quantity: item.quantity,
             unitPrice: item.unitPrice,
-            warrantyYears: item.warrantyYears,
+            warrantyMonths: item.warrantyMonths,
             gstRate: item.gstRate,
             baseAmount: item.baseAmount,
             gstAmount: item.gstAmount,
@@ -567,58 +654,156 @@ export default class StockQuotationService {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Form-builder read: vendors + products for a leaf category               */
+  /* Form reads — the quotation form renders exactly this shape              */
   /* ---------------------------------------------------------------------- */
 
-  static async getVendorsForCategory(categoryId) {
-    const vendors = await StockVendorModel.find({
-      isActive: true,
-      "assignedProducts.categoryId": categoryId,
-    })
-      .select("name assignedProducts")
-      .lean();
+  /*
+    One category block, grouped the way the form shows it:
 
-    const allProductIds = new Set();
-    const vendorProductMap = vendors.map((v) => {
-      const entry = (v.assignedProducts || []).find(
-        (ap) => String(ap.categoryId) === String(categoryId)
-      );
-      const products = entry?.products || [];
-      const productOverrides = new Map(
-        products.map((p) => [String(p.productId), p.overrides])
-      );
-      products.forEach((p) => allProductIds.add(String(p.productId)));
-      return { vendorId: v._id, vendorName: v.name, productOverrides };
+      { categoryId, categoryName,
+        products: [
+          { productDefinitionId, name, trackingMethod, unit, gstRate,
+            vendors: [
+              { vendorId, vendorName, defaultWarrantyMonths,
+                previousQuantity, previousPrice, averageRating } ] } ] }
+
+    Products come from the category itself (product.categoryId is the source
+    of truth); vendors are the active, in-branch-scope vendors that supply
+    each one. A product no such vendor supplies is left out — it cannot be
+    quoted. Both lists are name-sorted, case-insensitively.
+  */
+  static async buildCategoryForm(categoryId, categoryName, dataAccess) {
+    const byName = { locale: "en", strength: 2 };
+    const products = await StockProductDefinitionModel.find({ categoryId, isActive: true })
+      .select("name trackingMethod unit gstRate warrantyMonths")
+      .collation(byName)
+      .sort({ name: 1 })
+      .lean();
+    const productIds = products.map((p) => p._id);
+
+    const vendors = productIds.length
+      ? await StockVendorModel.find({
+          isActive: true,
+          "assignedProducts.products.productId": { $in: productIds },
+          ...vendorScopeFilter(dataAccess),
+        })
+          .select("name assignedProducts")
+          .collation(byName)
+          .sort({ name: 1 })
+          .lean()
+      : [];
+
+    const history = await StockQuotationService.getOfferHistory(
+      vendors.map((v) => v._id),
+      productIds
+    );
+
+    return {
+      categoryId,
+      categoryName,
+      products: products
+        .map((product) => ({
+          productDefinitionId: product._id,
+          name: product.name,
+          trackingMethod: product.trackingMethod,
+          unit: product.unit,
+          gstRate: gstOf(product),
+          vendors: vendors
+            .map((vendor) => {
+              const assignment = vendorAssignment(vendor, product._id);
+              if (!assignment) return null;
+              return {
+                vendorId: vendor._id,
+                vendorName: vendor.name,
+                defaultWarrantyMonths: defaultWarrantyOf(assignment, product),
+                ...(history.get(pairKey(vendor._id, product._id)) || EMPTY_HISTORY),
+              };
+            })
+            .filter(Boolean),
+        }))
+        .filter((p) => p.vendors.length > 0),
+    };
+  }
+
+  // Add-category on a NEW quotation: the block, with nothing priced yet.
+  static async getVendorsForCategory(categoryId, dataAccess) {
+    const names = await StockQuotationService.resolveCategoryNames([categoryId]);
+    return StockQuotationService.buildCategoryForm(
+      categoryId,
+      names.get(String(categoryId)),
+      dataAccess
+    );
+  }
+
+  /*
+    Edit: the same blocks, rebuilt LIVE for every category on the quotation,
+    with what was saved laid over them —
+      product.quantity                       the saved quantity (null if the
+                                             product had no offer)
+      vendor.checked / unitPrice / warrantyMonths
+                                             the saved offer; checked:false for
+                                             vendors that were left out, so they
+                                             can be added back
+    unavailableOffers lists saved offers that can no longer be made (vendor
+    deactivated or out of scope, product unassigned or retired) — they drop
+    out when the quotation is saved again, and the form says so.
+  */
+  static async getQuotationForm(id, dataAccess) {
+    const quotation = await StockQuotationModel.findOne({ _id: id, isActive: true }).lean();
+    if (!quotation) throw new Error("Quotation not found");
+    assertDataScope(quotation, dataAccess);
+    if (quotation.status !== QUOTATION_STATUS.PENDING) {
+      throw new Error("Only pending quotations can be edited");
+    }
+
+    // Category order = first appearance among the saved lines.
+    const categoryOrder = [];
+    const savedByCategory = new Map();
+    (quotation.items || []).forEach((it) => {
+      const catId = String(it.categoryId);
+      if (!savedByCategory.has(catId)) {
+        savedByCategory.set(catId, { name: it.categoryName, offers: new Map() });
+        categoryOrder.push(catId);
+      }
+      savedByCategory.get(catId).offers.set(pairKey(it.vendorId, it.productDefinitionId), it);
     });
 
-    const products = await StockProductDefinitionModel.find({
-      _id: { $in: [...allProductIds] },
-      isActive: true,
-    })
-      .select("name gstRate trackingMethod unit warrantyYears")
-      .lean();
-    const productMap = new Map(products.map((p) => [String(p._id), p]));
+    const categories = [];
+    for (const catId of categoryOrder) {
+      const saved = savedByCategory.get(catId);
+      const block = await StockQuotationService.buildCategoryForm(catId, saved.name, dataAccess);
+      const shown = new Set();
 
-    return vendorProductMap
-      .map((vp) => ({
-        vendorId: vp.vendorId,
-        vendorName: vp.vendorName,
-        products: [...vp.productOverrides.keys()]
-          .map((pid) => productMap.get(pid))
-          .filter(Boolean)
-          .map((p) => ({
-            productDefinitionId: p._id,
-            name: p.name,
-            trackingMethod: p.trackingMethod,
-            unit: p.unit,
-            gstRate:
-              typeof p.gstRate === "number" ? p.gstRate : Number(p.gstRate) || 0,
-            warrantyYears:
-              vp.productOverrides.get(String(p._id))?.warrantyYears ??
-              p.warrantyYears ??
-              null,
-          })),
-      }))
-      .filter((vp) => vp.products.length > 0);
+      block.products = block.products.map((product) => {
+        let quantity = null;
+        const vendors = product.vendors.map((vendor) => {
+          const key = pairKey(vendor.vendorId, product.productDefinitionId);
+          const line = saved.offers.get(key);
+          if (!line) return { ...vendor, checked: false, unitPrice: null, warrantyMonths: null };
+          shown.add(key);
+          quantity = line.quantity;
+          return {
+            ...vendor,
+            checked: true,
+            unitPrice: line.unitPrice,
+            warrantyMonths: line.warrantyMonths ?? null,
+          };
+        });
+        return { ...product, quantity, vendors };
+      });
+
+      block.unavailableOffers = [...saved.offers.entries()]
+        .filter(([key]) => !shown.has(key))
+        .map(([, line]) => ({ productName: line.productName, vendorName: line.vendorName }));
+
+      categories.push(block);
+    }
+
+    return {
+      _id: quotation._id,
+      quotationNumber: quotation.quotationNumber,
+      notes: quotation.notes || "",
+      categories,
+    };
   }
 }

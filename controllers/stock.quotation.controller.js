@@ -7,7 +7,7 @@ import {
 } from "../helpers/response.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import {
-  validateCreateQuotation,
+  validateQuotationPayload,
   validateReviewQuotation,
 } from "../validators/stock.validator.js";
 
@@ -26,11 +26,12 @@ export default class StockQuotationController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
-      validateCreateQuotation(req.body);
+      validateQuotationPayload(req.body);
       const quotation = await StockQuotationService.createQuotation(
         req.body,
         actingUser(req),
-        session
+        session,
+        req.dataAccess
       );
       await session.commitTransaction();
       successResponseHandler(res, quotation, "Quotation created", 201);
@@ -73,9 +74,19 @@ export default class StockQuotationController {
   static async getVendorsForCategory(req, res) {
     try {
       const data = await StockQuotationService.getVendorsForCategory(
-        req.params.catId
+        req.params.catId,
+        req.dataAccess
       );
       successResponseHandler(res, data, "Vendors for category fetched");
+    } catch (error) {
+      errorResponseHandler(res, error);
+    }
+  }
+
+  static async getQuotationForm(req, res) {
+    try {
+      const data = await StockQuotationService.getQuotationForm(req.params.id, req.dataAccess);
+      successResponseHandler(res, data, "Quotation form fetched");
     } catch (error) {
       errorResponseHandler(res, error);
     }
@@ -86,6 +97,7 @@ export default class StockQuotationController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
+      validateQuotationPayload(req.body);
       const quotation = await StockQuotationService.updateQuotation(
         req.params.id,
         req.body,

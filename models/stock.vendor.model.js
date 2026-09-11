@@ -66,7 +66,9 @@ const addressSchema = new Schema(
 
 const assignedProductOverrideSchema = new Schema(
   {
-    warrantyYears: { type: Number, default: null, min: 1 },
+    // Whole months (see stock.warranty.helper.js); null = use the product's
+    // own warrantyMonths. Range 1–120 is enforced in validateCreateVendor.
+    warrantyMonths: { type: Number, default: null, min: 1 },
   },
   { _id: false, strict: false }
 );

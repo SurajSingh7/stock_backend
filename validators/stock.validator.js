@@ -10,6 +10,7 @@ import {
   NOTIFICATION_CHANNEL,
   BRANCH_ROLE_ARRAY,
 } from "../constants/stock.enums.js";
+import { assertWarrantyMonths } from "../helpers/stock.warranty.helper.js";
 
 const stripTags = (html) => String(html || "").replace(/<[^>]*>/g, "").trim();
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -90,11 +91,11 @@ const assertThresholdValue = (value, label) => {
 };
 
 const validateProductDefinitionExtras = (body) => {
-  const { unit, gstRate, warrantyYears, defaultStockAlertThreshold, branchThresholds } = body;
+  const { unit, gstRate, warrantyMonths, defaultStockAlertThreshold, branchThresholds } = body;
 
   // Independent of trackingMethod — the client always picks both explicitly
   // (e.g. Group+Pieces for bottles, Individual+Meter for a serialized reel
-  // are both valid combinations). Required, same as warrantyYears below.
+  // are both valid combinations). Required, same as warrantyMonths below.
   if (!unit) throw new Error("unit is required");
   if (!UNIT_TYPES_ARRAY.includes(unit))
     throw new Error(`unit must be one of: ${UNIT_TYPES_ARRAY.join(", ")}`);
@@ -130,14 +131,9 @@ const validateProductDefinitionExtras = (body) => {
     assertThresholdValue(row.threshold, `branchThresholds[${i}].threshold`);
   });
 
-  if (warrantyYears === undefined || warrantyYears === null)
-    throw new Error("warrantyYears is required");
-  if (
-    typeof warrantyYears !== "number" ||
-    !Number.isInteger(warrantyYears) ||
-    warrantyYears < 1
-  )
-    throw new Error("warrantyYears must be a positive integer");
+  if (warrantyMonths === undefined || warrantyMonths === null)
+    throw new Error("warrantyMonths is required");
+  assertWarrantyMonths(warrantyMonths);
 };
 
 export const validateCreateProductDefinition = (body) => {
@@ -263,6 +259,18 @@ export const validateCreateVendor = (body) => {
       throw new Error("gst.gstNumber is required when GST is available");
     }
   }
+
+  // Per-assignment warranty override. Optional — null falls back to the
+  // product's own default — but a value that is sent must be a valid month
+  // count, the same range the product default is held to.
+  (body.assignedProducts || []).forEach((ap) =>
+    (ap?.products || []).forEach((p) => {
+      const months = p?.overrides?.warrantyMonths;
+      if (months !== undefined && months !== null) {
+        assertWarrantyMonths(months, "Assigned product warrantyMonths");
+      }
+    })
+  );
 };
 
 export const validateUpdateVendor = (body) => {
@@ -278,33 +286,68 @@ const isNonEmptyString = (v) => typeof v === "string" && v.trim().length > 0;
 const isPositiveNumber = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
 const isNonNegativeNumber = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
 
-export const validateCreateQuotation = (body) => {
+/*
+  Create AND update — both replace the whole offer pool, so both send the
+  full payload. Shape only; everything that needs the database (product and
+  vendor exist, vendor is in the caller's branch scope, vendor supplies the
+  product, category, GST, default warranty, history) is resolved in
+  StockQuotationService.buildItems.
+
+  {
+    notes?: string,
+    products: [
+      { productDefinitionId, quantity,            // one quantity per product —
+        offers: [                                  // every vendor quotes it
+          { vendorId, unitPrice, warrantyMonths? } // warrantyMonths: override
+        ]                                          // for this quotation only
+      }
+    ]
+  }
+*/
+export const validateQuotationPayload = (body) => {
   if (!body || typeof body !== "object") throw new Error("Request body is required");
 
-  const { items } = body;
-  if (!Array.isArray(items) || items.length === 0) {
+  if (body.notes !== undefined && typeof body.notes !== "string") {
+    throw new Error("notes must be a string");
+  }
+
+  const { products } = body;
+  if (!Array.isArray(products) || products.length === 0) {
     throw new Error("At least one product must be selected");
   }
 
-  items.forEach((item, idx) => {
-    const where = `Item ${idx + 1}`;
-    if (!isNonEmptyString(item.productDefinitionId)) {
+  const seenProducts = new Set();
+  products.forEach((product, idx) => {
+    const where = `Product ${idx + 1}`;
+    if (!product || typeof product !== "object") throw new Error(`${where}: invalid entry`);
+    if (!isNonEmptyString(product.productDefinitionId)) {
       throw new Error(`${where}: productDefinitionId is required`);
     }
-    if (!isNonEmptyString(item.vendorId)) throw new Error(`${where}: vendorId is required`);
-    if (!isNonEmptyString(item.categoryId)) throw new Error(`${where}: categoryId is required`);
-    if (!isPositiveNumber(item.quantity)) {
-      throw new Error(`${where}: quantity must be greater than 0`);
+    if (seenProducts.has(product.productDefinitionId)) {
+      throw new Error(`${where}: the same product is listed twice`);
     }
-    if (!isNonNegativeNumber(item.unitPrice)) {
-      throw new Error(`${where}: price must be 0 or greater`);
+    seenProducts.add(product.productDefinitionId);
+
+    if (!Number.isInteger(product.quantity) || product.quantity < 1) {
+      throw new Error(`${where}: quantity must be a whole number of at least 1`);
     }
-    // Soft guard only — the authoritative warrantyYears is resolved
-    // server-side in buildItems() from the vendor assignment/product default,
-    // this just rejects an obviously bad client-sent value if one is present.
-    if (item.warrantyYears !== undefined && !isPositiveNumber(item.warrantyYears)) {
-      throw new Error(`${where}: warrantyYears must be greater than 0`);
+
+    if (!Array.isArray(product.offers) || product.offers.length === 0) {
+      throw new Error(`${where}: select at least one vendor`);
     }
+    const seenVendors = new Set();
+    product.offers.forEach((offer, j) => {
+      const at = `${where}, vendor ${j + 1}`;
+      if (!offer || typeof offer !== "object") throw new Error(`${at}: invalid entry`);
+      if (!isNonEmptyString(offer.vendorId)) throw new Error(`${at}: vendorId is required`);
+      if (seenVendors.has(offer.vendorId)) throw new Error(`${at}: the same vendor is listed twice`);
+      seenVendors.add(offer.vendorId);
+      if (!isPositiveNumber(offer.unitPrice)) throw new Error(`${at}: price must be greater than 0`);
+      // Optional — absent/null means "the vendor's own warranty".
+      if (offer.warrantyMonths !== undefined && offer.warrantyMonths !== null) {
+        assertWarrantyMonths(offer.warrantyMonths, `${at}: warrantyMonths`);
+      }
+    });
   });
 };
 

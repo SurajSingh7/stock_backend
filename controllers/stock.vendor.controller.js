@@ -3,6 +3,7 @@ import StockVendorService from "../services/stock.vendor.service.js";
 import { validateCreateVendor, validateUpdateVendor } from "../validators/stock.validator.js";
 import { successResponseHandler, errorResponseHandler } from "../helpers/response.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
+import { upgradeLegacyVendorWarranty } from "../helpers/stock.warranty.helper.js";
 
 const log = getLogger(import.meta.url);
 
@@ -11,6 +12,7 @@ export default class StockVendorController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
+      upgradeLegacyVendorWarranty(req.body); // TEMPORARY — see stock.warranty.helper.js
       validateCreateVendor(req.body);
       const vendor = await StockVendorService.createVendor(req.body, req.user, session);
       await session.commitTransaction();
@@ -50,6 +52,7 @@ export default class StockVendorController {
     const session = await mongoose.startSession();
     try {
       session.startTransaction();
+      upgradeLegacyVendorWarranty(req.body); // TEMPORARY — see stock.warranty.helper.js
       validateUpdateVendor(req.body);
       const vendor = await StockVendorService.updateVendor(req.params.id, req.body, req.user, session, req.dataAccess);
       await session.commitTransaction();
