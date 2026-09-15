@@ -56,6 +56,9 @@ export default class StockPurchaseOrderController {
         req.dataAccess
       );
       await session.commitTransaction();
+      // Only once the PO is safely committed: writing the file inside the
+      // transaction would leave an orphan PDF behind if it later aborted.
+      po.pdfPath = (await StockPurchaseOrderService.attachPdf(po._id)) || "";
       successResponseHandler(res, po, "Purchase order created", 201);
     } catch (error) {
       await session.abortTransaction();
@@ -161,25 +164,23 @@ export default class StockPurchaseOrderController {
     }
   }
 
+  // No transaction here on purpose. Sending the mail is an external side
+  // effect that cannot be rolled back, so wrapping it in one only created the
+  // illusion of safety — the mail still left, and an abort afterwards just
+  // erased the record of it. The service sends first, then records in a short
+  // transaction of its own. See StockPurchaseOrderService.sendMail.
   static async sendMail(req, res) {
-    const session = await mongoose.startSession();
     try {
-      session.startTransaction();
       validateSendMail(req.body);
       const data = await StockPurchaseOrderService.sendMail(
         req.params.id,
         req.body,
         actingUser(req),
-        session,
         req.dataAccess
       );
-      await session.commitTransaction();
       successResponseHandler(res, data, "Mail action completed");
     } catch (error) {
-      await session.abortTransaction();
       errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
     }
   }
 

@@ -283,6 +283,38 @@ export const validateUpdateVendor = (body) => {
 // ─── Quotation Validators ─────────────────────────────────────────────────────
 
 const isNonEmptyString = (v) => typeof v === "string" && v.trim().length > 0;
+
+/*
+  Mongo ids, checked for SHAPE before they reach the database.
+
+  Without this a malformed id sails through to Mongoose, which throws a
+  CastError that the response handler turns into "One of the values sent is not
+  in a valid format" — a message that names neither the field nor what was
+  wrong with it. Checked here, the error can say which field.
+*/
+const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
+const isObjectId = (v) => typeof v === "string" && OBJECT_ID_RE.test(v.trim());
+const assertObjectId = (v, label) => {
+  if (!isNonEmptyString(v)) throw new Error(`${label} is required`);
+  if (!isObjectId(v)) throw new Error(`${label} is not a valid id`);
+};
+
+/*
+  A date the user picked. Rejects nonsense outright, and also a date that
+  parses but cannot be meant — a PO dated 1900 or ten years out is a typo or a
+  broken client, and it would otherwise be accepted in silence and printed on
+  the document.
+*/
+const assertPickedDate = (v, label) => {
+  if (v === undefined || v === null || v === "") return;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) throw new Error(`${label} is not a valid date`);
+  const year = d.getFullYear();
+  const thisYear = new Date().getFullYear();
+  if (year < thisYear - 5 || year > thisYear + 1) {
+    throw new Error(`${label} looks wrong — check the year`);
+  }
+};
 const isPositiveNumber = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
 const isNonNegativeNumber = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
 
@@ -404,12 +436,14 @@ export const validateReviewQuotation = (body) => {
 
 export const validateCreatePurchaseOrder = (body) => {
   if (!body || typeof body !== "object") throw new Error("Request body is required");
-  if (!body.sourceQuotationId || typeof body.sourceQuotationId !== "string")
-    throw new Error("sourceQuotationId is required");
-  if (!body.vendorId || typeof body.vendorId !== "string")
-    throw new Error("vendorId is required");
+  assertObjectId(body.sourceQuotationId, "sourceQuotationId");
+  assertObjectId(body.vendorId, "vendorId");
   if (!Array.isArray(body.quotationItemIds) || body.quotationItemIds.length === 0)
     throw new Error("Select at least one item for the PO");
+  body.quotationItemIds.forEach((id, i) => assertObjectId(id, `Item ${i + 1}`));
+  if (body.termsConditionId !== undefined && body.termsConditionId !== null && body.termsConditionId !== "")
+    assertObjectId(body.termsConditionId, "termsConditionId");
+  assertPickedDate(body.poDate, "PO date");
   // buyerEntity is no longer sent by the client — createPurchaseOrder derives
   // it server-side from the Tracking Order (see StockPurchaseOrderService).
   if (!body.requester || !String(body.requester).trim())
@@ -465,12 +499,14 @@ export const validateUpdateTermsCondition = (body) => {
 
 // ─── Tracking Order Validators ───────────────────────────────────────────────
 
+/*
+  Only the id is checked, because only the id is used. addEntity reads the
+  entity's name, GST number, address and state back from the ERP's own list —
+  see StockInternalEntityService — so validating the other posted fields would
+  be validating data the server then throws away.
+*/
 export const validateAddEntity = (body) => {
-  const { entityId, alias, state, stateCode } = body || {};
-  if (!entityId) throw new Error("entityId is required");
-  if (!alias || !String(alias).trim()) throw new Error("Entity is required");
-  if (!state || !String(state).trim()) throw new Error("State is required");
-  if (!stateCode || !String(stateCode).trim()) throw new Error("State code is required");
+  assertObjectId(body?.entityId, "Entity");
 };
 
 /*
@@ -492,9 +528,7 @@ export const validateSetExclusions = (body) => {
   if (body.excludedItemIds !== undefined && !Array.isArray(body.excludedItemIds)) {
     throw new Error("excludedItemIds must be an array");
   }
-  (body.excludedItemIds || []).forEach((id) => {
-    if (!isNonEmptyString(id)) throw new Error("Each excluded line id must be a string");
-  });
+  (body.excludedItemIds || []).forEach((id, i) => assertObjectId(id, `Line ${i + 1}`));
 };
 
 // ─── Branch Validators ─────────────────────────────────────────────────────

@@ -12,6 +12,12 @@ export const hrmsSvcApiKey = process.env.HRMS_SVC_API_KEY;
 export const hrmsJwtSharedSecret = process.env.HRMS_JWT_SHARED_SECRET;
 export const adminRoleId = process.env.ADMIN_ROLE_ID;
 
+// ERP — owns the internal-company (buyer entity) master. A purchase order's
+// entity snapshot is read back from here rather than trusted from the client,
+// because its stateCode decides the tax split and its GST number is printed on
+// the PDF the vendor receives. Same host the frontend's /erp-api rewrite uses.
+export const erpApiUrl = process.env.ERP_API_URL || "https://erpbcken.gtel.in/api/v1";
+
 // Guards the /internal routes this service exposes for other services
 // (HRMS's admin UI, for the branch dropdown) to call into.
 export const internalApiKey = process.env.INTERNAL_API_KEY;

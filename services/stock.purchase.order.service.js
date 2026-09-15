@@ -13,6 +13,8 @@ import StockNotificationService from "./stock.notification.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
+import { nextDocumentNumber } from "../helpers/document.number.helper.js";
+import { readVendorOrders } from "./stock.vendor.order.reader.js";
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 
 const SCOPE_MODULE_KEY = "purchase-orders";
@@ -49,13 +51,16 @@ const ENTITY_TYPE = "purchase-orders";
 const QUOTATION_ENTITY_TYPE = "quotations";
 
 export default class StockPurchaseOrderService {
-  static async generatePONumber(session) {
-    const year = new Date().getFullYear();
-    const prefix = `PO-${year}-`;
-    const count = await StockPurchaseOrderModel.countDocuments({
-      poNumber: new RegExp(`^${prefix}`),
-    }).session(session);
-    return `${prefix}${String(count + 1).padStart(4, "0")}`;
+  // Was countDocuments + 1, which hands two simultaneous creates the same
+  // number — and poNumber carries a unique index, so the second one died on a
+  // raw duplicate-key error. See helpers/document.number.helper.js.
+  static generatePONumber(session) {
+    return nextDocumentNumber({
+      model: StockPurchaseOrderModel,
+      field: "poNumber",
+      prefix: "PO",
+      session,
+    });
   }
 
   static vendorStateCode(vendor) {
@@ -143,42 +148,12 @@ export default class StockPurchaseOrderService {
   static async getBoard(query = {}, dataAccess) {
     const { search, vendorId, categoryId, productId, entityAlias, status, dateFrom, dateTo } = query;
 
-    const qFilter = {
-      isActive: true,
-      status: { $in: [QUOTATION_STATUS.APPROVED, QUOTATION_STATUS.PARTIALLY_APPROVED] },
-    };
-    if (query.sourceQuotationId) qFilter._id = query.sourceQuotationId;
+    // Every vendor order, assembled once. Shared with the Tracking Orders
+    // board — see services/stock.vendor.order.reader.js.
+    const vendorOrders = await readVendorOrders({ sourceQuotationId: query.sourceQuotationId });
 
-    const quotations = await StockQuotationModel.find(qFilter)
-      .select("quotationNumber items categoryApprovals updatedAt")
-      .lean();
-
-    const vendorIds = new Set();
-    quotations.forEach((q) =>
-      (q.categoryApprovals || [])
-        .filter((c) => c.status === "APPROVED")
-        .forEach((ca) => (ca.selections || []).forEach((s) => vendorIds.add(String(s.vendorId))))
-    );
-    const vendors = await StockVendorModel.find({ _id: { $in: [...vendorIds] } }).lean();
-    const vendorMap = new Map(vendors.map((v) => [String(v._id), v]));
-
-    const quotationIds = quotations.map((q) => q._id);
-    const pos = await StockPurchaseOrderModel.find({ sourceQuotationId: { $in: quotationIds }, isActive: true })
-      .select("poNumber status grandTotal vendorId sourceQuotationId items buyerEntity createdAt updatedAt reviewedAt rejectedReason")
-      .lean();
-    const poByKey = new Map();
-    pos.forEach((po) => poByKey.set(`${po.sourceQuotationId}::${po.vendorId}`, po));
-
-    // Entity/State now lives on the Tracking Order, assigned once on the
-    // Tracking Orders page — a vendor row only belongs on THIS board once its
-    // tracking order has moved past ENTITY_PENDING (and isn't NOT_REQUIRED).
-    const trackingOrders = await StockTrackingOrderModel.find({
-      sourceQuotationId: { $in: quotationIds },
-      isActive: true,
-    }).lean();
-    const trackingByKey = new Map(
-      trackingOrders.map((t) => [`${t.sourceQuotationId}::${t.vendorId}`, t])
-    );
+    // A vendor row belongs on THIS board only once its tracking order has
+    // moved past ENTITY_PENDING — and never once it is NOT_REQUIRED.
     const VISIBLE_TRACKING_STATUSES = new Set([
       TRACKING_STATUS.PO_PENDING,
       TRACKING_STATUS.PO_GENERATED,
@@ -189,92 +164,38 @@ export default class StockPurchaseOrderService {
       TRACKING_STATUS.REJECTED,
     ]);
 
-    // ── build the full board (unfiltered) ────────────────────────────────────
     const fullBoard = [];
-    quotations.forEach((q) => {
-      const itemById = new Map((q.items || []).map((it) => [String(it._id), it]));
-
-      let approvalDate = null;
-      (q.categoryApprovals || []).forEach((ca) => {
-        if (ca.decidedAt && (!approvalDate || new Date(ca.decidedAt) > new Date(approvalDate))) approvalDate = ca.decidedAt;
-      });
-
-      const byVendor = new Map();
-      (q.categoryApprovals || [])
-        .filter((c) => c.status === "APPROVED")
-        .forEach((ca) =>
-          (ca.selections || []).forEach((sel) => {
-            const item = itemById.get(String(sel.itemId));
-            if (!item) return;
-            const vId = String(sel.vendorId);
-            if (!byVendor.has(vId)) {
-              const v = vendorMap.get(vId) || {};
-              const primary = (v.contacts || []).find((c) => c.label === "PRIMARY") || (v.contacts || [])[0] || {};
-              byVendor.set(vId, {
-                vendorId: vId, vendorName: sel.vendorName || v.name || "",
-                phone: primary.phone || "", email: primary.email || "", contactName: primary.name || "",
-                // Full recipient list, split the way the vendor was configured.
-                // The Send Mail dialog shows these instead of guessing from the
-                // primary contact alone.
-                mailTo: (v.contacts || [])
-                  // No "|| TO" fallback: the default is NONE now, so treating a
-                  // missing value as TO would mail people who opted out. Rows
-                  // written before this field existed were backfilled — see
-                  // scripts/backfill-contact-recipient-type.js.
-                  .filter((c) => c.recipientType === "TO" && c.email)
-                  .map((c) => ({ name: c.name || "", email: c.email })),
-                mailCc: (v.contacts || [])
-                  .filter((c) => c.recipientType === "CC" && c.email)
-                  .map((c) => ({ name: c.name || "", email: c.email })),
-                gstNumber: v.gst?.gstNumber || "", address: v.address?.fullAddress || "",
-                state: v.gst?.state?.name || v.address?.state?.name || "",
-                stateCode: v.gst?.state?.code || v.address?.state?.code || "",
-                paymentTerms: v.paymentTerms || "",
-                _pending: [],
-                _skipped: [],
-              });
-            }
-            const row = byVendor.get(vId);
-            const qty = sel.quantity, price = sel.unitPrice, gstRate = sel.gstRate;
-            const taxable = round2(qty * price);
-            const gstAmount = round2((taxable * gstRate) / 100);
-            const lineTotal = round2(taxable + gstAmount);
-            const detail = {
-              quotationItemId: item._id, categoryId: ca.categoryId, categoryName: ca.categoryName,
-              productDefinitionId: sel.productDefinitionId, productName: sel.productName,
-              quantity: qty, unitPrice: price, gstRate, taxable, gstAmount, lineTotal,
-            };
-            if (!item.poId) row._pending.push(detail);
-          })
-        );
-
+    vendorOrders.forEach(({ quotation: q, approvalDate, vendors }) => {
       const rows = [];
-      byVendor.forEach((row, vId) => {
-        const tracking = trackingByKey.get(`${q._id}::${vId}`);
+      vendors.forEach((entry) => {
+        const { vendorId: vId, vendor: v, tracking, po } = entry;
         if (!tracking || !VISIBLE_TRACKING_STATUSES.has(tracking.status)) return;
 
-        // Lines excluded on the tracking order never reach "Create PO". This
-        // is the board half of the rule; createPurchaseOrder enforces the same
-        // thing server-side, so hiding the button is not the only guard.
-        const excludedById = new Map(
-          (tracking.excludedItems || []).map((e) => [String(e.quotationItemId), e])
-        );
-        if (excludedById.size) {
-          row._skipped = row._pending
-            .filter((d) => excludedById.has(String(d.quotationItemId)))
-            .map((d) => {
-              const e = excludedById.get(String(d.quotationItemId));
-              return {
-                ...d,
-                reason: e.reason || "",
-                excludedByName: e.excludedByName || "",
-                excludedAt: e.excludedAt || null,
-              };
-            });
-          row._pending = row._pending.filter((d) => !excludedById.has(String(d.quotationItemId)));
-        }
-
-        const po = poByKey.get(`${q._id}::${vId}`);
+        const primary = (v.contacts || []).find((c) => c.label === "PRIMARY") || (v.contacts || [])[0] || {};
+        const row = {
+          vendorName: entry.vendorName,
+          phone: primary.phone || "", email: primary.email || "", contactName: primary.name || "",
+          // Full recipient list, split the way the vendor was configured. The
+          // Send Mail dialog shows these instead of guessing from the primary
+          // contact alone. No "|| TO" fallback: the default is NONE, so
+          // treating a missing value as TO would mail people who opted out.
+          mailTo: (v.contacts || [])
+            .filter((c) => c.recipientType === "TO" && c.email)
+            .map((c) => ({ name: c.name || "", email: c.email })),
+          mailCc: (v.contacts || [])
+            .filter((c) => c.recipientType === "CC" && c.email)
+            .map((c) => ({ name: c.name || "", email: c.email })),
+          gstNumber: v.gst?.gstNumber || "", address: v.address?.fullAddress || "",
+          state: v.gst?.state?.name || v.address?.state?.name || "",
+          stateCode: v.gst?.state?.code || v.address?.state?.code || "",
+          paymentTerms: v.paymentTerms || "",
+          // Lines already consumed by a PO are not offered again; excluded
+          // lines never reach "Create PO" at all. createPurchaseOrder enforces
+          // the same rule server-side, so hiding the button is not the only
+          // guard.
+          _pending: entry.lines.filter((l) => !l.poId),
+          _skipped: entry.excludedLines.filter((l) => !l.poId),
+        };
         let statusVal, items, poId = null, poNumber = "";
         const entityAlias = tracking.buyerEntity?.alias || "";
         let totalAmount = 0, totalQuantity = 0, rejectedReason = "", filterDate = approvalDate;
@@ -450,6 +371,98 @@ export default class StockPurchaseOrderService {
     actually enforced in getBoard and createPurchaseOrder below.
   */
 
+  /*
+    Turn the requested quotation item ids into PO lines, with the running
+    totals, and refuse anything that must not be on this order.
+
+    Every rejection here is a rule, not a convenience: an item that is not an
+    approved selection, belongs to another vendor, is already on a PO, or was
+    marked Not Required. The board hides all four, but the board is only the
+    button — this is what actually stops a crafted request.
+
+    Prices come from the approved SELECTION, never from the request: what was
+    approved is what gets ordered.
+  */
+  static buildPoLines({ quotation, quotationItemIds, vendorId, excludedIds, taxType }) {
+    const wantIds = new Set((quotationItemIds || []).map(String));
+    if (wantIds.size === 0) throw new Error("Select at least one item for the PO");
+
+    const selByItemId = new Map();
+    (quotation.categoryApprovals || [])
+      .filter((ca) => ca.status === "APPROVED")
+      .forEach((ca) =>
+        (ca.selections || []).forEach((sel) => selByItemId.set(String(sel.itemId), { ca, sel }))
+      );
+
+    const items = [];
+    let subTotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0;
+
+    for (const itemId of wantIds) {
+      const found = selByItemId.get(itemId);
+      if (!found) throw new Error("An item is not an approved selection of this quotation");
+
+      const item = quotation.items.id(itemId);
+      if (!item) throw new Error("Quotation item not found");
+      if (String(item.vendorId) !== String(vendorId)) {
+        throw new Error("All items in one PO must belong to the same vendor");
+      }
+      if (item.poId) throw new Error(`${item.productName} is already on a PO`);
+      if (excludedIds.has(itemId)) {
+        throw new Error(`${item.productName} was excluded from this order and can't be added`);
+      }
+
+      const { sel, ca } = found;
+      const taxable = round2(sel.quantity * sel.unitPrice);
+      const { cgst, sgst, igst, gstAmount } = StockPurchaseOrderService.computeLineTax(
+        taxable,
+        sel.gstRate,
+        taxType
+      );
+
+      subTotal = round2(subTotal + taxable);
+      cgstTotal = round2(cgstTotal + cgst);
+      sgstTotal = round2(sgstTotal + sgst);
+      igstTotal = round2(igstTotal + igst);
+
+      items.push({
+        quotationItemId: item._id,
+        categoryId: ca.categoryId,
+        categoryName: ca.categoryName,
+        productDefinitionId: sel.productDefinitionId,
+        productName: sel.productName,
+        quantity: sel.quantity,
+        unitPrice: sel.unitPrice,
+        gstRate: sel.gstRate,
+        taxable,
+        cgst,
+        sgst,
+        igst,
+        gstAmount,
+        lineTotal: round2(taxable + gstAmount),
+      });
+    }
+
+    return { items, subTotal, cgstTotal, sgstTotal, igstTotal };
+  }
+
+  // Everything about the vendor the PO freezes at create time. Snapshotted, not
+  // referenced: a later edit to the vendor master must not rewrite an order
+  // that has already gone out.
+  static vendorSnapshot(vendor) {
+    const primary =
+      (vendor.contacts || []).find((c) => c.label === "PRIMARY") || (vendor.contacts || [])[0] || {};
+    return {
+      vendorName: vendor.name || "",
+      vendorGstin: vendor.gst?.gstNumber || "",
+      vendorAddress: vendor.address?.fullAddress || "",
+      vendorState: vendor.gst?.state?.name || vendor.address?.state?.name || "",
+      vendorStateCode: StockPurchaseOrderService.vendorStateCode(vendor),
+      vendorPhone: primary.phone || "",
+      vendorEmail: primary.email || "",
+      paymentTerms: vendor.paymentTerms || "",
+    };
+  }
+
   /* ---------------------------------------------------------------------- */
   /* Create — one PO from the given quotation item ids (all same vendor)     */
   /* ---------------------------------------------------------------------- */
@@ -518,19 +531,8 @@ export default class StockPurchaseOrderService {
       }
     }
 
-    // Collect the approved-selection snapshots for the requested item ids.
-    const wantIds = new Set((quotationItemIds || []).map(String));
-    const selByItemId = new Map();
-    (quotation.categoryApprovals || [])
-      .filter((ca) => ca.status === "APPROVED")
-      .forEach((ca) =>
-        (ca.selections || []).forEach((sel) => {
-          selByItemId.set(String(sel.itemId), { ca, sel });
-        })
-      );
-
-    if (wantIds.size === 0) throw new Error("Select at least one item for the PO");
-
+    // Same state means the tax splits into CGST+SGST; different states means
+    // one IGST line. Derived from the two snapshots, never sent by the client.
     const buyerStateCode = String(buyerEntity?.stateCode || "");
     const vendorStateCode = String(StockPurchaseOrderService.vendorStateCode(vendor));
     const taxType =
@@ -538,60 +540,17 @@ export default class StockPurchaseOrderService {
         ? PO_TAX_TYPE.CGST_SGST
         : PO_TAX_TYPE.IGST;
 
-    const items = [];
-    let subTotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0;
-
-    for (const itemId of wantIds) {
-      const found = selByItemId.get(itemId);
-      if (!found) throw new Error("An item is not an approved selection of this quotation");
-
-      const item = quotation.items.id(itemId);
-      if (!item) throw new Error("Quotation item not found");
-      if (String(item.vendorId) !== String(vendorId)) {
-        throw new Error("All items in one PO must belong to the same vendor");
-      }
-      if (item.poId) throw new Error(`${item.productName} is already on a PO`);
-      if (excludedIds.has(String(itemId))) {
-        throw new Error(`${item.productName} was excluded from this order and can't be added`);
-      }
-
-      const { sel, ca } = found;
-      const taxable = round2(sel.quantity * sel.unitPrice);
-      const { cgst, sgst, igst, gstAmount } = StockPurchaseOrderService.computeLineTax(
-        taxable,
-        sel.gstRate,
-        taxType
-      );
-      const lineTotal = round2(taxable + gstAmount);
-
-      subTotal = round2(subTotal + taxable);
-      cgstTotal = round2(cgstTotal + cgst);
-      sgstTotal = round2(sgstTotal + sgst);
-      igstTotal = round2(igstTotal + igst);
-
-      items.push({
-        quotationItemId: item._id,
-        categoryId: ca.categoryId,
-        categoryName: ca.categoryName,
-        productDefinitionId: sel.productDefinitionId,
-        productName: sel.productName,
-        quantity: sel.quantity,
-        unitPrice: sel.unitPrice,
-        gstRate: sel.gstRate,
-        taxable,
-        cgst,
-        sgst,
-        igst,
-        gstAmount,
-        lineTotal,
+    const { items, subTotal, cgstTotal, sgstTotal, igstTotal } =
+      StockPurchaseOrderService.buildPoLines({
+        quotation,
+        quotationItemIds,
+        vendorId,
+        excludedIds,
+        taxType,
       });
-    }
-
     const gstTotal = round2(cgstTotal + sgstTotal + igstTotal);
     const grandTotal = round2(subTotal + gstTotal);
     const poNumber = await StockPurchaseOrderService.generatePONumber(session);
-    const primaryContact = (vendor.contacts || []).find((c) => c.label === "PRIMARY") ||
-      (vendor.contacts || [])[0] || {};
 
     const [po] = await StockPurchaseOrderModel.create(
       [
@@ -599,13 +558,7 @@ export default class StockPurchaseOrderService {
           poNumber,
           sourceQuotationId,
           vendorId,
-          vendorName: vendor.name || "",
-          vendorGstin: vendor.gst?.gstNumber || "",
-          vendorAddress: vendor.address?.fullAddress || "",
-          vendorState: vendor.gst?.state?.name || vendor.address?.state?.name || "",
-          vendorStateCode,
-          vendorPhone: primaryContact.phone || "",
-          vendorEmail: primaryContact.email || "",
+          ...StockPurchaseOrderService.vendorSnapshot(vendor),
           buyerEntity: {
             entityId: buyerEntity?.entityId || null,
             name: buyerEntity?.name || "",
@@ -618,7 +571,6 @@ export default class StockPurchaseOrderService {
           requester: requester || "",
           poDate: poDate || new Date(),
           shipmentPreference: shipmentPreference || "",
-          paymentTerms: vendor.paymentTerms || "",
           terms: resolvedTerm?.termsContent || "",
           termsConditionId: resolvedTerm?._id || null,
           termsSource,
@@ -637,9 +589,11 @@ export default class StockPurchaseOrderService {
       { session }
     );
 
-    // Lock the used quotation items so they can't be PO'd again.
-    wantIds.forEach((itemId) => {
-      const item = quotation.items.id(itemId);
+    // Lock the used quotation items so they can't be PO'd again. Driven by the
+    // lines that were actually built, not by the requested ids — buildPoLines
+    // is what decided which of those are legitimate.
+    items.forEach(({ quotationItemId }) => {
+      const item = quotation.items.id(quotationItemId);
       if (item) {
         item.poId = po._id;
         item.poAddedAt = new Date();
@@ -652,10 +606,11 @@ export default class StockPurchaseOrderService {
     // leaves the quotation — the approval record — untouched.
     await quotation.save({ session });
 
-    // Generate the PDF (outside the mongoose write, but before commit is fine).
-    const pdfPath = await generatePOPdf(po.toObject());
-    po.pdfPath = pdfPath;
-    await po.save({ session });
+    // The PDF is NOT written here. generatePOPdf puts a file on disk, and a
+    // file write cannot be rolled back — if this transaction later aborted the
+    // PDF would be left behind as an orphan, and until then a slow disk write
+    // would hold the transaction's locks open. It is generated after the
+    // commit instead; see attachPdf, called by the controller.
 
     tracking.poId = po._id;
     tracking.status = TRACKING_STATUS.PO_GENERATED;
@@ -666,6 +621,32 @@ export default class StockPurchaseOrderService {
       entityType: ENTITY_TYPE, entityId: po._id, action: "CREATE", actor: user, before: null, after: po.toObject(),
     });
     return po;
+  }
+
+  /*
+    Write the PO's PDF and record where it went — called AFTER the creating
+    transaction has committed.
+
+    Deliberately outside that transaction: a file on disk cannot be rolled
+    back, so generating it inside meant an aborted transaction left an orphan
+    PDF behind, with the transaction's locks held open across a slow disk write
+    in the meantime.
+
+    Failing here leaves a real PO with no PDF, which is recoverable — the
+    download simply regenerates. That is a far better failure than the PO
+    itself being lost because its PDF could not be written.
+  */
+  static async attachPdf(poId) {
+    const po = await StockPurchaseOrderModel.findOne({ _id: poId, isActive: true });
+    if (!po) return null;
+    try {
+      po.pdfPath = await generatePOPdf(po.toObject());
+      await po.save();
+      return po.pdfPath;
+    } catch (err) {
+      log.error(`PO ${po.poNumber} was created but its PDF could not be written: ${err.message}`);
+      return null;
+    }
   }
 
   /* ---------------------------------------------------------------------- */
@@ -806,8 +787,21 @@ export default class StockPurchaseOrderService {
   /* also what turns "Send Mail" into "Resend Mail" and blocks deletion.     */
   /* ---------------------------------------------------------------------- */
 
-  static async sendMail(id, body, user, session, dataAccess) {
-    const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
+  /*
+    Takes no session on purpose.
+
+    Sending is an external side effect that cannot be undone. It used to run
+    inside the caller's transaction, which meant: mail reaches the vendor, a
+    later write fails, everything rolls back — and the system now says "not
+    sent" while the vendor is holding the PO. Nothing could repair that,
+    because the mail was already gone.
+
+    So the order is: verify, send, then record in a short transaction of its
+    own. The remaining failure — sent but not recorded — is the one that IS
+    repairable: the PO stays resendable, and a resend records it.
+  */
+  static async sendMail(id, body, user, dataAccess) {
+    const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true });
     if (!po) throw new Error("Purchase order not found");
     assertDataScope(po, dataAccess);
     // Approved covers both the first send and every resend — a PO stays
@@ -820,8 +814,7 @@ export default class StockPurchaseOrderService {
     const { sendEmail, to, cc, from } = body;
     const { notification } = await StockNotificationService.resolveForVendor(
       po.vendorId,
-      NOTIFICATION_CHANNEL.EMAIL,
-      session
+      NOTIFICATION_CHANNEL.EMAIL
     );
 
     // One or many. A string is still accepted so an older caller keeps working.
@@ -873,18 +866,34 @@ export default class StockPurchaseOrderService {
         mode: MAIL_MODE.MANUAL,
         channel: NOTIFICATION_CHANNEL.EMAIL,
         notificationId: notification?._id || null,
-        to: to || "",
-        cc: cc || [],
+        to: toList,
+        cc: Array.isArray(cc) ? cc.filter(Boolean) : [],
         from: from || "",
       };
     }
 
-    await po.save({ session });
+    // Recorded only now, in a transaction of its own, so the PO's emailed
+    // stamp and the tracking order's mailResult either both land or neither
+    // does. The mail itself is already gone by this point and is not part of
+    // what can be rolled back.
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction();
+      await po.save({ session });
+      await StockTrackingOrderService.recordMailResult(po._id, mailResult, session);
+      await session.commitTransaction();
+    } catch (err) {
+      await session.abortTransaction();
+      log.error(`PO ${po.poNumber} was sent but recording it failed: ${err.message}`);
+      throw new Error("The PO was sent, but saving that failed. Check the vendor's inbox before resending.");
+    } finally {
+      await session.endSession();
+    }
+
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE, entityId: po._id, action: "SEND_MAIL", actor: user, before, after: po.toObject(),
       reason: mailResult.mode,
     });
-    await StockTrackingOrderService.recordMailResult(po._id, mailResult, session);
 
     return { po, mailResult };
   }

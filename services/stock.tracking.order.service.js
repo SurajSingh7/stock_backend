@@ -7,6 +7,8 @@ import StockInvoiceModel from "../models/stock.invoice.model.js";
 import { paginate } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
+import { readVendorOrders } from "./stock.vendor.order.reader.js";
+import StockInternalEntityService from "./stock.internal.entity.service.js";
 import {
   QUOTATION_STATUS,
   TRACKING_STATUS,
@@ -58,41 +60,13 @@ export default class StockTrackingOrderService {
   static async getBoard(query = {}, dataAccess) {
     const { search, vendorId, status, dateFrom, dateTo } = query;
 
-    const qFilter = {
-      isActive: true,
-      status: { $in: [QUOTATION_STATUS.APPROVED, QUOTATION_STATUS.PARTIALLY_APPROVED] },
-    };
-    
-    if (query.sourceQuotationId) qFilter._id = query.sourceQuotationId;
-
-    const quotations = await StockQuotationModel.find(qFilter)
-      .select("quotationNumber items categoryApprovals updatedAt")
-      .lean();
-
-    const vendorIds = new Set();
-    quotations.forEach((q) =>
-      (q.categoryApprovals || [])
-        .filter((c) => c.status === "APPROVED")
-        .forEach((ca) => (ca.selections || []).forEach((s) => vendorIds.add(String(s.vendorId))))
-    );
-    const vendors = await StockVendorModel.find({ _id: { $in: [...vendorIds] } }).lean();
-    const vendorMap = new Map(vendors.map((v) => [String(v._id), v]));
-
-    const quotationIds = quotations.map((q) => q._id);
-    const trackingOrders = await StockTrackingOrderModel.find({
-      sourceQuotationId: { $in: quotationIds },
-      isActive: true,
-    }).lean();
-    const trackingByKey = new Map(trackingOrders.map((t) => [`${t.sourceQuotationId}::${t.vendorId}`, t]));
-
-    const pos = await StockPurchaseOrderModel.find({ sourceQuotationId: { $in: quotationIds }, isActive: true })
-      .select("poNumber status grandTotal subTotal vendorId sourceQuotationId items createdAt poDate taxType cgstTotal sgstTotal igstTotal pdfPath")
-      .lean();
-    const poByKey = new Map(pos.map((po) => [`${po.sourceQuotationId}::${po.vendorId}`, po]));
+    // Every vendor order, assembled once. Shared with the PO board — see
+    // services/stock.vendor.order.reader.js for why this is not done here.
+    const vendorOrders = await readVendorOrders({ sourceQuotationId: query.sourceQuotationId });
 
     // Received qty (approved invoices only) per tracking order — powers the
     // card's Ordered/Received/Pending summary without a separate round-trip.
-    const trackingIds = trackingOrders.map((t) => t._id);
+    const trackingIds = vendorOrders.flatMap((g) => g.vendors.map((v) => v.tracking?._id).filter(Boolean));
     const approvedInvoices = await StockInvoiceModel.find({
       trackingOrderId: { $in: trackingIds },
       status: INVOICE_STATUS.APPROVED,
@@ -103,89 +77,28 @@ export default class StockTrackingOrderService {
     const receivedByTracking = new Map();
     approvedInvoices.forEach((inv) => {
       const sum = (inv.lines || []).reduce((s, l) => s + (l.receivedQuantity || 0), 0);
-      const key = String(inv.trackingOrderId);
-      receivedByTracking.set(key, (receivedByTracking.get(key) || 0) + sum);
+      const k = String(inv.trackingOrderId);
+      receivedByTracking.set(k, (receivedByTracking.get(k) || 0) + sum);
     });
 
     const fullBoard = [];
-    quotations.forEach((q) => {
-      const itemById = new Map((q.items || []).map((it) => [String(it._id), it]));
-
-      let approvalDate = null;
-      (q.categoryApprovals || []).forEach((ca) => {
-        if (ca.decidedAt && (!approvalDate || new Date(ca.decidedAt) > new Date(approvalDate))) approvalDate = ca.decidedAt;
-      });
-
-      const byVendor = new Map();
-      (q.categoryApprovals || [])
-        .filter((c) => c.status === "APPROVED")
-        .forEach((ca) =>
-          (ca.selections || []).forEach((sel) => {
-            const item = itemById.get(String(sel.itemId));
-            if (!item) return;
-            const vId = String(sel.vendorId);
-            if (!byVendor.has(vId)) {
-              const v = vendorMap.get(vId) || {};
-              const primary = (v.contacts || []).find((c) => c.label === "PRIMARY") || (v.contacts || [])[0] || {};
-              byVendor.set(vId, {
-                vendorId: vId, vendorName: sel.vendorName || v.name || "",
-                phone: primary.phone || "", email: primary.email || "",
-                contactName: primary.name || "",
-                stateCode: v.gst?.state?.code || v.address?.state?.code || "",
-                items: [],
-              });
-            }
-            const row = byVendor.get(vId);
-            const qty = sel.quantity, price = sel.unitPrice, gstRate = sel.gstRate;
-            const taxable = round2(qty * price);
-            const gstAmount = round2((taxable * gstRate) / 100);
-            const lineTotal = round2(taxable + gstAmount);
-            row.items.push({
-              quotationItemId: item._id, categoryId: ca.categoryId, categoryName: ca.categoryName,
-              productDefinitionId: sel.productDefinitionId, productName: sel.productName,
-              // Warranty lives on the approved SELECTION, never on the PO line —
-              // a PO does not carry it. Sent here so the card can show it in
-              // both states without the screen going looking for it.
-              warrantyMonths: sel.warrantyMonths ?? null,
-              quantity: qty, unitPrice: price, gstRate, taxable, gstAmount, lineTotal,
-            });
-          })
-        );
-
+    vendorOrders.forEach(({ quotation: q, approvalDate, vendors }) => {
       const rows = [];
-      byVendor.forEach((row, vId) => {
-        const tracking = trackingByKey.get(`${q._id}::${vId}`);
+      vendors.forEach((entry) => {
+        const { vendorId: vId, vendor: v, tracking, po } = entry;
         if (!tracking) return; // shouldn't happen — created at review time
 
-        const po = poByKey.get(`${q._id}::${vId}`);
-
-        // Excluded lines leave the row's items and its money: what this row
-        // shows must be what a PO would actually be raised for. They are
-        // returned alongside, so the screen can still list what was dropped.
-        const excludedById = new Map(
-          (tracking.excludedItems || []).map((e) => [String(e.quotationItemId), e])
-        );
-        const excludedItems = row.items
-          .filter((it) => excludedById.has(String(it.quotationItemId)))
-          .map((it) => {
-            const e = excludedById.get(String(it.quotationItemId));
-            return {
-              ...it,
-              reason: e.reason || "",
-                  excludedByName: e.excludedByName || "",
-              excludedAt: e.excludedAt || null,
-            };
-          });
-        row.items = row.items.filter((it) => !excludedById.has(String(it.quotationItemId)));
-
-        let items = row.items, totalAmount, totalQuantity;
+        const primary = (v.contacts || []).find((c) => c.label === "PRIMARY") || (v.contacts || [])[0] || {};
+        const excludedItems = entry.excludedLines;
+        let items = entry.lines;
+        let totalAmount, totalQuantity;
 
         if (po) {
           // A PO line does not carry warranty, so carry it across from the
           // approved selection this line came from. That selection is itself a
           // snapshot taken at approval, so this is not reading anything live.
           const warrantyByItemId = new Map(
-            row.items.map((it) => [String(it.quotationItemId), it.warrantyMonths ?? null])
+            entry.lines.map((l) => [String(l.quotationItemId), l.warrantyMonths ?? null])
           );
           items = (po.items || []).map((it) => ({
             quotationItemId: it.quotationItemId, categoryId: it.categoryId, categoryName: it.categoryName,
@@ -220,8 +133,9 @@ export default class StockTrackingOrderService {
 
         rows.push({
           trackingOrderId: tracking._id,
-          vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email, contactName: row.contactName,
-          vendorStateCode: row.stateCode || "",
+          vendorId: vId, vendorName: entry.vendorName,
+          phone: primary.phone || "", email: primary.email || "", contactName: primary.name || "",
+          vendorStateCode: v.gst?.state?.code || v.address?.state?.code || "",
           poId: po?._id || null, poNumber: po?.poNumber || "", poDate,
           // poDate is a date the creator PICKS, so it has no meaningful time of
           // day. The card shows the picked date with the time the PO was
@@ -332,26 +246,32 @@ export default class StockTrackingOrderService {
       throw new Error("Entity has already been assigned for this vendor");
     }
 
+    /*
+      Only the ID is taken from the client. Everything stored is read back from
+      the ERP's own list — because two of these fields are not cosmetic:
+      stateCode decides the tax split (CGST+SGST vs IGST) and gstNumber is
+      printed on the PO PDF the vendor receives. A stale or crafted client
+      could otherwise put wrong tax and wrong GST details on a real document.
+    */
+    const entity = await StockInternalEntityService.resolve(payload.entityId);
+    if (!entity) throw new Error("That entity no longer exists or is not available");
+
     // The record has no entity yet, so there is nothing to scope it BY — what
     // matters is the entity being assigned. Without this, an entity-restricted
     // user could assign an entity they cannot work on and immediately lose
-    // sight of the row they just handled.
+    // sight of the row they just handled. Checked against the RESOLVED alias,
+    // not the posted one, so the check cannot be walked around by posting an
+    // allowed alias alongside someone else's entity id.
     const allowedAliases = resolveDimensionAllowList(dataAccess, "entity");
-    const incomingAlias = String(payload.alias || "").toUpperCase();
-    if (allowedAliases !== null && !allowedAliases.includes(incomingAlias)) {
+    if (allowedAliases !== null && !allowedAliases.includes(String(entity.alias).toUpperCase())) {
       throw new Error("You are not allowed to assign this entity");
+    }
+    if (!entity.stateCode) {
+      throw new Error(`${entity.alias || "This entity"} has no state code in the ERP — fix it there first`);
     }
     const before = tracking.toObject();
 
-    tracking.buyerEntity = {
-      entityId: payload.entityId || null,
-      name: payload.name || "",
-      alias: payload.alias || "",
-      gstNumber: payload.gstNumber || "",
-      address: payload.address || "",
-      state: payload.state || "",
-      stateCode: String(payload.stateCode || ""),
-    };
+    tracking.buyerEntity = { ...entity };
     tracking.status = TRACKING_STATUS.PO_PENDING;
     await tracking.save({ session });
     await StockAuditLogService.recordAudit({

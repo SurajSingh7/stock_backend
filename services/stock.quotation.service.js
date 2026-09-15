@@ -14,6 +14,7 @@ import StockAuditLogService from "./stock.audit.log.service.js";
 import StockCategoryService from "./stock.category.service.js";
 
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
+import { nextDocumentNumber } from "../helpers/document.number.helper.js";
 import {
   applyDataScope,
   isWithinDataScope,
@@ -75,43 +76,15 @@ export default class StockQuotationService {
   /* Helpers                                                                 */
   /* ---------------------------------------------------------------------- */
 
-  // Atomic: a single $inc on this year's counter row, so two concurrent
-  // submits can never draw the same number (counting existing quotations and
-  // adding one — the old scheme — gave both the same value). The first number
-  // of a year seeds the row from the highest number already issued, so the
-  // switch-over never re-issues one.
-  static async generateQuotationNumber(session) {
-    const year = new Date().getFullYear();
-    const prefix = `QTN-${year}-`;
-    const key = `QTN-${year}`;
-
-    const bumped = await StockCounterModel.findOneAndUpdate(
-      { _id: key },
-      { $inc: { seq: 1 } },
-      { new: true, session }
-    ).lean();
-    let seq = bumped?.seq;
-
-    if (seq === undefined) {
-      const [top] = await StockQuotationModel.aggregate([
-        { $match: { quotationNumber: { $regex: `^${prefix}\\d+$` } } },
-        {
-          $group: {
-            _id: null,
-            max: { $max: { $toInt: { $substrCP: ["$quotationNumber", prefix.length, 12] } } },
-          },
-        },
-      ]).session(session);
-      const start = top?.max || 0;
-      const seeded = await StockCounterModel.findOneAndUpdate(
-        { _id: key },
-        [{ $set: { seq: { $add: [{ $ifNull: ["$seq", start] }, 1] } } }],
-        { new: true, upsert: true, session }
-      ).lean();
-      seq = seeded.seq;
-    }
-
-    return `${prefix}${String(seq).padStart(4, "0")}`;
+  // Shared with Purchase Orders — see helpers/document.number.helper.js for
+  // why this is a counter row and not countDocuments + 1.
+  static generateQuotationNumber(session) {
+    return nextDocumentNumber({
+      model: StockQuotationModel,
+      field: "quotationNumber",
+      prefix: "QTN",
+      session,
+    });
   }
 
   // Latest purchase (qty + price) and average rating for every (vendor,
