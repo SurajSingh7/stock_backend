@@ -102,7 +102,7 @@ export default class StockPurchaseOrderService {
         .forEach((ca) => {
           (ca.selections || []).forEach((sel) => {
             const item = itemById.get(String(sel.itemId));
-            if (!item || item.poId || item.poSkipped) return; // already on a PO, or permanently skipped
+            if (!item || item.poId) return; // already on a PO
             const vId = String(sel.vendorId);
             if (!byVendor.has(vId)) {
               byVendor.set(vId, {
@@ -150,7 +150,7 @@ export default class StockPurchaseOrderService {
     if (query.sourceQuotationId) qFilter._id = query.sourceQuotationId;
 
     const quotations = await StockQuotationModel.find(qFilter)
-      .select("quotationNumber items categoryApprovals disabledVendors updatedAt")
+      .select("quotationNumber items categoryApprovals updatedAt")
       .lean();
 
     const vendorIds = new Set();
@@ -193,7 +193,6 @@ export default class StockPurchaseOrderService {
     const fullBoard = [];
     quotations.forEach((q) => {
       const itemById = new Map((q.items || []).map((it) => [String(it._id), it]));
-      const disabledMap = new Map((q.disabledVendors || []).map((d) => [String(d.vendorId), d]));
 
       let approvalDate = null;
       (q.categoryApprovals || []).forEach((ca) => {
@@ -211,7 +210,6 @@ export default class StockPurchaseOrderService {
             if (!byVendor.has(vId)) {
               const v = vendorMap.get(vId) || {};
               const primary = (v.contacts || []).find((c) => c.label === "PRIMARY") || (v.contacts || [])[0] || {};
-              const d = disabledMap.get(vId);
               byVendor.set(vId, {
                 vendorId: vId, vendorName: sel.vendorName || v.name || "",
                 phone: primary.phone || "", email: primary.email || "", contactName: primary.name || "",
@@ -232,7 +230,6 @@ export default class StockPurchaseOrderService {
                 state: v.gst?.state?.name || v.address?.state?.name || "",
                 stateCode: v.gst?.state?.code || v.address?.state?.code || "",
                 paymentTerms: v.paymentTerms || "",
-                disabled: Boolean(d), disabledReason: d?.reason || "",
                 _pending: [],
                 _skipped: [],
               });
@@ -247,8 +244,7 @@ export default class StockPurchaseOrderService {
               productDefinitionId: sel.productDefinitionId, productName: sel.productName,
               quantity: qty, unitPrice: price, gstRate, taxable, gstAmount, lineTotal,
             };
-            if (item.poSkipped) row._skipped.push({ ...detail, poSkipReason: item.poSkipReason || "" });
-            else if (!item.poId) row._pending.push(detail);
+            if (!item.poId) row._pending.push(detail);
           })
         );
 
@@ -256,6 +252,27 @@ export default class StockPurchaseOrderService {
       byVendor.forEach((row, vId) => {
         const tracking = trackingByKey.get(`${q._id}::${vId}`);
         if (!tracking || !VISIBLE_TRACKING_STATUSES.has(tracking.status)) return;
+
+        // Lines excluded on the tracking order never reach "Create PO". This
+        // is the board half of the rule; createPurchaseOrder enforces the same
+        // thing server-side, so hiding the button is not the only guard.
+        const excludedById = new Map(
+          (tracking.excludedItems || []).map((e) => [String(e.quotationItemId), e])
+        );
+        if (excludedById.size) {
+          row._skipped = row._pending
+            .filter((d) => excludedById.has(String(d.quotationItemId)))
+            .map((d) => {
+              const e = excludedById.get(String(d.quotationItemId));
+              return {
+                ...d,
+                reason: e.reason || "",
+                excludedByName: e.excludedByName || "",
+                excludedAt: e.excludedAt || null,
+              };
+            });
+          row._pending = row._pending.filter((d) => !excludedById.has(String(d.quotationItemId)));
+        }
 
         const po = poByKey.get(`${q._id}::${vId}`);
         let statusVal, items, poId = null, poNumber = "";
@@ -292,14 +309,20 @@ export default class StockPurchaseOrderService {
         const prodIds = [...new Set(items.map((i) => String(i.productDefinitionId)).filter(Boolean))];
 
         rows.push({
+          // Revise Order writes to the TRACKING order, not the PO, so the row
+          // has to carry its id — without it the client posts to
+          // /tracking-orders/undefined/revise and Mongo throws a CastError.
+          trackingOrderId: tracking._id,
+          resets: tracking.resets || [],
+          activity: tracking.activity || [],
           vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email, contactName: row.contactName,
           mailTo: row.mailTo || [], mailCc: row.mailCc || [],
           gstNumber: row.gstNumber, address: row.address, state: row.state, stateCode: row.stateCode,
           paymentTerms: row.paymentTerms,
           poId, poNumber, status: statusVal, entityAlias, createdBy,
           buyerEntity: tracking.buyerEntity || {},
-          items, totalAmount, totalQuantity, skipped: row._skipped, filterDate,
-          disabled: row.disabled, disabledReason: row.disabledReason, rejectedReason,
+          items, totalAmount, totalQuantity, excludedItems: row._skipped, filterDate,
+          rejectedReason,
           mailResult: tracking.mailResult || null,
           _catIds: catIds, _prodIds: prodIds,
         });
@@ -417,48 +440,15 @@ export default class StockPurchaseOrderService {
   }
 
   /* Disable / enable a vendor on a quotation (admin). Disabled = hidden from PO flow. */
-  static async disableVendor(quotationId, payload, user, session) {
-    const { vendorId, reason } = payload || {};
-    const quotation = await StockQuotationModel.findOne({ _id: quotationId, isActive: true }).session(session);
-    if (!quotation) throw new Error("Quotation not found");
-    if (!vendorId) throw new Error("vendorId is required");
-    if (!reason || !String(reason).trim()) throw new Error("A reason is required to disable a vendor");
-
-    const exists = (quotation.disabledVendors || []).some((d) => String(d.vendorId) === String(vendorId));
-    if (!exists) {
-      const before = quotation.toObject();
-      const item = quotation.items.find((it) => String(it.vendorId) === String(vendorId));
-      quotation.disabledVendors.push({
-        vendorId,
-        vendorName: item?.vendorName || "",
-        reason: String(reason).trim(),
-        disabledBy: user?.id || user?._id || null,
-        disabledByName: user?.name || "",
-        disabledAt: new Date(),
-      });
-      await quotation.save({ session });
-      await StockAuditLogService.recordAudit({
-        entityType: QUOTATION_ENTITY_TYPE, entityId: quotation._id, action: "DISABLE_VENDOR", actor: user, before, after: quotation.toObject(),
-        reason: `vendor=${vendorId}: ${reason}`,
-      });
-    }
-    return quotation;
-  }
-
-  static async enableVendor(quotationId, vendorId, user, session) {
-    const quotation = await StockQuotationModel.findOne({ _id: quotationId, isActive: true }).session(session);
-    if (!quotation) throw new Error("Quotation not found");
-    const before = quotation.toObject();
-    quotation.disabledVendors = (quotation.disabledVendors || []).filter(
-      (d) => String(d.vendorId) !== String(vendorId)
-    );
-    await quotation.save({ session });
-    await StockAuditLogService.recordAudit({
-      entityType: QUOTATION_ENTITY_TYPE, entityId: quotation._id, action: "ENABLE_VENDOR", actor: user, before, after: quotation.toObject(),
-      reason: `vendor=${vendorId}`,
-    });
-    return quotation;
-  }
+  /*
+    disableVendor / enableVendor used to live here. They wrote
+    quotation.disabledVendors[], which nothing enforced (createPurchaseOrder
+    never read it) and nothing in the UI could even set — only the "Enable"
+    undo was wired up. Excluding a vendor or a line is now one mechanism on the
+    tracking order: StockTrackingOrderService.setExclusions, reached from
+    "Not Required" (Tracking Orders) and "Revise Order" (PO board), and
+    actually enforced in getBoard and createPurchaseOrder below.
+  */
 
   /* ---------------------------------------------------------------------- */
   /* Create — one PO from the given quotation item ids (all same vendor)     */
@@ -469,7 +459,7 @@ export default class StockPurchaseOrderService {
       sourceQuotationId,
       vendorId,
       quotationItemIds,
-      skippedItems,
+
       requester,
       poDate,
       shipmentPreference,
@@ -505,6 +495,13 @@ export default class StockPurchaseOrderService {
     // PO can only be raised by someone allowed to work on that entity.
     assertDataScope(tracking, dataAccess);
     const buyerEntity = tracking.buyerEntity;
+
+    // Lines excluded on the tracking order ("Not Required" / "Revise Order")
+    // are refused here, not just hidden on the board — the board's Create PO
+    // button disappearing is a convenience, this is the actual rule.
+    const excludedIds = new Set(
+      (tracking.excludedItems || []).map((e) => String(e.quotationItemId))
+    );
 
     // Auto-pick terms: a vendor-specific ACTIVE term wins, else the single
     // Default term, else none (graceful — doesn't block PO creation).
@@ -554,7 +551,9 @@ export default class StockPurchaseOrderService {
         throw new Error("All items in one PO must belong to the same vendor");
       }
       if (item.poId) throw new Error(`${item.productName} is already on a PO`);
-      if (item.poSkipped) throw new Error(`${item.productName} was skipped and can't be added`);
+      if (excludedIds.has(String(itemId))) {
+        throw new Error(`${item.productName} was excluded from this order and can't be added`);
+      }
 
       const { sel, ca } = found;
       const taxable = round2(sel.quantity * sel.unitPrice);
@@ -647,17 +646,10 @@ export default class StockPurchaseOrderService {
       }
     });
 
-    // Permanently skip the unchecked items (reason required — validated in controller).
-    (skippedItems || []).forEach((s) => {
-      const item = quotation.items.id(String(s.itemId));
-      if (item && !item.poId && !item.poSkipped) {
-        item.poSkipped = true;
-        item.poSkipReason = String(s.reason || "").trim();
-        item.poSkippedBy = user?.id || user?._id || null;
-        item.poSkippedAt = new Date();
-      }
-    });
-
+    // Unchecking a line at PO time used to permanently skip it here, writing
+    // back onto the approved quotation. That decision now belongs to "Revise
+    // Order" on the tracking order, which is reversible until a PO exists and
+    // leaves the quotation — the approval record — untouched.
     await quotation.save({ session });
 
     // Generate the PDF (outside the mongoose write, but before commit is fine).
@@ -930,6 +922,18 @@ export default class StockPurchaseOrderService {
       });
       await quotation.save({ session });
     }
+
+    // Hand the vendor order back to the stage before a PO existed. Freeing the
+    // quotation items above is only half of it: createPurchaseOrder refuses
+    // unless the tracking order is PO_PENDING, so without this the row was
+    // stranded — its lines free, but no way to raise a replacement PO or to
+    // change which lines it carries. The entity stays assigned; it was decided
+    // once on the Tracking Orders page and is not undone by removing a PO.
+    await StockTrackingOrderModel.updateOne(
+      { poId: po._id, isActive: true },
+      { $set: { status: TRACKING_STATUS.PO_PENDING, poId: null } },
+      { session }
+    );
 
     po.isActive = false;
     po.deletedAt = new Date();

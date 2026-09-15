@@ -8,6 +8,7 @@ import StockCategoryModel from "../models/stock.category.model.js";
 import StockCounterModel from "../models/stock.counter.model.js";
 import StockVendorPurchaseHistoryModel from "../models/stock.vendor.purchase.history.model.js";
 import StockVendorReviewModel from "../models/stock.vendor.review.model.js";
+import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import StockCategoryService from "./stock.category.service.js";
@@ -66,6 +67,8 @@ const defaultWarrantyOf = (assignment, product) =>
 
 const gstOf = (product) =>
   typeof product.gstRate === "number" ? product.gstRate : Number(product.gstRate) || 0;
+
+const idOf = (v) => String(v?._id ?? v ?? "");
 
 export default class StockQuotationService {
   /* ---------------------------------------------------------------------- */
@@ -161,6 +164,43 @@ export default class StockQuotationService {
     });
 
     return history;
+  }
+
+  /*
+    Stamp items[].rank in place — the L-1/L-2/L-3 an approver ranks vendors by.
+
+    Ranking runs per LEAF CATEGORY across every (product, vendor) offer in that
+    category — NOT per product — and only within this one quotation, never
+    across quotations. Order: higher warrantyMonths first, then lower
+    unitPrice. Array.prototype.sort is spec-stable, so offers tying on both
+    keep their bid (insertion) order, which is the intended tie-break. A null
+    warranty sorts as 0, i.e. last.
+
+    This is procurement policy, not presentation, so it lives here rather than
+    in the screen that draws the badge — and it is written onto the item
+    because a quotation is never edited (see createQuotation): the rank is a
+    fact about the offers as they were priced. Deriving it on read would
+    silently re-rank already-decided quotations the day the policy changes.
+  */
+  static assignCategoryRanks(items = []) {
+    const byCategory = new Map();
+    items.forEach((it) => {
+      const key = idOf(it.categoryId);
+      if (!byCategory.has(key)) byCategory.set(key, []);
+      byCategory.get(key).push(it);
+    });
+
+    byCategory.forEach((offers) => {
+      [...offers]
+        .sort(
+          (a, b) =>
+            (Number(b.warrantyMonths) || 0) - (Number(a.warrantyMonths) || 0) ||
+            (Number(a.unitPrice) || 0) - (Number(b.unitPrice) || 0)
+        )
+        .forEach((it, idx) => {
+          it.rank = idx + 1;
+        });
+    });
   }
 
   static computeTotals(quantity, unitPrice, gstRate) {
@@ -305,10 +345,13 @@ export default class StockQuotationService {
           previousQuantity,
           previousPrice,
           averageRating,
+          rank: null, // stamped below, once the whole category is known
           isApproved: false,
         });
       }
     }
+
+    StockQuotationService.assignCategoryRanks(items);
 
     return { items, categoryIds: [...categoryNames.keys()] };
   }
@@ -449,6 +492,7 @@ export default class StockQuotationService {
             quantity: item.quantity,
             unitPrice: item.unitPrice,
             warrantyMonths: item.warrantyMonths,
+            rank: item.rank ?? null,
             gstRate: item.gstRate,
             baseAmount: item.baseAmount,
             gstAmount: item.gstAmount,
@@ -556,16 +600,147 @@ export default class StockQuotationService {
     return summary;
   }
 
+  /*
+    Reshape one quotation into the structure the business actually describes:
+    a quotation IS a set of leaf categories, each holding the products in it,
+    each holding the vendor offers for that product.
+
+    That nesting is not a screen decision — the category is the unit a decision
+    is taken on (one approve/reject per category, see reviewQuotation), which is
+    why categoryApprovals[], the ranking and categoryIds are all category-keyed.
+    Assembling it here means the detail screen, the review screen and any future
+    comparative-statement PDF share ONE definition of that hierarchy instead of
+    each regrouping items[] their own way — and it matches the shape the create
+    form is already served in (see getVendorsForCategory).
+
+    Storage stays flat: items[] keeps its stable _id, which selections, the PO
+    board and tracking all point at. Only the response is assembled.
+  */
+  static toDetailShape(quotation, exclusionByItemId = new Map()) {
+    const items = quotation.items || [];
+    const approvalByCategory = new Map(
+      (quotation.categoryApprovals || []).map((ca) => [idOf(ca.categoryId), ca])
+    );
+
+    const categories = new Map();
+    for (const it of items) {
+      const categoryId = idOf(it.categoryId);
+      if (!categories.has(categoryId)) {
+        const approval = approvalByCategory.get(categoryId);
+        categories.set(categoryId, {
+          categoryId,
+          categoryName: it.categoryName || "",
+          // Undecided categories read PENDING, so the screen never has to
+          // treat "no approval row yet" as a special case.
+          status: approval?.status || QUOTATION_STATUS.PENDING,
+          remarks: approval?.remarks || "",
+          decidedByName: approval?.decidedByName || "",
+          decidedAt: approval?.decidedAt || null,
+          products: new Map(),
+        });
+      }
+      const category = categories.get(categoryId);
+
+      // productDefinitionId is populated; everything else reads the snapshots
+      // taken at create, never the vendor's or category's current values.
+      const product = it.productDefinitionId || {};
+      const productDefinitionId = idOf(product);
+      if (!category.products.has(productDefinitionId)) {
+        category.products.set(productDefinitionId, {
+          productDefinitionId,
+          productName: it.productName || product.name || "",
+          unit: product.unit || "",
+          trackingMethod: product.trackingMethod || "",
+          gstRate: it.gstRate,
+          quantity: it.quantity, // quantity is per product — same on every offer
+          offers: [],
+        });
+      }
+
+      category.products.get(productDefinitionId).offers.push({
+        itemId: idOf(it._id),
+        vendorId: idOf(it.vendorId),
+        vendorName: it.vendorName || "",
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        warrantyMonths: it.warrantyMonths,
+        defaultWarrantyMonths: it.defaultWarrantyMonths,
+        gstRate: it.gstRate,
+        baseAmount: it.baseAmount,
+        gstAmount: it.gstAmount,
+        lineTotal: it.lineTotal,
+        previousQuantity: it.previousQuantity,
+        previousPrice: it.previousPrice,
+        averageRating: it.averageRating,
+        rank: it.rank ?? null,
+        isApproved: !!it.isApproved,
+        // An approved line the buyer later decided not to order. The approval
+        // itself is untouched — this is what happened AFTER it, read live from
+        // the tracking order, so the screen can show "approved but not ordered"
+        // instead of implying the goods were bought.
+        excluded: exclusionByItemId.has(idOf(it._id)),
+        excludedReason: exclusionByItemId.get(idOf(it._id))?.reason || "",
+      });
+    }
+
+    const shaped = [...categories.values()].map((category) => ({
+      ...category,
+      products: [...category.products.values()].map((product) => ({
+        ...product,
+        // Best offer first. Quotations created before ranking moved
+        // server-side have no rank; those keep their original bid order.
+        offers: [...product.offers].sort(
+          (a, b) => (a.rank || Number.MAX_SAFE_INTEGER) - (b.rank || Number.MAX_SAFE_INTEGER)
+        ),
+      })),
+    }));
+
+    return {
+      _id: quotation._id,
+      quotationNumber: quotation.quotationNumber,
+      status: quotation.status,
+      notes: quotation.notes || "",
+      createdBy: quotation.createdBy || null,
+      createdAt: quotation.createdAt,
+      updatedAt: quotation.updatedAt,
+      // How big this quotation is, in the three units it is built from.
+      summary: {
+        categories: shaped.length,
+        products: new Set(items.map((it) => idOf(it.productDefinitionId))).size,
+        offers: items.length,
+      },
+      categories: shaped,
+    };
+  }
+
   static async getQuotationById(id, dataAccess) {
+    // Only the product needs populating — unit and trackingMethod are the one
+    // pair the line item does not snapshot. Vendor and category names come
+    // from vendorName / categoryName, which are the values as of pricing.
     const quotation = await StockQuotationModel.findOne({ _id: id, isActive: true })
       .populate("items.productDefinitionId", "name trackingMethod unit")
-      .populate("items.vendorId", "name")
-      .populate("items.categoryId", "name")
       .lean();
     if (!quotation || !isWithinDataScope(quotation, dataAccess, SCOPE_MODULE_KEY)) {
       throw new Error("Quotation not found");
     }
-    return quotation;
+
+    // Lines the buyer later decided not to order. Read live rather than
+    // mirrored onto the quotation: the quotation records the approval and must
+    // not change afterwards, but a reader still needs to know that an approved
+    // line never actually became an order.
+    const trackingOrders = await StockTrackingOrderModel.find({
+      sourceQuotationId: quotation._id,
+      isActive: true,
+    })
+      .select("excludedItems")
+      .lean();
+    const exclusionByItemId = new Map(
+      trackingOrders.flatMap((t) =>
+        (t.excludedItems || []).map((e) => [String(e.quotationItemId), e])
+      )
+    );
+
+    return StockQuotationService.toDetailShape(quotation, exclusionByItemId);
   }
 
   /* ---------------------------------------------------------------------- */

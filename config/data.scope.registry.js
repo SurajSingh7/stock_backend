@@ -50,6 +50,11 @@ export const DATA_SCOPE_REGISTRY = {
 
   // ── Entity-scoped ────────────────────────────────────────────────────────
   "tracking-orders": { entity: "buyerEntity.alias" },
+  // The Not Required register reads tracking orders, so it scopes exactly as
+  // they do. Rows dropped before an entity was ever assigned have a blank
+  // alias and stay visible — the same rule the tracking board already applies
+  // to ENTITY_PENDING rows.
+  "not-required": { entity: "buyerEntity.alias" },
   "purchase-orders": { entity: "buyerEntity.alias", ownership: "createdBy.userId" },
 
   // ── All three ────────────────────────────────────────────────────────────

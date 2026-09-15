@@ -140,8 +140,6 @@ router.get("/quotations/status-summary", authenticate, requirePermission("quotat
 router.get("/quotations/vendors-for-category/:catId", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getVendorsForCategory);
 router.get("/quotations/:id", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getQuotationById);
 router.patch("/quotations/:id/review", authenticate, requirePermission("quotations", "REVIEW"), StockQuotationController.reviewQuotation);
-router.patch("/quotations/:quotationId/disable-vendor", authenticate, requirePermission("quotations", "DISABLE_VENDOR"), StockPurchaseOrderController.disableVendor);
-router.patch("/quotations/:quotationId/enable-vendor", authenticate, requirePermission("quotations", "ENABLE_VENDOR"), StockPurchaseOrderController.enableVendor);
 router.delete("/quotations/:id", authenticate, requirePermission("quotations", "DELETE"), StockQuotationController.softDeleteQuotation);
 router.patch("/quotations/:id/restore", authenticate, requirePermission("quotations", "RESTORE"), StockQuotationController.restoreQuotation);
 
@@ -164,6 +162,14 @@ router.delete("/purchase-orders/:id", authenticate, requirePermission("purchase-
 router.get("/tracking-orders/board", authenticate, requirePermission("tracking-orders", "READ"), StockTrackingOrderController.getBoard);
 router.patch("/tracking-orders/:id/entity", authenticate, requirePermission("tracking-orders", "ADD_ENTITY"), StockTrackingOrderController.addEntity);
 router.patch("/tracking-orders/:id/not-required", authenticate, requirePermission("tracking-orders", "MARK_NOT_REQUIRED"), StockTrackingOrderController.markNotRequired);
+// Undo of Not Required, so it carries the same permission.
+router.patch("/tracking-orders/:id/required", authenticate, requirePermission("tracking-orders", "MARK_NOT_REQUIRED"), StockTrackingOrderController.markRequired);
+// The accounts team's only way to change an order after it leaves Tracking:
+// send the whole thing back to the start. Its own permission.
+router.patch("/tracking-orders/:id/reset", authenticate, requirePermission("purchase-orders", "RESET_ORDER"), StockTrackingOrderController.resetOrder);
+// Read-only register of every dropped line/vendor. Its own module so viewing
+// the history is granted apart from the permissions that create the entries.
+router.get("/not-required", authenticate, requirePermission("not-required", "READ"), StockTrackingOrderController.getNotRequired);
 // Creates an Invoice record (controller lives under Invoices) — gated on the
 // invoices module, not tracking-orders, since that's the entity being created.
 router.post(

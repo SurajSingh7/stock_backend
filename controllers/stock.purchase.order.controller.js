@@ -11,7 +11,6 @@ import { poPdfAbsolutePath } from "../helpers/stock.po.pdf.helper.js";
 import {
   validateCreatePurchaseOrder,
   validateRejectPurchaseOrder,
-  validateDisableVendor,
   validateSendMail,
 } from "../validators/stock.validator.js";
 
@@ -44,49 +43,6 @@ export default class StockPurchaseOrderController {
   }
 
 
-
-  static async disableVendor(req, res) {
-    const session = await mongoose.startSession();
-    try {
-      session.startTransaction();
-      validateDisableVendor(req.body);
-      // No entity scope here — this acts on a quotation, which is upstream of
-      // entity assignment and therefore has no entity to scope by.
-      const q = await StockPurchaseOrderService.disableVendor(
-        req.params.quotationId,
-        req.body,
-        actingUser(req),
-        session
-      );
-      await session.commitTransaction();
-      successResponseHandler(res, q, "Vendor disabled for this quotation");
-    } catch (error) {
-      await session.abortTransaction();
-      errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
-    }
-  }
-
-  static async enableVendor(req, res) {
-    const session = await mongoose.startSession();
-    try {
-      session.startTransaction();
-      const q = await StockPurchaseOrderService.enableVendor(
-        req.params.quotationId,
-        req.body.vendorId,
-        actingUser(req),
-        session
-      );
-      await session.commitTransaction();
-      successResponseHandler(res, q, "Vendor enabled");
-    } catch (error) {
-      await session.abortTransaction();
-      errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
-    }
-  }
 
   static async createPurchaseOrder(req, res) {
     const session = await mongoose.startSession();

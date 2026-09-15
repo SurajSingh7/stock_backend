@@ -24,9 +24,13 @@ const MODULE_DEFINITIONS = [
   // No UPDATE: a quotation is never edited — a mistake is rejected at review and
   // entered again as a new quotation. (scripts/remove-quotation-update-action.js
   // removes it from databases seeded before this.)
-  { key: "quotations", name: "Quotations", actions: withMenu(["CREATE", "READ", "DELETE", "RESTORE", "REVIEW", "DISABLE_VENDOR", "ENABLE_VENDOR"]) },
-  { key: "purchase-orders", name: "Purchase Orders", actions: withMenu(["CREATE", "READ", "UPDATE", "DELETE", "APPROVE", "REJECT", "SEND_MAIL"]) },
+  { key: "quotations", name: "Quotations", actions: withMenu(["CREATE", "READ", "DELETE", "RESTORE", "REVIEW"]) },
+  { key: "purchase-orders", name: "Purchase Orders", actions: withMenu(["CREATE", "READ", "UPDATE", "DELETE", "APPROVE", "REJECT", "SEND_MAIL", "RESET_ORDER"]) },
   { key: "tracking-orders", name: "Tracking Orders", actions: withMenu(["READ", "ADD_ENTITY", "MARK_NOT_REQUIRED"]) },
+  // Read-only register of every line and vendor that was dropped. Its own
+  // module so "who may see the history of what we chose not to buy" is granted
+  // separately from the permissions to actually drop something.
+  { key: "not-required", name: "Not Required", actions: withMenu(["READ"]) },
   { key: "invoices", name: "Invoices", actions: withMenu(["CREATE", "READ", "UPDATE", "APPROVE", "REJECT"]) },
   { key: "branches", name: "Branches", actions: withMenu(STANDARD_ACTIONS) },
   { key: "gst-rates", name: "GST Rates", actions: withMenu(STANDARD_ACTIONS) },

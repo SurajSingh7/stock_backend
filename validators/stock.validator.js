@@ -414,19 +414,9 @@ export const validateCreatePurchaseOrder = (body) => {
   // it server-side from the Tracking Order (see StockPurchaseOrderService).
   if (!body.requester || !String(body.requester).trim())
     throw new Error("Requester is required");
-  if (body.skippedItems !== undefined) {
-    if (!Array.isArray(body.skippedItems)) throw new Error("skippedItems must be an array");
-    body.skippedItems.forEach((s, i) => {
-      if (!s || !s.itemId) throw new Error(`skippedItems[${i}].itemId is required`);
-      if (!s.reason || !String(s.reason).trim())
-        throw new Error(`A reason is required for every skipped item`);
-    });
-  }
-};
-
-export const validateDisableVendor = (body) => {
-  if (!body?.vendorId) throw new Error("vendorId is required");
-  if (!body?.reason || !String(body.reason).trim()) throw new Error("A reason is required");
+  // skippedItems is gone. Leaving a line out of a PO is now a decision taken
+  // (and reversible) on the tracking order via "Revise Order", not something
+  // the PO create call records as a side effect on the approved quotation.
 };
 
 export const validateRejectPurchaseOrder = (body) => {
@@ -483,8 +473,28 @@ export const validateAddEntity = (body) => {
   if (!stateCode || !String(stateCode).trim()) throw new Error("State code is required");
 };
 
-export const validateMarkNotRequired = (body) => {
-  if (!body?.reason || !String(body.reason).trim()) throw new Error("A reason is required");
+/*
+  Body for "Not Required" on the Tracking Orders page.
+
+  excludedItemIds is the COMPLETE list of lines to leave out, not a delta, so
+  an empty array is legitimate — that is how a line gets put back. The reason
+  is still required for it, because "why did this order change" is the question
+  the register exists to answer, and restoring a line is a change too.
+*/
+export const validateResetOrder = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!body.reason || !String(body.reason).trim()) throw new Error("A reason is required");
+};
+
+export const validateSetExclusions = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!body.reason || !String(body.reason).trim()) throw new Error("A reason is required");
+  if (body.excludedItemIds !== undefined && !Array.isArray(body.excludedItemIds)) {
+    throw new Error("excludedItemIds must be an array");
+  }
+  (body.excludedItemIds || []).forEach((id) => {
+    if (!isNonEmptyString(id)) throw new Error("Each excluded line id must be a string");
+  });
 };
 
 // ─── Branch Validators ─────────────────────────────────────────────────────

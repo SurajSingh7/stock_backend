@@ -47,17 +47,27 @@ const quotationLineItemSchema = new Schema(
     previousPrice: { type: Number, default: null },
     averageRating: { type: Number, default: null },
 
+    // L-rank of this offer inside its leaf category (1 = L-1), frozen at
+    // create by assignCategoryRanks — see the service for the ordering rule.
+    // Snapshotted for the same reason price and warranty are: the ranking is
+    // what the approver actually saw, and a later change to the ranking policy
+    // must not silently re-rank a quotation that has already been decided.
+    // Null on quotations created before ranking moved server-side.
+    rank: { type: Number, default: null },
+
     // convenience flag set true when this exact offer is the winning selection
     // of an approved category (mirrors categoryApprovals[].selections[].itemId).
     isApproved: { type: Boolean, default: false },
 
-    // PO Management board state
+    // PO Management board state — which PO this line landed on, and when.
+    // Whether a line is ordered AT ALL is deliberately not here: that decision
+    // is taken after approval and belongs to the tracking order
+    // (excludedItems), so this document stays a record of what was approved
+    // and nothing else. poSkipped/poSkipReason/poSkippedBy/poSkippedAt used to
+    // live here and wrote back onto an approved quotation; they were replaced
+    // by that, which is reversible until a PO exists.
     poId: { type: Schema.Types.ObjectId, ref: "purchase_orders", default: null },
     poAddedAt: { type: Date, default: null },
-    poSkipped: { type: Boolean, default: false }, // unchecked at Create PO → permanent skip
-    poSkipReason: { type: String, trim: true, default: "" },
-    poSkippedBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
-    poSkippedAt: { type: Date, default: null },
   },
   { _id: true } 
 );
@@ -77,6 +87,9 @@ const categorySelectionSchema = new Schema(
     quantity: { type: Number, default: 0 },
     unitPrice: { type: Number, default: 0 },
     warrantyMonths: { type: Number, default: null },
+    // The winning offer's L-rank, copied from items[].rank. Kept so "how often
+    // is a non-L-1 approved" is a query, not a recomputation.
+    rank: { type: Number, default: null },
     gstRate: { type: Number, default: 0 },
     baseAmount: { type: Number, default: 0 },
     gstAmount: { type: Number, default: 0 },
@@ -106,18 +119,14 @@ const categoryApprovalSchema = new Schema(
   { _id: true }
 );
 
-/* Vendors an admin has excluded from the PO flow for this quotation (with a reason). */
-const disabledVendorSchema = new Schema(
-  {
-    vendorId: { type: Schema.Types.ObjectId, ref: "vendors" },
-    vendorName: { type: String, trim: true, default: "" },
-    reason: { type: String, trim: true, default: "" },
-    disabledBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
-    disabledByName: { type: String, trim: true, default: "" },
-    disabledAt: { type: Date, default: null },
-  },
-  { _id: false }
-);
+/*
+  disabledVendorSchema used to sit here — vendors an admin had excluded from
+  the PO flow for this quotation. It was removed because it wrote to a document
+  that is meant to be frozen at approval, nothing enforced it (PO creation
+  never read it), and no screen could set it. Excluding a vendor or a line is
+  now one mechanism on the tracking order: trackingOrder.excludedItems, set by
+  "Not Required" and "Revise Order" and enforced in createPurchaseOrder.
+*/
 
 const quotationSchema = new Schema(
   {
@@ -141,9 +150,6 @@ const quotationSchema = new Schema(
 
     // Empty until the approver submits; then one entry per category.
     categoryApprovals: { type: [categoryApprovalSchema], default: [] },
-
-    // Vendors excluded from the PO Management board for this quotation.
-    disabledVendors: { type: [disabledVendorSchema], default: [] },
 
     notes: { type: String, trim: true, default: "" },
     isActive: { type: Boolean, default: true },
