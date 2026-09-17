@@ -14,7 +14,7 @@ import StockAuditLogService from "./stock.audit.log.service.js";
 import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import { nextDocumentNumber } from "../helpers/document.number.helper.js";
-import { readVendorOrders } from "./stock.vendor.order.reader.js";
+import { readVendorOrders, sumBy, sortBoardByLatest } from "./stock.vendor.order.reader.js";
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 
 const SCOPE_MODULE_KEY = "purchase-orders";
@@ -38,7 +38,6 @@ import { sendMail as sendMailTransport } from "../helpers/mail.helper.js";
 import {
   PO_STATUS,
   PO_TAX_TYPE,
-  QUOTATION_STATUS,
   TERMS_SOURCE,
   TRACKING_STATUS,
   MAIL_MODE,
@@ -81,64 +80,22 @@ export default class StockPurchaseOrderService {
     return { cgst: 0, sgst: 0, igst: gstAmount, gstAmount };
   }
 
-  /* ---------------------------------------------------------------------- */
-  /* Candidates — approved selections not yet on a PO, grouped by vendor     */
-  /* ---------------------------------------------------------------------- */
+  /*
+    getCandidates used to sit here — "approved selections not yet on a PO,
+    grouped by vendor". It was born in the same commit as getBoard, as a second
+    answer to the same question, and getBoard is the one that won: nothing in
+    any frontend ever called it.
 
-  static async getCandidates(query = {}) {
-    const filter = {
-      isActive: true,
-      status: { $in: [QUOTATION_STATUS.APPROVED, QUOTATION_STATUS.PARTIALLY_APPROVED] },
-    };
-    if (query.sourceQuotationId) filter._id = query.sourceQuotationId;
+    Removed rather than left dormant, because it was also wrong. It took no
+    dataAccess (so it ignored the entity scope every other read applies), it
+    never looked at trackingOrder.excludedItems (so it offered lines marked Not
+    Required), and it ignored the tracking status (so it offered lines for
+    vendors with no entity yet, and for vendors dropped entirely) — all three
+    of which createPurchaseOrder refuses anyway.
 
-    const quotations = await StockQuotationModel.find(filter)
-      .select("quotationNumber items categoryApprovals")
-      .lean();
-
-    const groups = [];
-    quotations.forEach((q) => {
-      // map itemId -> item (to read poId + snapshot)
-      const itemById = new Map((q.items || []).map((it) => [String(it._id), it]));
-
-      const byVendor = new Map();
-      (q.categoryApprovals || [])
-        .filter((ca) => ca.status === "APPROVED")
-        .forEach((ca) => {
-          (ca.selections || []).forEach((sel) => {
-            const item = itemById.get(String(sel.itemId));
-            if (!item || item.poId) return; // already on a PO
-            const vId = String(sel.vendorId);
-            if (!byVendor.has(vId)) {
-              byVendor.set(vId, {
-                sourceQuotationId: q._id,
-                quotationNumber: q.quotationNumber,
-                vendorId: sel.vendorId,
-                vendorName: sel.vendorName,
-                items: [],
-              });
-            }
-            byVendor.get(vId).items.push({
-              quotationItemId: sel.itemId,
-              categoryId: ca.categoryId,
-              categoryName: ca.categoryName,
-              productDefinitionId: sel.productDefinitionId,
-              productName: sel.productName,
-              quantity: sel.quantity,
-              unitPrice: sel.unitPrice,
-              gstRate: sel.gstRate,
-              lineTotal: sel.lineTotal,
-            });
-          });
-        });
-
-      byVendor.forEach((g) => {
-        if (g.items.length) groups.push(g);
-      });
-    });
-
-    return groups;
-  }
+    What the PO create screen actually uses: the board row's own items, which
+    come from getBoard below.
+  */
 
   /* ---------------------------------------------------------------------- */
   /* Board — one entry per quotation, each with vendor sections              */
@@ -151,6 +108,7 @@ export default class StockPurchaseOrderService {
     // Every vendor order, assembled once. Shared with the Tracking Orders
     // board — see services/stock.vendor.order.reader.js.
     const vendorOrders = await readVendorOrders({ sourceQuotationId: query.sourceQuotationId });
+    console.info(vendorOrders);
 
     // A vendor row belongs on THIS board only once its tracking order has
     // moved past ENTITY_PENDING — and never once it is NOT_REQUIRED.
@@ -197,7 +155,9 @@ export default class StockPurchaseOrderService {
           _skipped: entry.excludedLines.filter((l) => !l.poId),
         };
         let statusVal, items, poId = null, poNumber = "";
-        const entityAlias = tracking.buyerEntity?.alias || "";
+        // Local, not the outer query.entityAlias filter — this is the row's OWN
+        // alias, read fresh per row.
+        const rowEntityAlias = tracking.buyerEntity?.alias || "";
         let totalAmount = 0, totalQuantity = 0, rejectedReason = "", filterDate = approvalDate;
         let createdBy = null;
 
@@ -207,20 +167,18 @@ export default class StockPurchaseOrderService {
           // it row.createdBy was undefined and every OWN-scoped user saw an
           // empty board.
           createdBy = po.createdBy || null;
-          items = (po.items || []).map((it) => ({
-            quotationItemId: it.quotationItemId, categoryId: it.categoryId, categoryName: it.categoryName,
-            productDefinitionId: it.productDefinitionId, productName: it.productName,
-            quantity: it.quantity, unitPrice: it.unitPrice, gstRate: it.gstRate,
-            taxable: it.taxable, gstAmount: it.gstAmount, lineTotal: it.lineTotal,
-          }));
+          // entry.poItems is po.items with warranty attached by the reader —
+          // this board doesn't show warranty, but sharing the same array means
+          // there's only one place that ever builds a PO's board-facing lines.
+          items = entry.poItems;
           totalAmount = po.grandTotal;
-          totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
+          totalQuantity = sumBy(items, "quantity");
           rejectedReason = po.rejectedReason || "";
           filterDate = po.status === "GENERATED" ? po.createdAt : (po.reviewedAt || po.updatedAt || po.createdAt);
         } else {
           statusVal = "PO_PENDING"; items = row._pending;
-          totalAmount = round2(items.reduce((s, i) => s + (i.lineTotal || 0), 0));
-          totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
+          totalAmount = round2(sumBy(items, "lineTotal"));
+          totalQuantity = sumBy(items, "quantity");
           filterDate = approvalDate;
         }
 
@@ -240,7 +198,7 @@ export default class StockPurchaseOrderService {
           mailTo: row.mailTo || [], mailCc: row.mailCc || [],
           gstNumber: row.gstNumber, address: row.address, state: row.state, stateCode: row.stateCode,
           paymentTerms: row.paymentTerms,
-          poId, poNumber, status: statusVal, entityAlias, createdBy,
+          poId, poNumber, status: statusVal, entityAlias: rowEntityAlias, createdBy,
           buyerEntity: tracking.buyerEntity || {},
           items, totalAmount, totalQuantity, excludedItems: row._skipped, filterDate,
           rejectedReason,
@@ -260,17 +218,7 @@ export default class StockPurchaseOrderService {
     // most recently updated / approved cards float to the top — each card's
     // "latest" is the newest filterDate among its rows (PO create/approve/
     // reject date, or the quotation approval date when a row has no PO yet)
-    fullBoard.sort((a, b) => {
-      const aLatest = a.rows.reduce(
-        (m, r) => (r.filterDate && (!m || new Date(r.filterDate) > new Date(m)) ? r.filterDate : m),
-        null
-      );
-      const bLatest = b.rows.reduce(
-        (m, r) => (r.filterDate && (!m || new Date(r.filterDate) > new Date(m)) ? r.filterDate : m),
-        null
-      );
-      return new Date(bLatest || 0) - new Date(aLatest || 0);
-    });
+    sortBoardByLatest(fullBoard);
 
     // ── server-side filters ───────────────────────────────────────────────────
     const t = search ? String(search).toLowerCase().trim() : "";
@@ -333,7 +281,7 @@ export default class StockPurchaseOrderService {
     // every quantity.
     const boardProductDefIds = [
       ...new Set(
-        board.flatMap((q) => q.rows.flatMap((r) => [...r.items, ...(r.skipped || [])].map((it) => String(it.productDefinitionId))))
+        board.flatMap((q) => q.rows.flatMap((r) => [...r.items, ...(r.excludedItems || [])].map((it) => String(it.productDefinitionId))))
       ),
     ];
     const boardProductDefs = await StockProductDefinitionModel.find({ _id: { $in: boardProductDefIds } })
@@ -347,7 +295,7 @@ export default class StockPurchaseOrderService {
           return { ...it, trackingMethod: pd?.trackingMethod || "quantity", unit: pd?.unit || null };
         };
         r.items = r.items.map(attachProductMeta);
-        if (r.skipped) r.skipped = r.skipped.map(attachProductMeta);
+        if (r.excludedItems) r.excludedItems = r.excludedItems.map(attachProductMeta);
       });
     });
 
@@ -624,17 +572,20 @@ export default class StockPurchaseOrderService {
   }
 
   /*
-    Write the PO's PDF and record where it went — called AFTER the creating
-    transaction has committed.
+    Write the PO's PDF and record where it went — called AFTER the creating OR
+    editing transaction has committed. Both createPurchaseOrder and
+    updatePurchaseOrder share this: it's the one place generatePOPdf is
+    ever called from.
 
     Deliberately outside that transaction: a file on disk cannot be rolled
     back, so generating it inside meant an aborted transaction left an orphan
     PDF behind, with the transaction's locks held open across a slow disk write
     in the meantime.
 
-    Failing here leaves a real PO with no PDF, which is recoverable — the
-    download simply regenerates. That is a far better failure than the PO
-    itself being lost because its PDF could not be written.
+    Failing here leaves a real PO whose pdfPath is unset (create) or still
+    points at its pre-edit PDF (update) — either way recoverable, since
+    editing the PO again regenerates it. That is a far better failure than
+    the PO's own data being lost because its PDF could not be written.
   */
   static async attachPdf(poId) {
     const po = await StockPurchaseOrderModel.findOne({ _id: poId, isActive: true });
@@ -644,7 +595,7 @@ export default class StockPurchaseOrderService {
       await po.save();
       return po.pdfPath;
     } catch (err) {
-      log.error(`PO ${po.poNumber} was created but its PDF could not be written: ${err.message}`);
+      log.error(`PO ${po.poNumber}'s PDF could not be written: ${err.message}`);
       return null;
     }
   }
@@ -720,12 +671,15 @@ export default class StockPurchaseOrderService {
     // made on the Tracking Orders page before the PO ever existed (see
     // createPurchaseOrder) and stays fixed for the life of the PO.
 
-    // Editing an approved-then... no: edit only allowed on GENERATED/REJECTED,
-    // and after edit it goes back to GENERATED for a fresh review.
+    // Edit only allowed on GENERATED/REJECTED, and after edit it goes back to
+    // GENERATED for a fresh review.
     po.status = PO_STATUS.GENERATED;
     po.rejectedReason = "";
 
-    po.pdfPath = await generatePOPdf(po.toObject());
+    // The PDF is NOT regenerated here — same reason as createPurchaseOrder:
+    // a file write can't be rolled back, so doing it inside this transaction
+    // risked an orphan file on an abort and held the transaction's locks open
+    // across a disk write. attachPdf does it after the controller commits.
     await po.save({ session });
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE, entityId: po._id, action: "UPDATE", actor: user, before, after: po.toObject(),

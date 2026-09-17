@@ -24,15 +24,6 @@ const log = getLogger(import.meta.url);
 const actingUser = (req) => (req.user ? { ...req.user, id: req.user._id } : null);
 
 export default class StockPurchaseOrderController {
-  static async getCandidates(req, res) {
-    try {
-      const data = await StockPurchaseOrderService.getCandidates(req.query);
-      successResponseHandler(res, data, "PO candidates fetched");
-    } catch (error) {
-      errorResponseHandler(res, error);
-    }
-  }
-
   static async getBoard(req, res) {
     try {
       const data = await StockPurchaseOrderService.getBoard(req.query, req.dataAccess);
@@ -58,7 +49,9 @@ export default class StockPurchaseOrderController {
       await session.commitTransaction();
       // Only once the PO is safely committed: writing the file inside the
       // transaction would leave an orphan PDF behind if it later aborted.
+
       po.pdfPath = (await StockPurchaseOrderService.attachPdf(po._id)) || "";
+
       successResponseHandler(res, po, "Purchase order created", 201);
     } catch (error) {
       await session.abortTransaction();
@@ -113,6 +106,10 @@ export default class StockPurchaseOrderController {
         req.dataAccess
       );
       await session.commitTransaction();
+      // Only once the edit is safely committed — same reason as create: a
+      // file write inside the transaction can't be rolled back with it.
+      po.pdfPath = (await StockPurchaseOrderService.attachPdf(po._id)) || "";
+
       successResponseHandler(res, po, "Purchase order updated");
     } catch (error) {
       await session.abortTransaction();

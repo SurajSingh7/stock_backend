@@ -7,7 +7,7 @@ import StockInvoiceModel from "../models/stock.invoice.model.js";
 import { paginate } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
-import { readVendorOrders } from "./stock.vendor.order.reader.js";
+import { readVendorOrders, sumBy, sortBoardByLatest } from "./stock.vendor.order.reader.js";
 import StockInternalEntityService from "./stock.internal.entity.service.js";
 import {
   QUOTATION_STATUS,
@@ -94,22 +94,12 @@ export default class StockTrackingOrderService {
         let totalAmount, totalQuantity;
 
         if (po) {
-          // A PO line does not carry warranty, so carry it across from the
-          // approved selection this line came from. That selection is itself a
-          // snapshot taken at approval, so this is not reading anything live.
-          const warrantyByItemId = new Map(
-            entry.lines.map((l) => [String(l.quotationItemId), l.warrantyMonths ?? null])
-          );
-          items = (po.items || []).map((it) => ({
-            quotationItemId: it.quotationItemId, categoryId: it.categoryId, categoryName: it.categoryName,
-            productDefinitionId: it.productDefinitionId, productName: it.productName,
-            warrantyMonths: warrantyByItemId.get(String(it.quotationItemId)) ?? null,
-            quantity: it.quantity, unitPrice: it.unitPrice, gstRate: it.gstRate,
-            taxable: it.taxable, cgst: it.cgst, sgst: it.sgst, igst: it.igst,
-            gstAmount: it.gstAmount, lineTotal: it.lineTotal,
-          }));
+          // entry.poItems is po.items with warranty already attached by the
+          // reader — a PO line doesn't carry it, only the approved selection
+          // this line came from does. See readVendorOrders.
+          items = entry.poItems;
           totalAmount = po.grandTotal;
-          totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
+          totalQuantity = sumBy(items, "quantity");
         } else {
           // Pre-PO (quotation-selection) items have no cgst/sgst split yet —
           // approximate as an even same-state split until a PO/entity exists.
@@ -119,17 +109,17 @@ export default class StockTrackingOrderService {
             sgst: round2((it.gstAmount || 0) / 2),
             igst: 0,
           }));
-          totalAmount = round2(items.reduce((s, i) => s + (i.lineTotal || 0), 0));
-          totalQuantity = items.reduce((s, i) => s + (i.quantity || 0), 0);
+          totalAmount = round2(sumBy(items, "lineTotal"));
+          totalQuantity = sumBy(items, "quantity");
         }
 
         const receivedQuantity = receivedByTracking.get(String(tracking._id)) || 0;
         const pendingQuantity = Math.max(0, totalQuantity - receivedQuantity);
         const poDate = po?.poDate || po?.createdAt || null;
-        const subTotal = po ? po.subTotal : round2(items.reduce((s, i) => s + (i.taxable || 0), 0));
-        const cgstTotal = po ? po.cgstTotal : round2(items.reduce((s, i) => s + (i.cgst || 0), 0));
-        const sgstTotal = po ? po.sgstTotal : round2(items.reduce((s, i) => s + (i.sgst || 0), 0));
-        const igstTotal = po ? po.igstTotal : round2(items.reduce((s, i) => s + (i.igst || 0), 0));
+        const subTotal = po ? po.subTotal : round2(sumBy(items, "taxable"));
+        const cgstTotal = po ? po.cgstTotal : round2(sumBy(items, "cgst"));
+        const sgstTotal = po ? po.sgstTotal : round2(sumBy(items, "sgst"));
+        const igstTotal = po ? po.igstTotal : round2(sumBy(items, "igst"));
 
         rows.push({
           trackingOrderId: tracking._id,
@@ -168,11 +158,7 @@ export default class StockTrackingOrderService {
       }
     });
 
-    fullBoard.sort((a, b) => {
-      const aLatest = a.rows.reduce((m, r) => (r.filterDate && (!m || new Date(r.filterDate) > new Date(m)) ? r.filterDate : m), null);
-      const bLatest = b.rows.reduce((m, r) => (r.filterDate && (!m || new Date(r.filterDate) > new Date(m)) ? r.filterDate : m), null);
-      return new Date(bLatest || 0) - new Date(aLatest || 0);
-    });
+    sortBoardByLatest(fullBoard);
 
     const t = search ? String(search).toLowerCase().trim() : "";
     const from = dateFrom ? new Date(dateFrom) : null;
@@ -551,12 +537,15 @@ export default class StockTrackingOrderService {
       _id: tracking.poId,
       isActive: true,
     }).session(session);
+
     if (po) {
+
       voidedPoNumber = po.poNumber || "";
       const quotation = await StockQuotationModel.findOne({
         _id: po.sourceQuotationId,
         isActive: true,
       }).session(session);
+
       if (quotation) {
         quotation.items.forEach((it) => {
           if (String(it.poId) === String(po._id)) {
@@ -566,6 +555,7 @@ export default class StockTrackingOrderService {
         });
         await quotation.save({ session });
       }
+      
       po.isActive = false;
       po.deletedAt = new Date();
       await po.save({ session });

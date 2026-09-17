@@ -146,7 +146,6 @@ router.patch("/quotations/:id/restore", authenticate, requirePermission("quotati
 // ─── Purchase Orders ─────────────────────────────────────────────────────────
 // Specific paths BEFORE "/:id".
 router.get("/purchase-orders/board", authenticate, requirePermission("purchase-orders", "READ"), StockPurchaseOrderController.getBoard);
-router.get("/purchase-orders/candidates", authenticate, requirePermission("purchase-orders", "READ"), StockPurchaseOrderController.getCandidates);
 router.post("/purchase-orders", authenticate, requirePermission("purchase-orders", "CREATE"), StockPurchaseOrderController.createPurchaseOrder);
 router.get("/purchase-orders", authenticate, requirePermission("purchase-orders", "READ"), StockPurchaseOrderController.getAllPurchaseOrders);
 router.get("/purchase-orders/:id/pdf", authenticate, requirePermission("purchase-orders", "READ"), StockPurchaseOrderController.getPurchaseOrderPdf);
