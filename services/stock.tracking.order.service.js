@@ -87,6 +87,11 @@ export default class StockTrackingOrderService {
       vendors.forEach((entry) => {
         const { vendorId: vId, vendor: v, tracking, po } = entry;
         if (!tracking) return; // shouldn't happen — created at review time
+        // A vendor dropped whole belongs to the Not Required register, not
+        // here — same rule the PO board applies. Lines excluded from a vendor
+        // still in the flow are NOT this: that row stays, carrying its
+        // excludedItems, because it is still an order being worked on.
+        if (tracking.status === TRACKING_STATUS.NOT_REQUIRED) return;
 
         const primary = (v.contacts || []).find((c) => c.label === "PRIMARY") || (v.contacts || [])[0] || {};
         const excludedItems = entry.excludedLines;
@@ -196,7 +201,6 @@ export default class StockTrackingOrderService {
       PARTIAL: 0,
       COMPLETED: 0,
       REJECTED: 0,
-      NOT_REQUIRED: 0,
     };
     fullBoard.forEach((q) =>
       q.rows.forEach((r) => {
@@ -629,8 +633,8 @@ export default class StockTrackingOrderService {
     const lines = StockTrackingOrderService.approvedLinesFor(quotation, tracking.vendorId);
     const lineById = new Map(lines.map((l) => [String(l.item._id), l]));
 
-    const wanted = [...new Set((excludedItemIds || []).map(String))];
-    const stray = wanted.find((itemId) => !lineById.has(itemId));
+    const wanted = [...new Set((excludedItemIds || []).map(String))];  // want to remove iteam id 
+    const stray = wanted.find((itemId) => !lineById.has(itemId));      // ooo data hi nhi hai in line(appr-slection) me 
     if (stray) throw new Error("A selected line is not an approved line of this vendor");
 
     // Keep the original stamp for a line that was already excluded — who first
@@ -646,6 +650,7 @@ export default class StockTrackingOrderService {
       if (prior) return prior;
       const { ca, sel, item } = lineById.get(itemId);
       return {
+
         quotationItemId: item._id,
         productDefinitionId: sel.productDefinitionId,
         productName: sel.productName || item.productName || "",
@@ -657,7 +662,9 @@ export default class StockTrackingOrderService {
         excludedBy: actor?.id || actor?._id || null,
         excludedByName: actor?.name || "",
         excludedAt: now,
+
       };
+
     });
 
     // Every line gone => the vendor itself is Not Required. Fewer than all =>
@@ -672,6 +679,7 @@ export default class StockTrackingOrderService {
     const stamp = { reason: trimmedReason, byName: actor?.name || "", at: now };
     const addedNames = added.map((itemId) => lineById.get(itemId)?.sel?.productName || "");
     const removedNames = removed.map((itemId) => existing.get(itemId)?.productName || "");
+    
     if (added.length) {
       tracking.activity.push({
         type: "NOT_REQUIRED",

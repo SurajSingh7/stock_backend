@@ -50,9 +50,6 @@ router.post("/access-control/department-restrictions/clear", authenticate, requi
 router.post("/access-control/delegate", authenticate, requireAdmin, StockAccessControlController.delegateAccess);
 
 // ─── Audit Log ───────────────────────────────────────────────────────────────
-// Admin-only for now — a per-record read (e.g. gated behind that entity's
-// own READ permission instead) can be split out later if a non-admin needs
-// to see a single record's history from its detail page.
 router.get("/audit-log/entity", authenticate, requireAdmin, StockAuditLogController.getEntityHistory);
 router.get("/audit-log/activity", authenticate, requireAdmin, StockAuditLogController.getActivityLog);
 
@@ -106,8 +103,6 @@ router.delete("/vendors/:id", authenticate, requirePermission("vendors", "DELETE
 router.patch("/vendors/:id/restore", authenticate, requirePermission("vendors", "RESTORE"), StockVendorController.restoreVendor);
 
 // ─── Terms & Conditions ─────────────────────────────────────────────────────
-// /resolve/:vendorId BEFORE /:id — same static-before-dynamic rule as
-// /categories/flat, /quotations/status-summary, etc.
 router.post("/terms-conditions", authenticate, requirePermission("terms-conditions", "CREATE"), StockTermsConditionController.createTermsCondition);
 router.get("/terms-conditions", authenticate, requirePermission("terms-conditions", "READ"), StockTermsConditionController.getAllTermsConditions);
 router.get("/terms-conditions/resolve/:vendorId", authenticate, requirePermission("terms-conditions", "READ"), StockTermsConditionController.resolveForVendor);
@@ -120,7 +115,6 @@ router.patch("/terms-conditions/:id/restore", authenticate, requirePermission("t
 router.post("/inventory-items/bulk", authenticate, requirePermission("inventory-items", "BULK_CREATE"), StockInventoryItemController.bulkCreateInventoryItems);
 router.post("/inventory-items", authenticate, requirePermission("inventory-items", "CREATE"), StockInventoryItemController.createInventoryItem);
 router.get("/inventory-items", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getAllInventoryItems);
-// Static segments before "/:id" — same rule as everywhere else in this file.
 router.get("/inventory-items/cards", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getInventoryCards);
 router.get("/inventory-items/product-summary", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getProductInventorySummary);
 router.get("/inventory-items/history/:defId", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getReceivingHistory);
@@ -132,8 +126,6 @@ router.delete("/inventory-items/:id", authenticate, requirePermission("inventory
 router.patch("/inventory-items/:id/restore", authenticate, requirePermission("inventory-items", "RESTORE"), StockInventoryItemController.restoreInventoryItem);
 
 // ─── Quotations ────────────────────────────────────────────────────────────────
-// Specific string paths are declared BEFORE "/:id" so Express doesn't treat them
-// as an id (same pattern as /categories/flat).
 router.post("/quotations", authenticate, requirePermission("quotations", "CREATE"), StockQuotationController.createQuotation);
 router.get("/quotations", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getAllQuotations);
 router.get("/quotations/status-summary", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getStatusSummary);
@@ -144,7 +136,6 @@ router.delete("/quotations/:id", authenticate, requirePermission("quotations", "
 router.patch("/quotations/:id/restore", authenticate, requirePermission("quotations", "RESTORE"), StockQuotationController.restoreQuotation);
 
 // ─── Purchase Orders ─────────────────────────────────────────────────────────
-// Specific paths BEFORE "/:id".
 router.get("/purchase-orders/board", authenticate, requirePermission("purchase-orders", "READ"), StockPurchaseOrderController.getBoard);
 router.post("/purchase-orders", authenticate, requirePermission("purchase-orders", "CREATE"), StockPurchaseOrderController.createPurchaseOrder);
 router.get("/purchase-orders", authenticate, requirePermission("purchase-orders", "READ"), StockPurchaseOrderController.getAllPurchaseOrders);
@@ -157,20 +148,13 @@ router.patch("/purchase-orders/:id/send-mail", authenticate, requirePermission("
 router.delete("/purchase-orders/:id", authenticate, requirePermission("purchase-orders", "DELETE"), StockPurchaseOrderController.softDeletePurchaseOrder);
 
 // ─── Tracking Orders ──────────────────────────────────────────────────────────
-// Static path BEFORE dynamic /:id-based ones.
 router.get("/tracking-orders/board", authenticate, requirePermission("tracking-orders", "READ"), StockTrackingOrderController.getBoard);
 router.patch("/tracking-orders/:id/entity", authenticate, requirePermission("tracking-orders", "ADD_ENTITY"), StockTrackingOrderController.addEntity);
 router.patch("/tracking-orders/:id/not-required", authenticate, requirePermission("tracking-orders", "MARK_NOT_REQUIRED"), StockTrackingOrderController.markNotRequired);
-// Undo of Not Required, so it carries the same permission.
 router.patch("/tracking-orders/:id/required", authenticate, requirePermission("tracking-orders", "MARK_NOT_REQUIRED"), StockTrackingOrderController.markRequired);
-// The accounts team's only way to change an order after it leaves Tracking:
-// send the whole thing back to the start. Its own permission.
 router.patch("/tracking-orders/:id/reset", authenticate, requirePermission("purchase-orders", "RESET_ORDER"), StockTrackingOrderController.resetOrder);
-// Read-only register of every dropped line/vendor. Its own module so viewing
-// the history is granted apart from the permissions that create the entries.
 router.get("/not-required", authenticate, requirePermission("not-required", "READ"), StockTrackingOrderController.getNotRequired);
-// Creates an Invoice record (controller lives under Invoices) — gated on the
-// invoices module, not tracking-orders, since that's the entity being created.
+router.get("/tracking-orders/:id", authenticate, requirePermission("tracking-orders", "READ"), StockTrackingOrderController.getDetail);
 router.post(
   "/tracking-orders/:id/invoices",
   authenticate,
@@ -178,14 +162,10 @@ router.post(
   uploadInvoiceFile.single("invoiceFile"),
   StockInvoiceController.createInvoice
 );
-router.get("/tracking-orders/:id", authenticate, requirePermission("tracking-orders", "READ"), StockTrackingOrderController.getDetail);
+
 
 // ─── Invoices (goods receiving / Invoice Approval) ───────────────────────────
-// /board BEFORE /:id — same static-before-dynamic rule as everywhere else.
 router.get("/invoices/board", authenticate, requirePermission("invoices", "READ"), StockInvoiceController.getBoard);
-// Branch picker for the goods-receiving form. Deliberately on the invoices
-// module rather than /branches/active's `branches:READ` — receiving staff
-// need to name their own branch without holding the branch-master permission.
 router.get(
   "/invoices/receiving-branches",
   authenticate,
@@ -214,14 +194,6 @@ router.delete("/branches/:id", authenticate, requirePermission("branches", "DELE
 router.patch("/branches/:id/restore", authenticate, requirePermission("branches", "RESTORE"), StockBranchController.restoreBranch);
 
 // ─── GST Rates ──────────────────────────────────────────────────────────────
-// /active BEFORE /:id — same static-before-dynamic rule as everywhere else.
-//
-// /active is authenticate-only on purpose: it is the feed behind every GST
-// dropdown (product definition, quotation lines, purchase orders), and gating
-// it on `gst-rates:READ` would force a purchaser to hold the Master > GST Rates
-// management permission — and the nav entry it unlocks — just to pick a slab.
-// Same reasoning as /invoices/receiving-branches above. Listed in
-// scripts/check-route-permissions.js so the safety net expects it.
 router.get("/gst-rates/active", authenticate, StockGstRateController.getActiveGstRates);
 router.post("/gst-rates", authenticate, requirePermission("gst-rates", "CREATE"), StockGstRateController.createGstRate);
 router.get("/gst-rates", authenticate, requirePermission("gst-rates", "READ"), StockGstRateController.getAllGstRates);
@@ -231,22 +203,16 @@ router.delete("/gst-rates/:id", authenticate, requirePermission("gst-rates", "DE
 router.patch("/gst-rates/:id/restore", authenticate, requirePermission("gst-rates", "RESTORE"), StockGstRateController.restoreGstRate);
 
 // ─── Inventory Transfer Requests ──────────────────────────────────────────────
-// /board BEFORE /:id — same static-before-dynamic rule as everywhere else.
 router.post("/transfer-requests", authenticate, requirePermission("transfer-requests", "CREATE"), StockTransferRequestController.createTransferRequest);
 router.get("/transfer-requests/board", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getBoard);
-// Branch pickers for the transfer screens — on this module, not
-// /branches/active's `branches:READ`. Static path, so above /:id.
 router.get("/transfer-requests/branches", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getFormBranches);
 router.get("/transfer-requests/:id", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getTransferRequestById);
 router.patch("/transfer-requests/:id/process", authenticate, requirePermission("transfer-requests", "PROCESS"), StockTransferRequestController.processTransferRequest);
 router.patch("/transfer-requests/:id/reject", authenticate, requirePermission("transfer-requests", "REJECT"), StockTransferRequestController.rejectTransferRequest);
 
 // ─── Notification master ─────────────────────────────────────────────────────
-// /resolve/:vendorId BEFORE /:id — same static-before-dynamic rule as terms-conditions.
 router.post("/notifications", authenticate, requirePermission("notifications", "CREATE"), StockNotificationController.createNotification);
 router.get("/notifications", authenticate, requirePermission("notifications", "READ"), StockNotificationController.getAllNotifications);
-// Static path, so above /:id. Vendors still selectable for a notification
-// on this channel — excludeNotificationId keeps an edit form showing its own.
 router.get("/notifications/assignable-vendors", authenticate, requirePermission("notifications", "READ"), StockNotificationController.getAssignableVendors);
 router.get("/notifications/resolve/:vendorId", authenticate, requirePermission("notifications", "READ"), StockNotificationController.resolveForVendor);
 router.get("/notifications/:id", authenticate, requirePermission("notifications", "READ"), StockNotificationController.getNotificationById);
