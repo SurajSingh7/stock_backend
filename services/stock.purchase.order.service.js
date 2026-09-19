@@ -31,6 +31,12 @@ const assertDataScope = (po, dataAccess) => {
     throw new Error("Purchase order not found");
   }
 };
+
+// The PO's requester, named from the session. HRMS can leave first/last name
+// blank on a Login, and this string is printed on the vendor's PDF, so it falls
+// back to identifiers that always exist rather than going out empty.
+const requesterName = (user) =>
+  (user?.name || "").trim() || user?.employeeCode || user?.email || "";
 import { getLogger } from "../helpers/logger.helper.js";
 import { generatePOPdf } from "../helpers/stock.po.pdf.helper.js";
 import { poPdfAbsolutePath } from "../helpers/stock.po.pdf.helper.js";
@@ -421,7 +427,6 @@ export default class StockPurchaseOrderService {
       vendorId,
       quotationItemIds,
 
-      requester,
       poDate,
       shipmentPreference,
       notes,
@@ -516,7 +521,11 @@ export default class StockPurchaseOrderService {
             state: buyerEntity?.state || "",
             stateCode: buyerStateCode,
           },
-          requester: requester || "",
+          // Whoever is raising this PO, read off the authenticated session —
+          // not from the form. The requester is printed on the PO PDF the
+          // vendor receives, so it names a real, verifiable person rather than
+          // whatever the client chose to type. Same rule as buyerEntity above.
+          requester: requesterName(user),
           poDate: poDate || new Date(),
           shipmentPreference: shipmentPreference || "",
           terms: resolvedTerm?.termsContent || "",
@@ -659,7 +668,10 @@ export default class StockPurchaseOrderService {
     }
     const before = po.toObject();
 
-    if (body.requester !== undefined) po.requester = body.requester;
+    // requester is not editable: it names who raised this PO, stamped from the
+    // session at create. An edit — including a resubmit after rejection, which
+    // may well be done by someone else — does not change whose request it was.
+    // The audit log is what records who touched it afterwards.
     if (body.poDate !== undefined) po.poDate = body.poDate;
     if (body.shipmentPreference !== undefined) po.shipmentPreference = body.shipmentPreference;
     // terms/termsConditionId/termsSource are immutable after create — they're

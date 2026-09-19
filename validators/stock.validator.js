@@ -446,8 +446,8 @@ export const validateCreatePurchaseOrder = (body) => {
   assertPickedDate(body.poDate, "PO date");
   // buyerEntity is no longer sent by the client — createPurchaseOrder derives
   // it server-side from the Tracking Order (see StockPurchaseOrderService).
-  if (!body.requester || !String(body.requester).trim())
-    throw new Error("Requester is required");
+  // requester is no longer sent by the client either — createPurchaseOrder
+  // stamps it from the authenticated session (see StockPurchaseOrderService).
   // skippedItems is gone. Leaving a line out of a PO is now a decision taken
   // (and reversible) on the tracking order via "Revise Order", not something
   // the PO create call records as a side effect on the approved quotation.
