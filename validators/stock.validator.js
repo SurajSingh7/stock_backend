@@ -143,8 +143,12 @@ export const validateCreateProductDefinition = (body) => {
   if (!trackingMethod) throw new Error("trackingMethod is required");
   if (!TRACKING_METHODS_ARRAY.includes(trackingMethod))
     throw new Error(`trackingMethod must be one of: ${TRACKING_METHODS_ARRAY.join(", ")}`);
-  if (!Array.isArray(selectedFields) || selectedFields.length === 0)
-    throw new Error("selectedFields must be a non-empty array");
+  // Shape only. Whether the list may be EMPTY depends on the tracking method
+  // (Individual needs at least one, Group does not) — that rule lives in
+  // StockProductDefinitionService.assertSelectedFieldsPresent, which is the
+  // one place that knows the effective tracking method on an update too.
+  if (!Array.isArray(selectedFields))
+    throw new Error("selectedFields must be an array");
   selectedFields.forEach((f, i) => {
     if (!f.fieldDefId) throw new Error(`selectedFields[${i}].fieldDefId is required`);
     if (f.order === undefined) throw new Error(`selectedFields[${i}].order is required`);
@@ -158,8 +162,9 @@ export const validateUpdateProductDefinition = (body) => {
   if (body.trackingMethod !== undefined && !TRACKING_METHODS_ARRAY.includes(body.trackingMethod))
     throw new Error(`trackingMethod must be one of: ${TRACKING_METHODS_ARRAY.join(", ")}`);
   if (body.selectedFields !== undefined) {
-    if (!Array.isArray(body.selectedFields) || body.selectedFields.length === 0)
-      throw new Error("selectedFields must be a non-empty array");
+    // Empty is allowed here — see the note in validateCreateProductDefinition.
+    if (!Array.isArray(body.selectedFields))
+      throw new Error("selectedFields must be an array");
     body.selectedFields.forEach((f, i) => {
       if (!f.fieldDefId) throw new Error(`selectedFields[${i}].fieldDefId is required`);
       if (f.order === undefined) throw new Error(`selectedFields[${i}].order is required`);

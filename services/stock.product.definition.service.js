@@ -6,7 +6,7 @@ import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
 import StockBranchModel from "../models/stock.branch.model.js";
 import StockGstRateService from "./stock.gst.rate.service.js";
-import { CATEGORY_TYPES } from "../constants/stock.enums.js";
+import { CATEGORY_TYPES, TRACKING_METHODS } from "../constants/stock.enums.js";
 import { deleteProductImageFile } from "../helpers/stock.upload.helper.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 
@@ -40,6 +40,17 @@ export default class StockProductDefinitionService {
         `These fields are not applicable to the selected tracking method: ${invalid.map((f) => f.label).join(", ")}`
       );
     }
+  }
+
+  // Individual tracking identifies each unit by its field values — a serial
+  // number, an IMEI — so a product with none of them has nothing to tell its
+  // units apart and cannot be received at all. Group tracking has no such
+  // need: the quantity is the record, and any batch fields are a bonus. So
+  // the "at least one field" rule applies to Individual only.
+  static assertSelectedFieldsPresent(trackingMethod, selectedFields) {
+    if (trackingMethod !== TRACKING_METHODS.INDIVIDUAL) return;
+    if (!Array.isArray(selectedFields) || selectedFields.length === 0)
+      throw new Error("Individual-tracked products need at least one field");
   }
 
   // 🔔 Stock alerts are raised PER BRANCH, so every active branch must
@@ -105,6 +116,7 @@ export default class StockProductDefinitionService {
         .session(session);
       if (exists) throw new Error("A product with this name already exists in this category");
 
+      StockProductDefinitionService.assertSelectedFieldsPresent(trackingMethod, selectedFields);
       await StockProductDefinitionService.assertSelectedFieldsApplicable(trackingMethod, selectedFields, session);
       await StockProductDefinitionService.assertBranchThresholdsComplete(branchThresholds, session);
       // Returns the rate as a Number (or null) — the same normalisation the
@@ -231,6 +243,7 @@ export default class StockProductDefinitionService {
 
       const effectiveTrackingMethod = body.trackingMethod !== undefined ? body.trackingMethod : def.trackingMethod;
       const effectiveSelectedFields = body.selectedFields !== undefined ? body.selectedFields : def.selectedFields;
+      StockProductDefinitionService.assertSelectedFieldsPresent(effectiveTrackingMethod, effectiveSelectedFields);
       await StockProductDefinitionService.assertSelectedFieldsApplicable(
         effectiveTrackingMethod,
         effectiveSelectedFields,

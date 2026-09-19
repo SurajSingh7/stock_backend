@@ -150,12 +150,26 @@ export default class StockInvoiceService {
           created.forEach((d) => createdIds.push(d._id));
         }
       } else {
+        // Quantity ("Group") tracking captures its fields once for the whole
+        // receipt, not per unit: 10 meters delivered together share one set of
+        // values. Paid and FOC still become SEPARATE inventory docs because
+        // they are costed differently, but they are one physical lot — 20
+        // meters of which 3 are free carry the same unique number — so both
+        // docs get the same values. The receive form sends that single row;
+        // a line with no row at all falls back to {}, which the required-field
+        // check then rejects if the product needs one.
+        const batchFieldValues =
+          (line.rows || []).find((r) => !r.isFoc)?.fieldValues ||
+          (line.rows || [])[0]?.fieldValues ||
+          {};
+        await StockInventoryItemService._validateFieldValues(productDef, batchFieldValues);
+
         const qtyDocs = [];
         if (line.receivedQuantity > 0) {
-          qtyDocs.push({ quantity: line.receivedQuantity, isFoc: false });
+          qtyDocs.push({ quantity: line.receivedQuantity, isFoc: false, fieldValues: batchFieldValues });
         }
         if (line.focQuantity > 0) {
-          qtyDocs.push({ quantity: line.focQuantity, isFoc: true });
+          qtyDocs.push({ quantity: line.focQuantity, isFoc: true, fieldValues: batchFieldValues });
         }
         for (const qd of qtyDocs) {
           const [created] = await StockInventoryItemModel.create(
@@ -167,7 +181,7 @@ export default class StockInvoiceService {
                 invoiceId: invoice._id,
                 approvalStatus: ITEM_APPROVAL_STATUS.PENDING,
                 isFoc: qd.isFoc,
-                fieldValues: {},
+                fieldValues: qd.fieldValues,
                 quantity: qd.quantity,
                 receivedAt: invoice.invoiceDate,
                 receivedBy: receivedBy ?? null,

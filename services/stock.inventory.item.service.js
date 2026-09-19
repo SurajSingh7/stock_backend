@@ -319,17 +319,39 @@ export default class StockInventoryItemService {
             batchCount: 0,
             latestReceivedAt: null,
             sortAt: null,
+            // Filled in after the loop from _valuesByCode below.
+            fieldValues: {},
+            variedFields: [],
+            _valuesByCode: new Map(),
           });
         }
         const card = groupCardByKey.get(key);
         card.totalQty += item.quantity || 0;
         card.batchCount += 1;
+        // A group card rolls up every batch of this product at this branch, and
+        // each batch carries its own tracked values — two deliveries can hold
+        // two different unique numbers. So a code is only shown on the card
+        // when EVERY batch agrees on it; the rest are reported as varying, and
+        // the per-batch numbers stay in the batch breakdown where they belong.
+        Object.entries(item.fieldValues || {}).forEach(([code, val]) => {
+          if (val === undefined || val === null || val === "") return;
+          if (!card._valuesByCode.has(code)) card._valuesByCode.set(code, new Set());
+          card._valuesByCode.get(code).add(String(val));
+        });
         const at = item.receivedAt || item.createdAt;
         if (!card.latestReceivedAt || new Date(at) > new Date(card.latestReceivedAt)) {
           card.latestReceivedAt = at;
           card.sortAt = item.createdAt || item.receivedAt;
         }
       }
+    }
+
+    for (const card of groupCardByKey.values()) {
+      for (const [code, values] of card._valuesByCode) {
+        if (values.size === 1) card.fieldValues[code] = [...values][0];
+        else card.variedFields.push(code);
+      }
+      delete card._valuesByCode;
     }
 
     const combined = [...individualCards, ...groupCardByKey.values()].sort(
@@ -455,7 +477,16 @@ export default class StockInventoryItemService {
 
     const grouped = await StockInventoryItemModel.aggregate([
       { $match: match },
-      { $group: { _id: "$invoiceId", qty: { $sum: { $ifNull: ["$quantity", 1] } } } },
+      {
+        $group: {
+          _id: "$invoiceId",
+          qty: { $sum: { $ifNull: ["$quantity", 1] } },
+          // Every doc from one invoice line shares the batch's values — paid
+          // and FOC are separate docs but one physical lot — so $first is the
+          // batch's values, not an arbitrary pick.
+          fieldValues: { $first: "$fieldValues" },
+        },
+      },
     ]);
 
     const invoiceIds = grouped.map((g) => g._id);
@@ -470,6 +501,7 @@ export default class StockInventoryItemService {
         invoiceNumber: invoiceMap.get(String(g._id))?.invoiceNumber || "",
         invoiceDate: invoiceMap.get(String(g._id))?.invoiceDate || null,
         quantity: g.qty,
+        fieldValues: g.fieldValues || {},
       }))
       .sort((a, b) => new Date(b.invoiceDate || 0) - new Date(a.invoiceDate || 0));
   }
