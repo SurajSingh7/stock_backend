@@ -56,6 +56,21 @@ export default class StockBranchController {
     }
   }
 
+  // Branch picker for whichever module named itself in ?module=. The permission
+  // and the data scope both come from that module, so a receiving clerk holding
+  // only `invoices` can fill their branch field without also being granted
+  // `branches:READ` — which is the Master > Branch management permission, and
+  // unlocks its nav entry.
+  static async getScopedBranches(req, res) {
+    try {
+      const data = await StockBranchService.getScopedBranchPicker(req.dataAccess);
+      successResponseHandler(res, data, "Branches fetched successfully");
+    } catch (error) {
+      log.error("Error fetching scoped branches", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
   static async getBranchById(req, res) {
     try {
       const data = await StockBranchService.getBranchById(req.params.id, req.dataAccess);

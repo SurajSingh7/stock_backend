@@ -77,7 +77,7 @@ export default class StockInvoiceService {
   static async _resolveLines(po, bodyLines, existingQtyByLine) {
     const poLineByKey = new Map((po.items || []).map((it) => [String(it.quotationItemId), it]));
 
-    return bodyLines.map((bl) => {
+    const result= bodyLines.map((bl) => {
       const key = String(bl.quotationItemId);
       const poLine = poLineByKey.get(key);
       if (!poLine) throw new Error("A received line does not belong to this purchase order");
@@ -110,6 +110,8 @@ export default class StockInvoiceService {
         createdInventoryItemIds: [],
       };
     });
+
+    return result;
   }
 
   // Creates inventory_items (PENDING approval) for every line — one row per
@@ -252,35 +254,6 @@ export default class StockInvoiceService {
     );
     const chargesTotal = round2((extraCharges || []).reduce((s, c) => s + (c.amount || 0), 0));
     return round2(linesTotal + chargesTotal);
-  }
-
-  /* ---------------------------------------------------------------------- */
-  /* Receiving form bootstrap                                                */
-  /* ---------------------------------------------------------------------- */
-
-  // Branches the caller may receive goods into, plus the one the form should
-  // land on. Lives on the invoices module (not branches) on purpose: the
-  // question "where can *I* book stock in" belongs to the receiving flow, and
-  // gating it on `branches:READ` would make every receiving clerk a
-  // branch-master user too.
-  //
-  // defaultBranchId is the caller's own HRMS branch whenever that branch is
-  // in scope — the overwhelmingly common case, where the field is really a
-  // display of a fact rather than a choice. A wider-scoped user (admin, or a
-  // SPECIFIC_BRANCHES policy) with no branch of their own gets no default and
-  // picks one, unless there is exactly one option to pick.
-  static async getReceivingBranches(dataAccess) {
-    const branches = await StockBranchService.getScopedActiveBranches(dataAccess);
-
-    const ownBranchId = dataAccess?.userBranchId ? String(dataAccess.userBranchId) : null;
-    const ownInScope = ownBranchId && branches.some((w) => String(w._id) === ownBranchId);
-    const defaultBranchId = ownInScope
-      ? ownBranchId
-      : branches.length === 1
-        ? String(branches[0]._id)
-        : null;
-
-    return { branches, defaultBranchId, ownBranchId };
   }
 
   /* ---------------------------------------------------------------------- */

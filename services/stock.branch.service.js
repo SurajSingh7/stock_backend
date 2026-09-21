@@ -104,6 +104,41 @@ export default class StockBranchService {
     return StockBranchModel.find(filter).sort({ name: 1 }).lean();
   }
 
+  // What a branch PICKER on any screen should read: the branches this caller
+  // may operate in for the module doing the asking, plus which one the field
+  // should land on.
+  //
+  // The module matters. Data scope is resolved per module, so the same user can
+  // be OWN_BRANCH on invoices and SELECTED on inventory-items — the caller's
+  // dataAccess already carries whichever one applies, and getScopedActiveBranches
+  // applies it to the branch collection.
+  //
+  // defaultBranchId is the caller's own HRMS branch whenever that branch is in
+  // scope — the overwhelmingly common case, where the field is really a display
+  // of a fact rather than a choice. A wider-scoped user (admin, or a SELECTED
+  // policy) with no branch of their own gets no default and picks one, unless
+  // there is exactly one option to pick.
+  //
+  // An empty list is a real answer ("no branch assigned"), not a failure.
+  //
+  // NOT for every branch dropdown. A screen that legitimately needs ALL active
+  // branches regardless of scope — product definitions, which must carry a stock
+  // threshold for every branch, or a transfer picking its counterpart branch —
+  // has to keep reading the unscoped list instead.
+  static async getScopedBranchPicker(dataAccess) {
+    const branches = await StockBranchService.getScopedActiveBranches(dataAccess);
+
+    const ownBranchId = dataAccess?.userBranchId ? String(dataAccess.userBranchId) : null;
+    const ownInScope = ownBranchId && branches.some((w) => String(w._id) === ownBranchId);
+    const defaultBranchId = ownInScope
+      ? ownBranchId
+      : branches.length === 1
+        ? String(branches[0]._id)
+        : null;
+
+    return { branches, defaultBranchId, ownBranchId };
+  }
+
   // Write-path guard for any record that persists a branchId. Storing one
   // outside the writer's scope produces a row its own author can no longer
   // read back (every list is branch-scoped on that same field), so reject it

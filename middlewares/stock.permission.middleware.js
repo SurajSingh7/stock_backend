@@ -104,4 +104,33 @@ export function requirePermission(moduleKey, action) {
 
 // Exported so the admin "what can this user actually see/do" preview resolves
 // through exactly the same code the request path uses — the two can't drift.
+/**
+ * Same gate as requirePermission, except the module comes from ?module= on the
+ * request instead of being fixed by the route.
+ *
+ * This exists for the handful of endpoints that answer "what may I use, for the
+ * screen I am on" — a branch picker being the case that motivated it. The
+ * answer genuinely differs per module, because data scope is resolved per
+ * module (see the StockUserDataScopeModel lookup above): the same user can hold
+ * OWN_BRANCH on invoices and SELECTED on inventory-items.
+ *
+ * Letting the caller name the module is not an escalation — requirePermission
+ * still has to find that the caller actually holds the action on it, so a
+ * caller can only ever name a module they already have. The allow-list is here
+ * to keep the surface deliberate, not to add a security layer.
+ */
+export function requirePermissionForQueryModule(allowedModules, action) {
+  const allowed = new Set(allowedModules);
+  return (req, res, next) => {
+    const moduleKey = String(req.query.module || "").trim();
+    if (!allowed.has(moduleKey)) {
+      return res.status(400).json({
+        success: false,
+        message: `module must be one of: ${[...allowed].join(", ")}`,
+      });
+    }
+    return requirePermission(moduleKey, action)(req, res, next);
+  };
+}
+
 export { resolveEffectiveActions, resolveDataAccess, UNCONFIGURED };

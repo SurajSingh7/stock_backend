@@ -18,7 +18,7 @@ import StockTransferRequestController from "../controllers/stock.transfer.reques
 import StockAccessControlController from "../controllers/stock.access.control.controller.js";
 import StockAuditLogController from "../controllers/stock.audit.log.controller.js";
 import { authenticate, requireAdmin } from "../middlewares/stock.auth.middleware.js";
-import { requirePermission } from "../middlewares/stock.permission.middleware.js";
+import { requirePermission, requirePermissionForQueryModule } from "../middlewares/stock.permission.middleware.js";
 
 const router = express.Router();
 
@@ -166,12 +166,7 @@ router.post(
 
 // ─── Invoices (goods receiving / Invoice Approval) ───────────────────────────
 router.get("/invoices/board", authenticate, requirePermission("invoices", "READ"), StockInvoiceController.getBoard);
-router.get(
-  "/invoices/receiving-branches",
-  authenticate,
-  requirePermission("invoices", "READ"),
-  StockInvoiceController.getReceivingBranches
-);
+
 router.get("/invoices/:id", authenticate, requirePermission("invoices", "READ"), StockInvoiceController.getInvoiceById);
 router.put(
   "/invoices/:id",
@@ -184,6 +179,27 @@ router.patch("/invoices/:id/approve", authenticate, requirePermission("invoices"
 router.patch("/invoices/:id/reject", authenticate, requirePermission("invoices", "REJECT"), StockInvoiceController.rejectInvoice);
 
 // ─── Branches ───────────────────────────────────────────────────────────────
+// Branch PICKER for any module's own screen — gated on that module's READ, not
+// on branches:READ, so a screen does not have to hand out Master > Branch just
+// to let someone name their branch. Registered before /branches/* so the two
+// are never confused: this one answers "where may I work", /branches/active
+// answers "what branches exist".
+//
+// Only for pickers asking "where may I work". A picker that ASSIGNS a record to
+// a branch is asking something else and stays on the unscoped list — the vendor
+// branch field is the case to remember: it renders for admins only, and its
+// whole job is reassigning a vendor to ANOTHER branch.
+router.get(
+  "/scoped-branches",
+  authenticate,
+  requirePermissionForQueryModule(["invoices", "inventory-items"], "READ"),
+  StockBranchController.getScopedBranches
+);
+
+// The UNSCOPED list — every active branch, behind Master > Branch. For screens
+// that genuinely need them all (product definitions' per-branch thresholds) or
+// for admin tooling. A picker that only needs the caller's own branches should
+// use /scoped-branches above instead.
 // /active BEFORE /:id — same static-before-dynamic rule as everywhere else.
 router.get("/branches/active", authenticate, requirePermission("branches", "READ"), StockBranchController.getActiveBranches);
 router.post("/branches", authenticate, requirePermission("branches", "CREATE"), StockBranchController.createBranch);
