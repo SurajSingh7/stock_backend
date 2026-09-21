@@ -129,6 +129,36 @@ const trackingOrderSchema = new Schema(
       default: [],
     },
 
+    /*
+      Every time this order was closed early, and every time that was undone.
+
+      Modelled on `resets` below rather than on `activity` above: this is a
+      lifecycle decision about the whole order, not a per-product one, so it has
+      no scope or product list to carry.
+
+      orderedQty/receivedQty are SNAPSHOTS taken at the moment of the decision.
+      The question someone opens this to ask is "how much did we walk away
+      from", and that has to be the number as it stood then — recomputing it
+      later would answer a different question.
+    */
+    closures: {
+      type: [
+        new Schema(
+          {
+            type: { type: String, enum: ["SHORT_CLOSE", "REOPEN"], required: true },
+            reason: { type: String, trim: true, default: "" },
+            orderedQty: { type: Number, default: 0 },
+            receivedQty: { type: Number, default: 0 },
+            by: { type: Schema.Types.ObjectId, default: null },
+            byName: { type: String, trim: true, default: "" },
+            at: { type: Date, default: null },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+
     // Every time the accounts team sent this order back to the start.
     // An array, not a flag: the whole point is that someone can look later and
     // see how often an order was restarted and why. What it destroyed — the PO

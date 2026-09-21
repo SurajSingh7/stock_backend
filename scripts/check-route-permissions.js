@@ -31,7 +31,10 @@ for (const layer of router.stack) {
   const path = layer.route.path;
   const middlewareNames = layer.route.stack.map((s) => s.name);
   const hasAuth = middlewareNames.includes("authenticate");
-  const hasPermissionCheck = middlewareNames.includes("permissionCheck");
+  // Any permissionCheck* middleware counts — requirePermission returns
+  // permissionCheck, requirePermissionForQueryModule returns
+  // permissionCheckFromQuery, and both end up calling the same gate.
+  const hasPermissionCheck = middlewareNames.some((n) => n.startsWith("permissionCheck"));
   const hasRequireAdmin = middlewareNames.includes("requireAdmin");
 
   for (const method of Object.keys(layer.route.methods)) {

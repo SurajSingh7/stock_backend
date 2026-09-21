@@ -2,7 +2,12 @@ import mongoose from "mongoose";
 import { successResponseHandler, errorResponseHandler } from "../helpers/response.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockTrackingOrderService from "../services/stock.tracking.order.service.js";
-import { validateAddEntity, validateSetExclusions, validateResetOrder } from "../validators/stock.validator.js";
+import {
+  validateAddEntity,
+  validateSetExclusions,
+  validateResetOrder,
+  validateClosureDecision,
+} from "../validators/stock.validator.js";
 
 const log = getLogger(import.meta.url);
 
@@ -89,6 +94,22 @@ export default class StockTrackingOrderController {
   static markRequired = StockTrackingOrderController.txn(
     (req, session) => StockTrackingOrderService.markRequired(req.params.id, req.user, session, req.dataAccess),
     "Vendor marked as required"
+  );
+
+  static shortCloseOrder = StockTrackingOrderController.txn(
+    (req, session) => {
+      validateClosureDecision(req.body);
+      return StockTrackingOrderService.shortCloseOrder(req.params.id, req.body, req.user, session, req.dataAccess);
+    },
+    "Order short closed"
+  );
+
+  static reopenOrder = StockTrackingOrderController.txn(
+    (req, session) => {
+      validateClosureDecision(req.body);
+      return StockTrackingOrderService.reopenOrder(req.params.id, req.body, req.user, session, req.dataAccess);
+    },
+    "Order reopened"
   );
 
   static resetOrder = StockTrackingOrderController.txn(

@@ -26,7 +26,7 @@ const MODULE_DEFINITIONS = [
   // removes it from databases seeded before this.)
   { key: "quotations", name: "Quotations", actions: withMenu(["CREATE", "READ", "DELETE", "RESTORE", "REVIEW"]) },
   { key: "purchase-orders", name: "Purchase Orders", actions: withMenu(["CREATE", "READ", "UPDATE", "DELETE", "APPROVE", "REJECT", "SEND_MAIL", "RESET_ORDER"]) },
-  { key: "tracking-orders", name: "Tracking Orders", actions: withMenu(["READ", "ADD_ENTITY", "MARK_NOT_REQUIRED"]) },
+  { key: "tracking-orders", name: "Tracking Orders", actions: withMenu(["READ", "ADD_ENTITY", "MARK_NOT_REQUIRED", "SHORT_CLOSE", "REOPEN"]) },
   // Read-only register of every line and vendor that was dropped. Its own
   // module so "who may see the history of what we chose not to buy" is granted
   // separately from the permissions to actually drop something.

@@ -121,7 +121,9 @@ export function requirePermission(moduleKey, action) {
  */
 export function requirePermissionForQueryModule(allowedModules, action) {
   const allowed = new Set(allowedModules);
-  return (req, res, next) => {
+  // Named for the same reason requirePermission names its own middleware:
+  // scripts/check-route-permissions.js spots permission checks by fn.name.
+  return function permissionCheckFromQuery(req, res, next) {
     const moduleKey = String(req.query.module || "").trim();
     if (!allowed.has(moduleKey)) {
       return res.status(400).json({

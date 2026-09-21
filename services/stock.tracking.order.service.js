@@ -150,6 +150,7 @@ export default class StockTrackingOrderService {
           // both boards reads this, so the count is visible without opening it.
           resets: tracking.resets || [],
           activity: tracking.activity || [],
+          closures: tracking.closures || [],
           mailResult: tracking.mailResult || null,
           filterDate: po?.createdAt || approvalDate,
         });
@@ -199,7 +200,8 @@ export default class StockTrackingOrderService {
       PO_APPROVED: 0,
       IN_PROGRESS: 0,
       PARTIAL: 0,
-      COMPLETED: 0,
+      FULLY_CLOSED: 0,
+      SHORT_CLOSED: 0,
       REJECTED: 0,
     };
     fullBoard.forEach((q) =>
@@ -406,9 +408,10 @@ export default class StockTrackingOrderService {
         products,
         productCount: products.length,
         totalValue: round2(products.reduce((s, pr) => s + (pr.lineTotal || 0), 0)),
-        // Feeds the History button — same two tabs as the Tracking Orders page.
+        // Feeds the History button — same tabs as the Tracking Orders page.
         resets: t.resets || [],
         activity: t.activity || [],
+        closures: t.closures || [],
       });
     });
 
@@ -761,7 +764,7 @@ export default class StockTrackingOrderService {
   /* Recalculate status from approved-invoice received quantities, per PO    */
   /* line (quotationItemId). Called after invoice create/approve/reject —    */
   /* never set directly by a route. Only touches tracking orders already in  */
-  /* the receiving flow (PO_APPROVED/IN_PROGRESS/PARTIAL/COMPLETED).         */
+  /* the receiving flow (PO_APPROVED/IN_PROGRESS/PARTIAL/FULLY_CLOSED).      */
   /* ---------------------------------------------------------------------- */
 
   static async recalculateStatus(trackingOrderId, session) {
@@ -771,11 +774,14 @@ export default class StockTrackingOrderService {
     }).session(session);
     if (!tracking) return null;
 
+    // SHORT_CLOSED is deliberately absent. It is a person's decision, and only
+    // reopenOrder may undo it — if it were listed here, approving any invoice
+    // would quietly drag the order back to PARTIAL and nobody would be told.
     const RECEIVING_STATUSES = new Set([
       TRACKING_STATUS.PO_APPROVED,
       TRACKING_STATUS.IN_PROGRESS,
       TRACKING_STATUS.PARTIAL,
-      TRACKING_STATUS.COMPLETED,
+      TRACKING_STATUS.FULLY_CLOSED,
     ]);
     if (!RECEIVING_STATUSES.has(tracking.status)) return tracking;
 
@@ -809,13 +815,154 @@ export default class StockTrackingOrderService {
     });
 
     tracking.status = allComplete
-      ? TRACKING_STATUS.COMPLETED
+      ? TRACKING_STATUS.FULLY_CLOSED
       : anyReceived
       ? TRACKING_STATUS.PARTIAL
       : TRACKING_STATUS.IN_PROGRESS;
 
     await tracking.save({ session });
     return tracking;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Short close + reopen                                                    */
+  /* ---------------------------------------------------------------------- */
+
+  // Ordered vs actually-received (APPROVED invoices only), for the snapshot a
+  // closure entry keeps. Same counting rule recalculateStatus uses, so the two
+  // can never disagree about what "received" means.
+  static async _receivedVsOrdered(tracking, session) {
+    const po = await StockPurchaseOrderModel.findOne({ _id: tracking.poId, isActive: true })
+      .session(session)
+      .lean();
+    if (!po) return { orderedQty: 0, receivedQty: 0 };
+
+    const approved = await StockInvoiceModel.find({
+      trackingOrderId: tracking._id,
+      status: INVOICE_STATUS.APPROVED,
+      isActive: true,
+    })
+      .session(session)
+      .lean();
+
+    const orderedQty = (po.items || []).reduce((s, it) => s + (it.quantity || 0), 0);
+    const receivedQty = approved.reduce(
+      (s, inv) => s + (inv.lines || []).reduce((t, l) => t + (l.receivedQuantity || 0), 0),
+      0
+    );
+    return { orderedQty, receivedQty };
+  }
+
+  /*
+    Close an order early: the rest of the goods will never arrive, so stop
+    waiting for them.
+
+    Only from PARTIAL. An order at IN_PROGRESS has received nothing yet, and
+    FULLY_CLOSED has received everything — neither is a case of "we got some of
+    it and that is all we are getting".
+
+    A PENDING invoice blocks this outright. Closing while someone is still
+    deciding on an invoice would mean approving it afterwards changes what was
+    already declared final. Rejecting or approving it first is not a workaround,
+    it IS the decision this rule is asking for. Note the guarantee that makes
+    the closed state trustworthy afterwards: an APPROVED invoice can never be
+    rejected (StockInvoiceService.rejectInvoice takes PENDING only), so once
+    this passes, receivedQty can no longer move.
+  */
+  static async shortCloseOrder(id, payload, actor, session, dataAccess) {
+    const { reason } = payload || {};
+    const tracking = await StockTrackingOrderModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!tracking) throw new Error("Tracking order not found");
+    if (!isWithinDataScope(tracking, dataAccess, SCOPE_MODULE_KEY)) {
+      throw new Error("Tracking order not found");
+    }
+
+    if (tracking.status !== TRACKING_STATUS.PARTIAL) {
+      throw new Error("Only a partially received order can be short closed");
+    }
+
+    // Checked here, not just by hiding the button: an invoice can be submitted
+    // between the board being drawn and this request arriving.
+    const pendingCount = await StockInvoiceModel.countDocuments({
+      trackingOrderId: tracking._id,
+      status: INVOICE_STATUS.PENDING,
+      isActive: true,
+    }).session(session);
+    if (pendingCount > 0) {
+      throw new Error(
+        `${pendingCount} invoice${pendingCount > 1 ? "s are" : " is"} still awaiting approval — approve or reject ${pendingCount > 1 ? "them" : "it"} before short closing this order`
+      );
+    }
+
+    const before = tracking.toObject();
+    const { orderedQty, receivedQty } = await StockTrackingOrderService._receivedVsOrdered(tracking, session);
+
+    tracking.closures.push({
+      type: "SHORT_CLOSE",
+      reason: String(reason || "").trim(),
+      orderedQty,
+      receivedQty,
+      by: actor?.id || actor?._id || null,
+      byName: actor?.name || "",
+      at: new Date(),
+    });
+    tracking.status = TRACKING_STATUS.SHORT_CLOSED;
+    await tracking.save({ session });
+
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: tracking._id, action: "SHORT_CLOSE",
+      actor, before, after: tracking.toObject(),
+      reason: `Short closed at ${receivedQty}/${orderedQty}: ${String(reason || "").trim()}`,
+    });
+    return tracking;
+  }
+
+  /*
+    Undo a short close and let the order receive again.
+
+    The status is not hardcoded back to PARTIAL — recalculateStatus works it out
+    from the invoices, so the rule for what each status means stays in one
+    place. In practice it lands on PARTIAL every time, because nothing can move
+    while an order is short closed: Add Items is refused for the status, and
+    short closing required that no invoice was left pending.
+  */
+  static async reopenOrder(id, payload, actor, session, dataAccess) {
+    const { reason } = payload || {};
+    const tracking = await StockTrackingOrderModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!tracking) throw new Error("Tracking order not found");
+    if (!isWithinDataScope(tracking, dataAccess, SCOPE_MODULE_KEY)) {
+      throw new Error("Tracking order not found");
+    }
+
+    if (tracking.status !== TRACKING_STATUS.SHORT_CLOSED) {
+      throw new Error("Only a short closed order can be reopened");
+    }
+
+    const before = tracking.toObject();
+    const { orderedQty, receivedQty } = await StockTrackingOrderService._receivedVsOrdered(tracking, session);
+
+    tracking.closures.push({
+      type: "REOPEN",
+      reason: String(reason || "").trim(),
+      orderedQty,
+      receivedQty,
+      by: actor?.id || actor?._id || null,
+      byName: actor?.name || "",
+      at: new Date(),
+    });
+    // PARTIAL first so recalculateStatus, whose guard excludes SHORT_CLOSED on
+    // purpose, will act on this order instead of returning it untouched.
+    tracking.status = TRACKING_STATUS.PARTIAL;
+    await tracking.save({ session });
+
+    const updated = await StockTrackingOrderService.recalculateStatus(tracking._id, session);
+
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: tracking._id, action: "REOPEN",
+      actor, before, after: (updated || tracking).toObject(),
+      reason: String(reason || "").trim(),
+    });
+    return updated || tracking;
   }
 
   static async getByQuotationAndVendor(sourceQuotationId, vendorId, session) {

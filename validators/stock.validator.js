@@ -527,6 +527,16 @@ export const validateResetOrder = (body) => {
   if (!body.reason || !String(body.reason).trim()) throw new Error("A reason is required");
 };
 
+/*
+  Short close and reopen both turn on one thing: WHY. Nothing else is sent —
+  the order is identified by the URL and every quantity is read from the
+  invoices server-side, so a reason is the whole body.
+*/
+export const validateClosureDecision = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!body.reason || !String(body.reason).trim()) throw new Error("A reason is required");
+};
+
 export const validateSetExclusions = (body) => {
   if (!body || typeof body !== "object") throw new Error("Request body is required");
   if (!body.reason || !String(body.reason).trim()) throw new Error("A reason is required");

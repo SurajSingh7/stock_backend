@@ -140,7 +140,12 @@ export const TRACKING_STATUS = {
   PO_APPROVED: "PO_APPROVED",           // PO approved + mailed (mirrors PO_STATUS.APPROVED)
   IN_PROGRESS: "IN_PROGRESS",           // an invoice submitted, none approved yet
   PARTIAL: "PARTIAL",                   // >=1 invoice approved, 0 < received < ordered
-  COMPLETED: "COMPLETED",               // received == ordered on every PO line
+  // The two END states, deliberately named as a pair so a board reader can see
+  // at a glance that both mean "nothing more is coming", and what the
+  // difference is. FULLY_CLOSED is reached on its own; SHORT_CLOSED is a
+  // person's decision, taken from PARTIAL when the rest will never arrive.
+  FULLY_CLOSED: "FULLY_CLOSED",         // received == ordered on every PO line
+  SHORT_CLOSED: "SHORT_CLOSED",         // closed early with less than ordered — see closures[]
   REJECTED: "REJECTED",                 // PO rejected (mirrors PO_STATUS.REJECTED)
   NOT_REQUIRED: "NOT_REQUIRED",         // vendor marked "Not Required"
 };

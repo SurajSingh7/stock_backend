@@ -152,6 +152,12 @@ router.get("/tracking-orders/board", authenticate, requirePermission("tracking-o
 router.patch("/tracking-orders/:id/entity", authenticate, requirePermission("tracking-orders", "ADD_ENTITY"), StockTrackingOrderController.addEntity);
 router.patch("/tracking-orders/:id/not-required", authenticate, requirePermission("tracking-orders", "MARK_NOT_REQUIRED"), StockTrackingOrderController.markNotRequired);
 router.patch("/tracking-orders/:id/required", authenticate, requirePermission("tracking-orders", "MARK_NOT_REQUIRED"), StockTrackingOrderController.markRequired);
+// Closing early and undoing it carry SEPARATE permissions, unlike
+// MARK_NOT_REQUIRED which covers both of its directions. Reopening reverses a
+// decision someone already signed their name to, so it can be held by a
+// different person.
+router.patch("/tracking-orders/:id/short-close", authenticate, requirePermission("tracking-orders", "SHORT_CLOSE"), StockTrackingOrderController.shortCloseOrder);
+router.patch("/tracking-orders/:id/reopen", authenticate, requirePermission("tracking-orders", "REOPEN"), StockTrackingOrderController.reopenOrder);
 router.patch("/tracking-orders/:id/reset", authenticate, requirePermission("purchase-orders", "RESET_ORDER"), StockTrackingOrderController.resetOrder);
 router.get("/not-required", authenticate, requirePermission("not-required", "READ"), StockTrackingOrderController.getNotRequired);
 router.get("/tracking-orders/:id", authenticate, requirePermission("tracking-orders", "READ"), StockTrackingOrderController.getDetail);
