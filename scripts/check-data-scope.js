@@ -50,6 +50,17 @@ const MODEL_FILE = {
   "tracking-orders": "stock.tracking.order.model.js",
   "purchase-orders": "stock.purchase.order.model.js",
   invoices: "stock.invoice.model.js",
+  "invoice-list": "stock.invoice.model.js", // same documents, payment-side module
+  payments: "stock.invoice.model.js",
+  "payment-approval": "stock.invoice.model.js",
+  "vendor-ledger": "stock.invoice.model.js",
+  // Reports — all read the same invoices, each through its own module so the
+  // data scope can differ per report.
+  "billing-report": "stock.invoice.model.js",
+  "outstanding-report": "stock.invoice.model.js",
+  "paid-report": "stock.invoice.model.js",
+  "transaction-register": "stock.invoice.model.js",
+  "invoice-breakup": "stock.invoice.model.js",
 };
 
 for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
@@ -99,7 +110,57 @@ const SERVICE_FILE = {
   "tracking-orders": "stock.tracking.order.service.js",
   "purchase-orders": "stock.purchase.order.service.js",
   invoices: "stock.invoice.service.js",
+  "invoice-list": "stock.invoice.payment.service.js",
+  payments: "stock.invoice.payment.service.js",
+  "payment-approval": "stock.invoice.payment.service.js",
+  "vendor-ledger": "stock.vendor.ledger.service.js",
+  // Billing and Outstanding have no service of their own on purpose: they are
+  // the ledger's summary with different columns, so the scope check that
+  // matters is the one already asserted on stock.vendor.ledger.service.js.
+  "billing-report": "stock.vendor.ledger.service.js",
+  "outstanding-report": "stock.vendor.ledger.service.js",
+  "paid-report": "stock.report.service.js",
+  "transaction-register": "stock.report.service.js",
+  "invoice-breakup": "stock.report.service.js",
 };
+
+/*
+  Services that hold no queries of their own and take their scope from the one
+  they delegate to.
+
+  stock.report.service.js is the case this exists for: it builds the payment
+  register and the invoice breakup entirely out of
+  StockVendorLedgerService._loadFacts, which applies the scope. Demanding an
+  applyDataScope call in a file that never touches a model would only invite
+  somebody to add a decorative one.
+
+  Named here rather than inferred, and both halves of the claim are asserted
+  below — that the delegate really scopes, and that the delegating file really
+  has no queries. The moment someone adds a direct model query here, the
+  delegation stops being true and this fails.
+*/
+const SCOPED_BY_DELEGATION = {
+  "stock.report.service.js": "stock.vendor.ledger.service.js",
+};
+
+/*
+  Collections with no scope fields of their own, which inherit visibility from
+  a parent that was already scoped.
+
+  The adjustment collection is the case: a credit note is exactly as visible as
+  the invoice it sits on, so it is deliberately absent from the registry and is
+  only ever queried for invoice ids a scoped query returned — see
+  StockVendorLedgerService._loadFacts and StockReportService._adjustmentRows.
+
+  Named rather than pattern-matched, so adding one is a deliberate, reviewable
+  act. This is a reviewed exemption and not a proof: the filter is built as a
+  variable, so no static check here can show the parent constraint is present.
+  What it does guarantee is that a delegating service cannot quietly start
+  querying a SCOPED collection instead.
+*/
+const SCOPE_INHERITED_FROM_PARENT = new Set(["StockInvoiceAdjustmentModel"]);
+
+const SCOPE_HELPER = /applyDataScope|isWithinDataScope|resolveDimensionAllowList/;
 
 for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
   if (!Object.keys(dims).length) continue; // unscoped by design
@@ -114,7 +175,31 @@ for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
     continue;
   }
   const src = fs.readFileSync(full, "utf8");
-  if (!/applyDataScope|isWithinDataScope|resolveDimensionAllowList/.test(src)) {
+
+  const delegate = SCOPED_BY_DELEGATION[file];
+  if (delegate) {
+    const offenders = [...new Set(src.match(/\bStock[A-Za-z]*Model\b/g) || [])].filter(
+      (m) => !SCOPE_INHERITED_FROM_PARENT.has(m)
+    );
+    if (offenders.length) {
+      failures.push(
+        `services/${file} is registered as scoped-by-delegation to ${delegate}, but it ` +
+          `references ${offenders.join(", ")} directly — it must apply the data scope ` +
+          `itself, or the collection must be listed in SCOPE_INHERITED_FROM_PARENT ` +
+          `with a reason.`
+      );
+    }
+    const delegateFull = path.join(ROOT, "services", delegate);
+    const delegateSrc = fs.existsSync(delegateFull) ? fs.readFileSync(delegateFull, "utf8") : "";
+    if (!SCOPE_HELPER.test(delegateSrc)) {
+      failures.push(
+        `services/${file} delegates the scope for "${key}" to ${delegate}, which does not apply it.`
+      );
+    }
+    continue;
+  }
+
+  if (!SCOPE_HELPER.test(src)) {
     failures.push(
       `services/${file} owns scoped module "${key}" but never calls the data-scope helper — ` +
         `its queries would return every user's rows.`
@@ -138,6 +223,15 @@ const OWN_MODEL = {
   "tracking-orders": "StockTrackingOrderModel",
   "purchase-orders": "StockPurchaseOrderModel",
   invoices: "StockInvoiceModel",
+  "invoice-list": "StockInvoiceModel",
+  payments: "StockInvoiceModel",
+  "payment-approval": "StockInvoiceModel",
+  "vendor-ledger": "StockInvoiceModel",
+  "billing-report": "StockInvoiceModel",
+  "outstanding-report": "StockInvoiceModel",
+  "paid-report": "StockInvoiceModel",
+  "transaction-register": "StockInvoiceModel",
+  "invoice-breakup": "StockInvoiceModel",
 };
 
 // Internal mechanics that legitimately see every row. Each is named here

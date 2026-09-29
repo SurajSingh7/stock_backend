@@ -32,6 +32,42 @@ const MODULE_DEFINITIONS = [
   // separately from the permissions to actually drop something.
   { key: "not-required", name: "Not Required", actions: withMenu(["READ"]) },
   { key: "invoices", name: "Invoices", actions: withMenu(["CREATE", "READ", "UPDATE", "APPROVE", "REJECT"]) },
+  // The payment-side list of approved invoices — read by the stock team, who
+  // have no business approving invoices. Its own module so "who can see what
+  // we owe" and "who can move a payment due date" are granted separately from
+  // the receiving permissions. The nav entry for it has existed unbacked since
+  // before this module did (layouts/navbar/NavCategories.js, moduleKey
+  // "invoice-list"), which is why nobody could see it.
+  { key: "invoice-list", name: "Invoice List", actions: withMenu(["READ", "SCHEDULE_PAYMENT"]) },
+  // The account team's screen. Three separate write actions on purpose: the
+  // person who clears a credit note need not be the one who asks for payment
+  // approval, nor the one who records the money leaving.
+  { key: "payments", name: "Payments", actions: withMenu(["READ", "MANAGE_ADJUSTMENT", "REQUEST_PAYMENT_APPROVAL", "ENTER_PAYMENT"]) },
+  // The approval team's screen. Read and decide, nothing else — they approve a
+  // payable somebody else computed, so they get no action that can change one.
+  { key: "payment-approval", name: "Payment Approval", actions: withMenu(["READ", "APPROVE"]) },
+  // READ only, and that is the whole module: a ledger reports what already
+  // happened elsewhere. Its own key because a vendor statement is shown to a
+  // wider audience than the desk that records payments.
+  { key: "vendor-ledger", name: "Vendor Ledger", actions: withMenu(["READ"]) },
+
+  /*
+    Reports — read-only, one module each.
+
+    Four keys rather than one "reports" module with four actions, because the
+    nav advertises a module by VIEW_MENU: one shared key would make all four
+    pages appear or vanish together, and "show them Outstanding but not the
+    unit prices in Invoice Breakup" is a real thing an organisation asks for.
+
+    Billing and Outstanding read the same data as Vendor Ledger. They still
+    get their own keys so the data scope can differ per report — see the note
+    in config/data.scope.registry.js.
+  */
+  { key: "billing-report", name: "Billing Report", actions: withMenu(["READ"]) },
+  { key: "outstanding-report", name: "Outstanding Report", actions: withMenu(["READ"]) },
+  { key: "paid-report", name: "Paid", actions: withMenu(["READ"]) },
+  { key: "transaction-register", name: "Transaction Register", actions: withMenu(["READ"]) },
+  { key: "invoice-breakup", name: "Invoice Breakup", actions: withMenu(["READ"]) },
   { key: "branches", name: "Branches", actions: withMenu(STANDARD_ACTIONS) },
   { key: "gst-rates", name: "GST Rates", actions: withMenu(STANDARD_ACTIONS) },
   { key: "transfer-requests", name: "Transfer Requests", actions: withMenu(["CREATE", "READ", "PROCESS", "REJECT"]) },

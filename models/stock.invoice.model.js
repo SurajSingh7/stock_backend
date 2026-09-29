@@ -1,5 +1,11 @@
 import mongoose from "mongoose";
-import { INVOICE_STATUS, INVOICE_STATUS_ARRAY } from "../constants/stock.enums.js";
+import {
+  INVOICE_STATUS,
+  INVOICE_STATUS_ARRAY,
+  PAYMENT_APPROVAL_STATUS_ARRAY,
+  PAYMENT_MODE_ARRAY,
+  PAYMENT_STATE_OVERRIDE_ARRAY,
+} from "../constants/stock.enums.js";
 import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const { Schema } = mongoose;
@@ -102,6 +108,166 @@ const invoiceSchema = new Schema(
     reviewedByName: { type: String, trim: true, default: "" },
     reviewedAt: { type: Date, default: null },
 
+    /*
+      ── Payment side ──────────────────────────────────────────────────────
+      Everything below belongs to the payment lifecycle, which is separate
+      from `status` above: that one says whether the goods were accepted,
+      these say whether they have been paid for.
+
+      Embedded rather than given its own collection because one invoice has
+      exactly one payment journey, and every screen that shows the journey is
+      already looking at the invoice.
+    */
+
+    /*
+      When WE decided to pay this, when that is not simply when it falls due.
+
+      The due date itself is never stored: it is invoiceDate + the term's days,
+      fixed by the contract, and it is what the vendor's own books say. This
+      field overrides only when the invoice enters the account team's payable
+      queue — earlier when a vendor asks to be paid ahead of terms, later when
+      the money is not there yet.
+
+          Net 90, billed 1 Aug   ->  due 30 Oct, always
+          scheduled 25 Aug        ->  payable from 25 Aug   (early)
+          scheduled 9 Nov         ->  payable from 9 Nov    (deferred)
+
+      Null means "on the due date", which is the normal case — so an invoice
+      nobody has touched behaves exactly as the terms say without anything
+      being written here.
+
+      Locked once the invoice is payable and once an approval has been asked
+      for: after either, moving it would pull work out from under somebody.
+    */
+    paymentScheduledOn: { type: Date, default: null },
+
+    /*
+      Every change to that date. An array, not a "changedAt" stamp, because
+      this field decides when money leaves — "who moved this, and to what"
+      has to stay answerable however many times it moves.
+    */
+    paymentScheduleHistory: {
+      type: [
+        new Schema(
+          {
+            from: { type: Date, default: null },
+            to: { type: Date, default: null },
+            by: { type: Schema.Types.ObjectId, default: null },
+            byName: { type: String, trim: true, default: "" },
+            at: { type: Date, default: null },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+
+    /*
+      Whether this invoice has been cleared to pay — and ONLY that.
+
+      How much has been paid is a separate question, answered by summing
+      `payments` below, and "not due"/"due" is a third, worked out from
+      invoiceDate + termDays. Keeping all three apart is what lets the
+      Payments screen show "Approved" and "Partly paid" at the same time;
+      one combined field could only ever say one of them.
+
+      Null until somebody asks for approval.
+    */
+    paymentApprovalStatus: {
+      type: String,
+      enum: [...PAYMENT_APPROVAL_STATUS_ARRAY, null],
+      default: null,
+    },
+
+    /*
+      The approval round trip: accounts ask, the approval team decides.
+
+      One object, not an array, because only one request is ever open. A
+      rejection leaves paymentApprovalStatus on REJECTED rather than clearing
+      it — "was sent back, and why" is a different fact from "has never been
+      sent", and the Payments screen shows both differently. rejectedReason is
+      what the next attempt has to answer, so it is kept until that next
+      request overwrites it.
+    */
+    paymentApproval: {
+      type: new Schema(
+        {
+          sentBy: { type: Schema.Types.ObjectId, default: null },
+          sentByName: { type: String, trim: true, default: "" },
+          sentAt: { type: Date, default: null },
+          // The payable AS SENT. The approval team agreed to a number, and
+          // that number has to stay readable even though adjustments could
+          // later change what is computed.
+          payableAtRequest: { type: Number, default: 0 },
+          reviewedBy: { type: Schema.Types.ObjectId, default: null },
+          reviewedByName: { type: String, trim: true, default: "" },
+          reviewedAt: { type: Date, default: null },
+          rejectedReason: { type: String, trim: true, default: "" },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+
+    /*
+      Overriding what the amounts say the state is.
+
+      Normally "paid" or "partly paid" is simply paidTotal against payable, and
+      needs no field. But a real settlement breaks that arithmetic: the vendor
+      agrees to take 44,000 on a 45,000 invoice, so it is PAID with 1,000 still
+      outstanding. That is a decision, not a sum, and only a stored value can
+      carry it.
+
+      Null means "whatever the amounts say", which is the normal case.
+
+      The reason is not optional when this is set. Somebody will ask why an
+      invoice closed 1,000 short, and the answer has to be here rather than in
+      whoever remembers the phone call.
+    */
+    paymentStateOverride: {
+      type: String,
+      enum: [...PAYMENT_STATE_OVERRIDE_ARRAY, null],
+      default: null,
+    },
+    paymentOverrideReason: { type: String, trim: true, default: "" },
+    paymentOverrideByName: { type: String, trim: true, default: "" },
+    paymentOverrideAt: { type: Date, default: null },
+
+    /*
+      What has actually been paid. An ARRAY because a bill can be settled in
+      instalments, and because ONE settlement can arrive down several routes —
+      30,000 by NEFT and 15,000 by UPI on the same day are two bank entries
+      with two references and two receipts, so they are two rows here.
+
+      A single paidAmount would lose all of that, and turning it into an array
+      later would mean migrating every paid invoice.
+
+      paidTotal is never stored: it is the sum of these, worked out on read,
+      so it cannot drift away from the rows it is meant to total.
+    */
+    payments: {
+      type: [
+        new Schema(
+          {
+            amount: { type: Number, required: true, min: 0 },
+            mode: { type: String, enum: PAYMENT_MODE_ARRAY, required: true },
+            paidOn: { type: Date, required: true },
+            refNo: { type: String, trim: true, default: "" },
+            remarks: { type: String, trim: true, default: "" },
+            // Relative public paths, same convention as invoiceFile above.
+            // An array because one payment can need more than one proof —
+            // a cheque photo and the bank slip for the same transfer.
+            proofs: { type: [String], default: [] },
+            by: { type: Schema.Types.ObjectId, default: null },
+            byName: { type: String, trim: true, default: "" },
+            at: { type: Date, default: null },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+
     isActive: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null },
   },
@@ -112,6 +278,8 @@ invoiceSchema.index({ trackingOrderId: 1, status: 1 });
 invoiceSchema.index({ poId: 1 });
 invoiceSchema.index({ vendorId: 1 });
 invoiceSchema.index({ status: 1, isActive: 1 });
+// The Invoice List reads approved invoices ordered by when payment is due.
+invoiceSchema.index({ status: 1, isActive: 1, paymentScheduledOn: 1 });
 
 
 // who created / last touched this — see the plugin for why it is a hook

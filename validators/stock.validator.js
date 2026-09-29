@@ -9,6 +9,8 @@ import {
   NOTIFICATION_CHANNEL_ARRAY,
   NOTIFICATION_CHANNEL,
   BRANCH_ROLE_ARRAY,
+  ADJUSTMENT_TYPE_ARRAY,
+  PAYMENT_MODE_ARRAY,
 } from "../constants/stock.enums.js";
 import { assertWarrantyMonths } from "../helpers/stock.warranty.helper.js";
 
@@ -532,6 +534,164 @@ export const validateResetOrder = (body) => {
   the order is identified by the URL and every quantity is read from the
   invoices server-side, so a reason is the whole body.
 */
+/*
+  Moving the payment clock. Only the date is accepted here — the window it has
+  to fall inside is relative to the invoice, so that check belongs in the
+  service where the invoice is loaded, not in a body validator.
+*/
+/*
+  The rows an adjustment carries, shared by create and update.
+
+  Only the SHAPE is checked here. What is actually claimable — which units are
+  still in stock, whether the amount fits inside the payable — needs the
+  invoice and lives in the service.
+
+  No total is ever accepted: the server adds up what was picked. A total sent
+  by a client is a total a client can edit.
+*/
+const assertAdjustmentRows = (body) => {
+  if (body.lines !== undefined) {
+    if (!Array.isArray(body.lines)) throw new Error("lines must be an array");
+    body.lines.forEach((l, i) => {
+      assertObjectId(l?.quotationItemId, `Line ${i + 1} product`);
+      if (l.inventoryItemIds !== undefined) {
+        if (!Array.isArray(l.inventoryItemIds)) throw new Error(`Line ${i + 1}: inventoryItemIds must be an array`);
+        l.inventoryItemIds.forEach((id, k) => assertObjectId(id, `Line ${i + 1} unit ${k + 1}`));
+      }
+      if (l.quantity !== undefined && (Number.isNaN(Number(l.quantity)) || Number(l.quantity) < 0)) {
+        throw new Error(`Line ${i + 1}: quantity must be 0 or more`);
+      }
+    });
+  }
+
+  if (body.extras !== undefined) {
+    if (!Array.isArray(body.extras)) throw new Error("extras must be an array");
+    body.extras.forEach((e, i) => {
+      const amt = Number(e?.amount);
+      if (Number.isNaN(amt) || amt < 0) throw new Error(`Extra row ${i + 1}: amount must be 0 or more`);
+    });
+  }
+
+};
+
+export const validateCreateAdjustment = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!ADJUSTMENT_TYPE_ARRAY.includes(body.type)) {
+    throw new Error(`type must be one of: ${ADJUSTMENT_TYPE_ARRAY.join(", ")}`);
+  }
+  if (!body.reason || !String(body.reason).trim()) throw new Error("A reason is required");
+  assertAdjustmentRows(body);
+
+  // MISC has no items to claim against, so an amount row is the only thing
+  // that can carry it. Caught here rather than as a bare "amount must be
+  // greater than 0" after the service has done its work.
+  if (body.type === "MISC" && !(body.extras || []).some((e) => Number(e?.amount) > 0)) {
+    throw new Error("A misc charge needs at least one amount row");
+  }
+};
+
+/*
+  Editing one. Same shape as a create minus the type, which cannot change: a
+  credit note does not become a misc charge, it gets withdrawn and a misc
+  charge raised instead.
+*/
+export const validateUpdateAdjustment = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (body.type !== undefined) throw new Error("An adjustment's type cannot be changed");
+  assertAdjustmentRows(body);
+};
+
+/*
+  The approval team's verdict.
+
+  A rejection needs a reason; an approval does not. Rejecting means "something
+  on this is wrong", and the person who has to fix it cannot act on silence.
+*/
+export const validatePaymentApprovalDecision = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!["APPROVED", "REJECTED"].includes(body.decision)) {
+    throw new Error("decision must be APPROVED or REJECTED");
+  }
+  if (body.decision === "REJECTED" && !String(body.reason || "").trim()) {
+    throw new Error("A reason is required to reject a payment approval");
+  }
+};
+
+/*
+  Recording a payment, in however many splits it arrived in.
+
+  Arrives as multipart (the proof files ride along), so the JSON half comes in
+  as a `data` string the controller parses before this sees it.
+
+  remarks is deliberately OPTIONAL: accounts enter these in bulk and a
+  mandatory note on a plain NEFT transfer becomes a field people fill with a
+  full stop, which is worse than an empty one.
+
+  Whether the total fits inside the balance needs the invoice, so that check
+  lives in the service.
+*/
+export const validateRecordPayment = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+
+  if (!body.paidOn) throw new Error("A payment date is required");
+  if (Number.isNaN(new Date(body.paidOn).getTime())) throw new Error("Invalid payment date");
+  // A payment cannot have left in the future.
+  if (new Date(body.paidOn) > new Date()) throw new Error("A payment date cannot be in the future");
+
+  if (!Array.isArray(body.splits) || body.splits.length === 0) {
+    throw new Error("At least one payment split is required");
+  }
+  body.splits.forEach((s, i) => {
+    const amount = Number(s?.amount);
+    if (Number.isNaN(amount) || amount <= 0) {
+      throw new Error(`Split ${i + 1}: an amount greater than 0 is required`);
+    }
+    if (!PAYMENT_MODE_ARRAY.includes(s?.mode)) {
+      throw new Error(`Split ${i + 1}: mode must be one of ${PAYMENT_MODE_ARRAY.join(", ")}`);
+    }
+  });
+
+  /*
+    The entered total has to match what the splits add up to.
+
+    Checked because the screen shows both, and a form that saves a different
+    figure from the one on screen is the kind of bug nobody finds until a bank
+    statement will not reconcile.
+  */
+  if (body.total !== undefined) {
+    const total = Number(body.total);
+    const sum = body.splits.reduce((s, x) => s + (Number(x?.amount) || 0), 0);
+    if (Math.abs(total - sum) > 0.01) {
+      throw new Error(`The splits add up to ${sum}, which does not match the total of ${total}`);
+    }
+  }
+
+  if (body.stateOverride !== undefined && body.stateOverride !== null) {
+    if (!["PAID", "PARTIAL"].includes(body.stateOverride)) {
+      throw new Error("A payment state can only be forced to Paid or Partial");
+    }
+  }
+};
+
+/*
+  Scheduling a payment. Only the shape is checked here.
+
+  `onDueDate: true` clears any override and needs no date with it — that is how
+  a schedule is undone rather than merely moved again.
+
+  Whether a date is ALLOWED — not in the past, and the invoice neither already
+  payable nor in the approval flow — needs the invoice, so those checks live in
+  the service where it is loaded rather than in a body validator.
+*/
+export const validateSchedulePayment = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (body.onDueDate) return;
+  if (!body.scheduledOn) throw new Error("A schedule date is required");
+  if (Number.isNaN(new Date(body.scheduledOn).getTime())) {
+    throw new Error("Invalid schedule date");
+  }
+};
+
 export const validateClosureDecision = (body) => {
   if (!body || typeof body !== "object") throw new Error("Request body is required");
   if (!body.reason || !String(body.reason).trim()) throw new Error("A reason is required");

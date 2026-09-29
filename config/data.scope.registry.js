@@ -59,6 +59,35 @@ export const DATA_SCOPE_REGISTRY = {
 
   // ── All three ────────────────────────────────────────────────────────────
   invoices: { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+  // The payment-side view of the same documents. Its own key, not a reuse of
+  // `invoices`, because it is a different module with a different audience —
+  // which means an admin can give the stock team a wide branch scope here
+  // while their scope on receiving stays narrow, or the other way round.
+  // Same dimensions, so the same knobs are available.
+  "invoice-list": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+  // The same invoices again, once per team that looks at them. Separate keys
+  // are the point: accounts normally hold every branch here while the stock
+  // team holds one, and the approval team sits somewhere between. Same
+  // dimensions, so the same knobs exist for each.
+  payments: { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+  "payment-approval": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+  "vendor-ledger": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+
+  /*
+    The report pages. Same invoices, same scope dimensions as the ledger —
+    they ARE the ledger's data, read with different columns.
+
+    Registered separately rather than reusing "vendor-ledger" because the
+    scope is resolved per module in requirePermission: giving each report its
+    own key is what lets one person be branch-limited on Billing while seeing
+    every branch on Outstanding. Sharing a key would silently make that
+    impossible.
+  */
+  "billing-report": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+  "outstanding-report": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+  "paid-report": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+  "transaction-register": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+  "invoice-breakup": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
 };
 
 /**

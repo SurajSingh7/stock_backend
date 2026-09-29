@@ -18,6 +18,10 @@ import StockTransferRequestController from "../controllers/stock.transfer.reques
 import StockAccessControlController from "../controllers/stock.access.control.controller.js";
 import StockAuditLogController from "../controllers/stock.audit.log.controller.js";
 import { authenticate, requireAdmin } from "../middlewares/stock.auth.middleware.js";
+import StockInvoicePaymentController from "../controllers/stock.invoice.payment.controller.js";
+import StockVendorLedgerController from "../controllers/stock.vendor.ledger.controller.js";
+import StockReportController from "../controllers/stock.report.controller.js";
+import { uploadPaymentProofs } from "../helpers/stock.payment.upload.helper.js";
 import { requirePermission, requirePermissionForQueryModule } from "../middlewares/stock.permission.middleware.js";
 
 const router = express.Router();
@@ -183,6 +187,92 @@ router.put(
 );
 router.patch("/invoices/:id/approve", authenticate, requirePermission("invoices", "APPROVE"), StockInvoiceController.approveInvoice);
 router.patch("/invoices/:id/reject", authenticate, requirePermission("invoices", "REJECT"), StockInvoiceController.rejectInvoice);
+
+// ─── Invoice List · stock team (payment side) ────────────────────────────────
+// A different module from "invoices" on purpose: this is the stock team's view
+// of what is owed and when, and they hold no invoice-approval permissions. The
+// nav entry for it (layouts/navbar/NavCategories.js, moduleKey "invoice-list")
+// existed long before the module did, which is why it was invisible to
+// everyone. Each write carries its own action because each is a different
+// decision: moving a due date is not the same as claiming money back.
+router.get("/invoice-list", authenticate, requirePermission("invoice-list", "READ"), StockInvoicePaymentController.getList);
+// Read-only on adjustments: the Invoice List shows WHY payable differs from
+// the invoice, but raising and changing them is the account team's job.
+router.get("/invoice-list/:id/adjustments", authenticate, requirePermission("invoice-list", "READ"), StockInvoicePaymentController.getAdjustments);
+router.patch("/invoice-list/:id/schedule", authenticate, requirePermission("invoice-list", "SCHEDULE_PAYMENT"), StockInvoicePaymentController.schedulePayment);
+
+// ─── Payments · account team ─────────────────────────────────────────────────
+// Same documents, different module: an admin can give accounts every branch
+// here while the stock team stays on its own. MANAGE_ADJUSTMENT and
+// ENTER_PAYMENT are separate from REQUEST_PAYMENT_APPROVAL so the person who
+// raises a credit note need not be the one who releases the money.
+router.get("/payments", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getPaymentsList);
+router.get("/payments/:id/adjustments", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getAdjustmentsForAccounts);
+router.get("/payments/:id/creditable-items", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getCreditableItems);
+// Raised by accounts and in force at once — there is nobody left to ask.
+router.post("/payments/:id/adjustments", authenticate, requirePermission("payments", "MANAGE_ADJUSTMENT"), StockInvoicePaymentController.createAdjustment);
+// :id below is the ADJUSTMENT, not the invoice. Editing reverses the old one
+// and applies the new one in a single transaction, stock included, so it is a
+// write of the same weight as creating — same permission.
+router.patch("/payments/adjustments/:id", authenticate, requirePermission("payments", "MANAGE_ADJUSTMENT"), StockInvoicePaymentController.updateAdjustment);
+router.delete("/payments/adjustments/:id", authenticate, requirePermission("payments", "MANAGE_ADJUSTMENT"), StockInvoicePaymentController.deleteAdjustment);
+router.patch("/payments/:id/send-for-approval", authenticate, requirePermission("payments", "REQUEST_PAYMENT_APPROVAL"), StockInvoicePaymentController.sendForApproval);
+// Multipart: proof files ride along with the amount, so multer runs before the
+// handler and the handler deletes what it wrote if the transaction aborts.
+// Multipart: the JSON travels in `data`, and each split's proof files arrive as
+// split_<index>_proofs so every bank leg keeps its own receipt.
+router.post(
+  "/payments/:id/record",
+  authenticate,
+  requirePermission("payments", "ENTER_PAYMENT"),
+  uploadPaymentProofs,
+  StockInvoicePaymentController.recordPayment
+);
+
+// ─── Payment Approval · approval team ────────────────────────────────────────
+// Read-and-decide only. This team never touches adjustments or amounts — they
+// approve a payable somebody else computed, which is why they get no action
+// that can change one.
+router.get("/payment-approval", authenticate, requirePermission("payment-approval", "READ"), StockInvoicePaymentController.getApprovalList);
+// Read-only view of the adjustments behind a payable. No write counterpart:
+// this team agrees to a number, it never changes one.
+router.get("/payment-approval/:id/adjustments", authenticate, requirePermission("payment-approval", "READ"), StockInvoicePaymentController.getAdjustmentsForApproval);
+router.patch("/payment-approval/:id/decide", authenticate, requirePermission("payment-approval", "APPROVE"), StockInvoicePaymentController.decideApproval);
+
+// ─── Vendor Ledger ───────────────────────────────────────────────────────────
+// Read-only by design: every figure here already happened on an invoice, a
+// credit note or a payment. A write action would be a second way to change a
+// balance, and then two places to look when one is wrong.
+//
+// Its own module, not a corner of "payments": a ledger is what gets shown to a
+// vendor and to management, which is a wider audience than the desk that
+// records payments.
+/*
+  Reports. Four modules, four routes, each checked against its own key so the
+  data scope can differ per report.
+
+  /reports/billing and /reports/outstanding deliberately hit the same service
+  method as /vendor-ledger below. They are the same figures with different
+  columns and different default filters — the alternative was a second copy of
+  that arithmetic, and then two answers to one question.
+*/
+router.get("/reports/billing", authenticate, requirePermission("billing-report", "READ"), StockReportController.getBilling);
+router.get("/reports/outstanding", authenticate, requirePermission("outstanding-report", "READ"), StockReportController.getOutstanding);
+
+// The invoices behind one vendor's row. Guarded by the report that links to
+// them, so a drill-down never 403s on somebody who can see the row above it.
+router.get("/reports/billing/:vendorId/invoices", authenticate, requirePermission("billing-report", "READ"), StockReportController.getBillingInvoices);
+router.get("/reports/outstanding/:vendorId/invoices", authenticate, requirePermission("outstanding-report", "READ"), StockReportController.getOutstandingInvoices);
+// One route, four tabs: ?type=ALL|PAYMENT|CREDIT_NOTE|MISC
+router.get("/reports/paid", authenticate, requirePermission("paid-report", "READ"), StockReportController.getPaid);
+router.get("/reports/paid/:vendorId/payments", authenticate, requirePermission("paid-report", "READ"), StockReportController.getPaidPayments);
+router.get("/reports/transactions", authenticate, requirePermission("transaction-register", "READ"), StockReportController.getTransactions);
+router.get("/reports/invoice-breakup", authenticate, requirePermission("invoice-breakup", "READ"), StockReportController.getInvoiceBreakup);
+
+router.get("/vendor-ledger", authenticate, requirePermission("vendor-ledger", "READ"), StockVendorLedgerController.getVendorSummary);
+router.get("/vendor-ledger/:vendorId", authenticate, requirePermission("vendor-ledger", "READ"), StockVendorLedgerController.getVendorLedger);
+router.get("/vendor-ledger/:vendorId/invoices", authenticate, requirePermission("vendor-ledger", "READ"), StockVendorLedgerController.getVendorInvoices);
+router.get("/vendor-ledger/:vendorId/month", authenticate, requirePermission("vendor-ledger", "READ"), StockVendorLedgerController.getMonthDetail);
 
 // ─── Branches ───────────────────────────────────────────────────────────────
 // Branch PICKER for any module's own screen — gated on that module's READ, not

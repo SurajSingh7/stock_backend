@@ -27,6 +27,23 @@ export const ITEM_STATUS = {
   IN_REPAIR: "IN_REPAIR",
   SCRAPPED: "SCRAPPED",
   IN_TRANSIT: "IN_TRANSIT",
+  /*
+    Came in, was accepted into stock, and was later found defective — and a
+    credit note took the money for it back off the invoice.
+
+    Set only by accepting a CREDIT_NOTE adjustment, in the same transaction, so
+    the books and the shelf never disagree. Without it a credited item would
+    sit in stock as AVAILABLE: not paid for, but still transferable — which is
+    exactly the mismatch nobody notices until an audit.
+
+    Deliberately NOT called RETURNED. This says what CONDITION the unit is in;
+    returning it to the vendor is a movement, and a separate flow that does not
+    exist yet. FAULTY is where that flow will start, not a dead end:
+        FAULTY -> SCRAPPED   (written off)
+        FAULTY -> RETURNED   (future: sent back, replacement expected)
+        FAULTY -> AVAILABLE  (turned out fine, or repaired)
+  */
+  FAULTY: "FAULTY",
 };
 
 export const ITEM_STATUS_ARRAY = Object.values(ITEM_STATUS);
@@ -235,6 +252,144 @@ export const ENTITY_SCOPE_ARRAY = Object.values(ENTITY_SCOPE);
 // with its own (e.g. purchase-orders adds APPROVE/REJECT/SEND_MAIL) — see
 // each entry in seeders/stock.module.seeder.js.
 export const STANDARD_ACTIONS = ["CREATE", "READ", "UPDATE", "DELETE", "RESTORE"];
+
+/*
+  Payment terms, as the number of days they actually mean.
+
+  The term itself is a STRING on the vendor, snapshotted onto the purchase
+  order (po.paymentTerms). Turning it into a due date needs this mapping, and
+  that is business logic — so it lives here, server-side, and is never
+  duplicated into a screen. The frontend already carries the LABELS twice
+  (Podetailsview, Vendorform); the day counts must not follow them there.
+
+  IMMEDIATE is 0, not "no term": payment is due the day the clock starts.
+*/
+export const PAYMENT_TERM_DAYS = {
+  IMMEDIATE: 0,
+  NET_30: 30,
+  NET_60: 60,
+  NET_90: 90,
+};
+
+// Unknown/blank terms fall back to 0 — due immediately is the safe default:
+// it surfaces the invoice for someone to look at, rather than hiding it
+// forever behind a term nobody configured.
+export const termDays = (term) => PAYMENT_TERM_DAYS[term] ?? 0;
+
+/*
+  Why a payment may only be SCHEDULED from today onwards.
+
+  The due date itself is never scheduled — it is invoiceDate + the term's days,
+  fixed by the contract. What is scheduled is when the invoice reaches the
+  account team's payable queue: earlier when a vendor asks to be paid ahead of
+  terms, later when the money is not there yet.
+
+  Scheduling into the past is meaningless — it would manufacture overdue days
+  for a decision taken today. Forward has no limit on purpose: "we will pay
+  after 100 days, not 90" is a real instruction and a window could not express
+  it.
+
+  What stops the due date being pushed away for ever is not a window but the
+  two locks in StockInvoicePaymentService.schedulePayment: once the invoice is
+  payable, and once an approval has been asked for, the date is frozen. Plus
+  every change is kept, with who made it.
+*/
+
+/*
+  The payment side of an invoice is TWO independent questions, and they get two
+  independent answers. One field for both was the original mistake: the moment
+  a part-payment landed, "was this ever approved" became unanswerable, because
+  the single status had already moved on to PARTLY_PAID.
+
+      paymentApprovalStatus   stored     has it been cleared to pay
+      paymentState            derived    how much of it has been paid
+
+  Both are shown side by side on the Payments screen, which is only possible
+  because they are separate.
+*/
+export const PAYMENT_APPROVAL_STATUS = {
+  PENDING: "PENDING",     // sent to the approval team, awaiting a verdict
+  APPROVED: "APPROVED",   // cleared to pay
+  REJECTED: "REJECTED",   // sent back — fix the adjustments and send again
+};
+export const PAYMENT_APPROVAL_STATUS_ARRAY = Object.values(PAYMENT_APPROVAL_STATUS);
+
+/*
+  Never stored: it is paidTotal against payable, worked out on read. Storing it
+  would mean a value that has to be kept in step with the payments array, and
+  the two would eventually disagree.
+*/
+export const PAYMENT_STATE = {
+  UNPAID: "UNPAID",
+  PARTIAL: "PARTIAL",
+  PAID: "PAID",
+};
+export const PAYMENT_STATE_ARRAY = Object.values(PAYMENT_STATE);
+
+/*
+  Only these two can be forced by hand. UNPAID is absent on purpose: an
+  invoice with money against it is not unpaid, and saying so would be a lie the
+  payments array immediately contradicts.
+*/
+export const PAYMENT_STATE_OVERRIDE_ARRAY = [PAYMENT_STATE.PAID, PAYMENT_STATE.PARTIAL];
+
+/*
+  Due-date filters, also derived. "Payable now" is what an accounts desk opens
+  the screen for — anything whose clock has run out — so it is the default.
+*/
+export const PAYABLE_FILTER = {
+  ALL: "ALL",
+  NOW: "NOW",      // dueDate has arrived or passed
+  LATER: "LATER",  // still inside its term
+};
+
+// Due-side tabs on the Invoice List, which reads the same derived dates.
+export const DUE_FILTER = {
+  ALL: "ALL",
+  NOT_DUE: "NOT_DUE",
+  DUE: "DUE",
+  OVERDUE: "OVERDUE",
+};
+
+/*
+  ── Invoice adjustments ──────────────────────────────────────────────────
+  Anything that changes what is actually payable on an already-approved
+  invoice. One collection, one type field, because the kinds of adjustment
+  will keep growing — a second array per kind would mean a schema change
+  every time.
+*/
+export const ADJUSTMENT_TYPE = {
+  // Goods were defective. Carries the items it is claimed against, and
+  // accepting it also marks those items FAULTY.
+  CREDIT_NOTE: "CREDIT_NOTE",
+  // Anything else with an amount and a reason — freight, handling, a charge
+  // the vendor passed on. No items, no stock effect.
+  MISC: "MISC",
+};
+export const ADJUSTMENT_TYPE_ARRAY = Object.values(ADJUSTMENT_TYPE);
+
+/*
+  Which way the money moves. Stored explicitly rather than derived from the
+  type: today CREDIT_NOTE is always DEDUCT and MISC always ADD, but the next
+  type added may be either, and a stored direction means that type needs no
+  change to how payable is computed.
+*/
+export const ADJUSTMENT_DIRECTION = {
+  DEDUCT: "DEDUCT",
+  ADD: "ADD",
+};
+export const ADJUSTMENT_DIRECTION_ARRAY = Object.values(ADJUSTMENT_DIRECTION);
+
+// How a payment actually left. An enum, not free text, because "NEFT" typed
+// six different ways cannot be reported on.
+export const PAYMENT_MODE = {
+  NEFT: "NEFT",
+  RTGS: "RTGS",
+  CHEQUE: "CHEQUE",
+  CASH: "CASH",
+  UPI: "UPI",
+};
+export const PAYMENT_MODE_ARRAY = Object.values(PAYMENT_MODE);
 
 // ─── Notification master ───────────────────────────────────────────────────
 // Which line of an outgoing vendor mail a contact belongs on. Held per
