@@ -855,10 +855,19 @@ export const validateCreateInvoice = (body) => {
   if (extraCharges !== undefined) {
     if (!Array.isArray(extraCharges)) throw new Error("extraCharges must be an array");
     extraCharges.forEach((c, idx) => {
-      if (!isNonNegativeNumber(c.amount)) {
-        throw new Error(`Extra charge ${idx + 1}: amount must be 0 or greater`);
+      // Required on every charge, billed or note-only — a charge with no
+      // amount says nothing a plain invoice note couldn't.
+      if (typeof c.amount !== "number" || !Number.isFinite(c.amount) || c.amount <= 0) {
+        throw new Error(`Extra charge ${idx + 1}: amount is required and must be greater than 0`);
+      }
+      if (c.includeInBilling !== undefined && typeof c.includeInBilling !== "boolean") {
+        throw new Error(`Extra charge ${idx + 1}: includeInBilling must be true or false`);
       }
     });
+  }
+
+  if (body.notes !== undefined && typeof body.notes !== "string") {
+    throw new Error("Notes must be text");
   }
 };
 

@@ -640,11 +640,13 @@ export default class StockReportService {
         extraCharges: (inv.extraCharges || []).map((c) => ({
           note: c.note || "",
           amount: c.amount || 0,
+          includeInBilling: c.includeInBilling !== false,
         })),
 
         totals: {
           basicAmount: totals.basicAmount,
           extraChargesTotal: totals.extraChargesTotal,
+          nonBilledChargesTotal: totals.nonBilledChargesTotal,
           cgstAmount: totals.cgstAmount,
           sgstAmount: totals.sgstAmount,
           igstAmount: totals.igstAmount,

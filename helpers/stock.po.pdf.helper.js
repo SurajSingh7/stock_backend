@@ -3,6 +3,7 @@ import path from "path";
 import PDFDocument from "pdfkit";
 
 import { getLogger } from "./logger.helper.js";
+import { datedSubdir, deleteStoredUpload } from "./stock.upload.path.helper.js";
 import { PO_TAX_TYPE } from "../constants/stock.enums.js";
 
 const log = getLogger(import.meta.url);
@@ -11,6 +12,10 @@ const log = getLogger(import.meta.url);
   Where PO PDFs are written. Same convention as product images: files live under
   the top-level "uploads" root (process.cwd()/uploads), which app.js serves
   statically at /uploads — not under public/.
+
+  Each PDF goes under po/<YYYY>/<MM>/ of the PO's CREATION date, not today's:
+  an edited PO regenerates its PDF, and keying on createdAt keeps that rewrite
+  in the same folder instead of scattering copies across months.
 */
 const UPLOADS_ROOT = process.cwd();
 const PO_DIR_REL = "/uploads/stock/po";
@@ -70,16 +75,17 @@ const BOTTOM = PAGE_H - MARGIN - FOOTER_RESERVE;
 
 /*
   Generate (or regenerate) a PO PDF. Returns the RELATIVE public path
-  (e.g. "/uploads/stock/po/PO-2026-0001.pdf"). Overwrites if it already exists,
-  so a rejected → edited PO regenerates cleanly under the same name.
+  (e.g. "/uploads/stock/po/2026/10/PO-2026-0001.pdf"). Overwrites if it already
+  exists, so a rejected → edited PO regenerates cleanly under the same name.
 */
 export const generatePOPdf = (po) =>
   new Promise((resolve, reject) => {
     try {
-      fs.mkdirSync(PO_DIR_ABS, { recursive: true });
+      const sub = datedSubdir(po.createdAt || po.poDate || new Date());
+      fs.mkdirSync(path.join(PO_DIR_ABS, sub), { recursive: true });
       const fileName = `${po.poNumber}.pdf`;
-      const absPath = path.join(PO_DIR_ABS, fileName);
-      const relPath = `${PO_DIR_REL}/${fileName}`;
+      const absPath = path.join(PO_DIR_ABS, sub, fileName);
+      const relPath = `${PO_DIR_REL}/${sub}/${fileName}`;
 
       const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
       const stream = fs.createWriteStream(absPath);
@@ -298,6 +304,9 @@ export const generatePOPdf = (po) =>
       doc.end();
 
       stream.on("finish", () => {
+        // A PO created before the dated layout still points at its old flat
+        // PDF; once the new copy is on disk, the old one is just an orphan.
+        if (po.pdfPath && po.pdfPath !== relPath) deleteStoredUpload(PO_DIR_ABS, po.pdfPath);
         log.info(`PO PDF written: ${relPath}`);
         resolve(relPath);
       });

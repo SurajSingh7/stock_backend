@@ -1,8 +1,9 @@
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { STOCK_UPLOADS_ROOT, datedUploadFilename, deleteStoredUpload } from "./stock.upload.path.helper.js";
 
-const PAYMENT_PROOF_DIR = path.join(process.cwd(), "uploads", "stock", "payments");
+const PAYMENT_PROOF_DIR = path.join(STOCK_UPLOADS_ROOT, "payments");
 
 if (!fs.existsSync(PAYMENT_PROOF_DIR)) {
   fs.mkdirSync(PAYMENT_PROOF_DIR, { recursive: true });
@@ -10,11 +11,8 @@ if (!fs.existsSync(PAYMENT_PROOF_DIR)) {
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, PAYMENT_PROOF_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || "").toLowerCase();
-    const unique = `${Date.now()}_${Math.round(Math.random() * 1e9)}`;
-    cb(null, `payment_${unique}${ext}`);
-  },
+  // Lands in payments/<YYYY>/<MM>/ — see stock.upload.path.helper.js.
+  filename: (req, file, cb) => cb(null, datedUploadFilename(PAYMENT_PROOF_DIR, "payment", file.originalname)),
 });
 
 // A payment proof is a photo of a cheque or a bank slip, or the PDF the bank
@@ -90,14 +88,7 @@ export function toPublicPaymentProofPath(filename) {
 }
 
 export function deletePaymentProofFile(publicPath) {
-  if (!publicPath) return;
-  try {
-    const filename = path.basename(publicPath);
-    const fullPath = path.join(PAYMENT_PROOF_DIR, filename);
-    if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
-  } catch {
-    // best-effort — never throw from cleanup
-  }
+  deleteStoredUpload(PAYMENT_PROOF_DIR, publicPath);
 }
 
 export { MAX_PROOFS_PER_PAYMENT, MAX_SPLITS_PER_PAYMENT };

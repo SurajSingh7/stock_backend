@@ -14,6 +14,11 @@ const extraChargeSchema = new Schema(
   {
     amount: { type: Number, required: true, min: 0 },
     note: { type: String, trim: true, default: "" },
+    // false = recorded on the invoice as a note only (e.g. transport paid to
+    // someone else in cash) — never added to `amount`, so it stays out of
+    // billing, the vendor ledger, outstanding and payments. Defaults true so
+    // charges saved before this flag existed keep billing exactly as before.
+    includeInBilling: { type: Boolean, default: true },
   },
   { timestamps: false }
 );
@@ -92,10 +97,13 @@ const invoiceSchema = new Schema(
     // same convention as createdByName/reviewedByName elsewhere.
     receivedByName: { type: String, trim: true, default: "" },
 
+    // Free-text remarks from whoever received the goods.
+    notes: { type: String, trim: true, default: "" },
+
     extraCharges: { type: [extraChargeSchema], default: [] },
     lines: { type: [invoiceLineSchema], default: [] },
 
-    // Server-computed: sum(receivedQuantity*unitPrice) + sum(extraCharges.amount)
+    // Server-computed: sum(receivedQuantity*unitPrice) + sum(billed extraCharges.amount)
     amount: { type: Number, default: 0 },
 
     status: {

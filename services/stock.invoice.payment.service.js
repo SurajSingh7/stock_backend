@@ -336,6 +336,9 @@ export default class StockInvoicePaymentService {
         scheduleWindow: StockInvoicePaymentService.scheduleWindow(),
         paymentApproval: inv.paymentApproval || null,
         payments: inv.payments || [],
+        // Carried for the sort below: it breaks ties between invoices that
+        // share an invoice date.
+        createdAt: inv.createdAt || null,
         ...StockInvoicePaymentService.derivePayment(inv, po, adjByInvoice.get(String(inv._id)) || []),
       };
     });
@@ -399,9 +402,24 @@ export default class StockInvoicePaymentService {
 
     const filtered = searched.filter((r) => passPayable(r) && passApproval(r) && passState(r));
 
-    // Soonest due first — the point of every one of these screens is what
-    // needs paying next, so overdue rows lead.
-    filtered.sort((a, b) => a.daysLeft - b.daysLeft);
+    /*
+      Newest invoice first.
+
+      This used to lead with whatever was soonest due, on the reasoning that
+      these are work queues. In practice people open them looking for the
+      invoice they just entered, and finding it buried three rows down reads
+      as a bug. Urgency has not been lost: the Payable In column still calls
+      out "5 days overdue" and "Due today" on the row itself, which is where a
+      reader looks for it anyway.
+
+      Ties break on createdAt, so two invoices sharing a date show the most
+      recently entered first and the order never shuffles between reloads.
+    */
+    filtered.sort((a, b) => {
+      const byDate = new Date(b.invoiceDate) - new Date(a.invoiceDate);
+      if (byDate !== 0) return byDate;
+      return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+    });
 
     return {
       data: { rows: filtered.slice(skip, skip + limit), counts },

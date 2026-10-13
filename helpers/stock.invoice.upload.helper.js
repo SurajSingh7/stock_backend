@@ -1,8 +1,9 @@
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { STOCK_UPLOADS_ROOT, datedUploadFilename, deleteStoredUpload } from "./stock.upload.path.helper.js";
 
-const INVOICE_FILE_DIR = path.join(process.cwd(), "uploads", "stock", "invoices");
+const INVOICE_FILE_DIR = path.join(STOCK_UPLOADS_ROOT, "invoices");
 
 if (!fs.existsSync(INVOICE_FILE_DIR)) {
   fs.mkdirSync(INVOICE_FILE_DIR, { recursive: true });
@@ -10,11 +11,8 @@ if (!fs.existsSync(INVOICE_FILE_DIR)) {
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, INVOICE_FILE_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const unique = `${Date.now()}_${Math.round(Math.random() * 1e9)}`;
-    cb(null, `invoice_${unique}${ext}`);
-  },
+  // Lands in invoices/<YYYY>/<MM>/ — see stock.upload.path.helper.js.
+  filename: (req, file, cb) => cb(null, datedUploadFilename(INVOICE_FILE_DIR, "invoice", file.originalname)),
 });
 
 // Same allowlist/size cap as product attachments — reused verbatim, see
@@ -41,12 +39,5 @@ export function toPublicInvoicePath(filename) {
 }
 
 export function deleteInvoiceFile(publicPath) {
-  if (!publicPath) return;
-  try {
-    const filename = path.basename(publicPath);
-    const fullPath = path.join(INVOICE_FILE_DIR, filename);
-    if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
-  } catch {
-    // best-effort — never throw from cleanup
-  }
+  deleteStoredUpload(INVOICE_FILE_DIR, publicPath);
 }

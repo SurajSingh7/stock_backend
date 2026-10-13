@@ -1,8 +1,9 @@
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { STOCK_UPLOADS_ROOT, datedUploadFilename, deleteStoredUpload } from "./stock.upload.path.helper.js";
 
-const PRODUCT_IMAGE_DIR = path.join(process.cwd(), "uploads", "stock", "products");
+const PRODUCT_IMAGE_DIR = path.join(STOCK_UPLOADS_ROOT, "products");
 
 if (!fs.existsSync(PRODUCT_IMAGE_DIR)) {
   fs.mkdirSync(PRODUCT_IMAGE_DIR, { recursive: true });
@@ -14,9 +15,8 @@ const storage = multer.diskStorage({
     // Keep the real extension — the frontend decides how to render the asset by
     // sniffing ".pdf" on the stored path (isPdfPath() in ProductDefinition.jsx).
     // Losing the extension here would make every PDF render as a broken <img>.
-    const ext = path.extname(file.originalname).toLowerCase();
-    const unique = `${Date.now()}_${Math.round(Math.random() * 1e9)}`;
-    cb(null, `product_${unique}${ext}`);
+    // Lands in products/<YYYY>/<MM>/ — see stock.upload.path.helper.js.
+    cb(null, datedUploadFilename(PRODUCT_IMAGE_DIR, "product", file.originalname));
   },
 });
 
@@ -48,7 +48,7 @@ export const uploadProductImage = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES },
 });
 
-// Path stored in the DB is relative (e.g. "/uploads/stock/products/product_xxx.jpg"),
+// Path stored in the DB is relative (e.g. "/uploads/stock/products/2026/10/product_xxx.jpg"),
 // never an absolute filesystem path — this is what the frontend prefixes with the
 // backend's origin (see ASSET_BASE_URL in ProductDefinition.jsx).
 export function toPublicImagePath(filename) {
@@ -59,14 +59,7 @@ export function toPublicImagePath(filename) {
 // or a path that no longer exists — errors are swallowed (best-effort cleanup,
 // should never block a request from completing).
 export function deleteProductImageFile(publicPath) {
-  if (!publicPath) return;
-  try {
-    const filename = path.basename(publicPath);
-    const fullPath = path.join(PRODUCT_IMAGE_DIR, filename);
-    if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
-  } catch {
-    // best-effort — never throw from cleanup
-  }
+  deleteStoredUpload(PRODUCT_IMAGE_DIR, publicPath);
 }
 
 /*

@@ -239,21 +239,41 @@ export default class StockInvoiceService {
       }
     });
     const gstAmount = round2(cgstAmount + sgstAmount + igstAmount);
-    const extraChargesTotal = round2((inv.extraCharges || []).reduce((s, c) => s + (c.amount || 0), 0));
+    // extraChargesTotal is the BILLED charges only — every report and ledger
+    // that reads it is summing what the vendor is owed. Note-only charges are
+    // reported on their own so a screen can still show them.
+    const extraChargesTotal = StockInvoiceService._sumCharges(inv.extraCharges, true);
+    const nonBilledChargesTotal = StockInvoiceService._sumCharges(inv.extraCharges, false);
 
     return {
       taxType, basicAmount: round2(basicAmount),
       cgstAmount: round2(cgstAmount), sgstAmount: round2(sgstAmount), igstAmount: round2(igstAmount),
-      gstAmount, extraChargesTotal, grandTotal: round2((inv.amount || 0) + gstAmount),
+      gstAmount, extraChargesTotal, nonBilledChargesTotal, grandTotal: round2((inv.amount || 0) + gstAmount),
     };
+  }
+
+  // A charge without the flag predates it and was always billed.
+  static _sumCharges(extraCharges, billed) {
+    return round2(
+      (extraCharges || [])
+        .filter((c) => (c.includeInBilling !== false) === billed)
+        .reduce((s, c) => s + (c.amount || 0), 0)
+    );
+  }
+
+  static _normalizeCharges(extraCharges) {
+    return (extraCharges || []).map((c) => ({
+      amount: c.amount,
+      note: c.note || "",
+      includeInBilling: c.includeInBilling !== false,
+    }));
   }
 
   static _computeAmount(lines, extraCharges) {
     const linesTotal = round2(
       lines.reduce((s, l) => s + (l.receivedQuantity || 0) * (l.unitPrice || 0), 0)
     );
-    const chargesTotal = round2((extraCharges || []).reduce((s, c) => s + (c.amount || 0), 0));
-    return round2(linesTotal + chargesTotal);
+    return round2(linesTotal + StockInvoiceService._sumCharges(extraCharges, true));
   }
 
   /* ---------------------------------------------------------------------- */
@@ -294,6 +314,7 @@ export default class StockInvoiceService {
       session
     );
     const lines = await StockInvoiceService._resolveLines(po, body.lines, existingQtyByLine);
+    const extraCharges = StockInvoiceService._normalizeCharges(body.extraCharges);
 
     const [invoice] = await StockInvoiceModel.create(
       [
@@ -311,9 +332,10 @@ export default class StockInvoiceService {
           invoiceFile: body.invoiceFile || "",
           branchId,
           receivedByName: body.receivedByName || user?.name || "",
-          extraCharges: body.extraCharges || [],
+          notes: String(body.notes || "").trim(),
+          extraCharges,
           lines,
-          amount: StockInvoiceService._computeAmount(lines, body.extraCharges),
+          amount: StockInvoiceService._computeAmount(lines, extraCharges),
           status: INVOICE_STATUS.PENDING,
         },
       ],
@@ -384,7 +406,10 @@ export default class StockInvoiceService {
     if (body.invoiceFile) invoice.invoiceFile = body.invoiceFile;
     invoice.branchId = branchId;
     if (body.receivedByName !== undefined) invoice.receivedByName = body.receivedByName;
-    if (body.extraCharges !== undefined) invoice.extraCharges = body.extraCharges;
+    if (body.notes !== undefined) invoice.notes = String(body.notes || "").trim();
+    if (body.extraCharges !== undefined) {
+      invoice.extraCharges = StockInvoiceService._normalizeCharges(body.extraCharges);
+    }
 
     invoice.lines = lines;
     invoice.amount = StockInvoiceService._computeAmount(lines, invoice.extraCharges);
