@@ -13,7 +13,7 @@ import StockNotificationController from "../controllers/stock.notification.contr
 import StockBranchController from "../controllers/stock.branch.controller.js";
 import StockGstRateController from "../controllers/stock.gst.rate.controller.js";
 import StockInvoiceController from "../controllers/stock.invoice.controller.js";
-import { uploadInvoiceFile } from "../helpers/stock.invoice.upload.helper.js";
+import { uploadInvoiceFile, uploadInvoiceForReading } from "../helpers/stock.invoice.upload.helper.js";
 import StockTransferRequestController from "../controllers/stock.transfer.request.controller.js";
 import StockAccessControlController from "../controllers/stock.access.control.controller.js";
 import StockAuditLogController from "../controllers/stock.audit.log.controller.js";
@@ -165,6 +165,14 @@ router.patch("/tracking-orders/:id/reopen", authenticate, requirePermission("tra
 router.patch("/tracking-orders/:id/reset", authenticate, requirePermission("purchase-orders", "RESET_ORDER"), StockTrackingOrderController.resetOrder);
 router.get("/not-required", authenticate, requirePermission("not-required", "READ"), StockTrackingOrderController.getNotRequired);
 router.get("/tracking-orders/:id", authenticate, requirePermission("tracking-orders", "READ"), StockTrackingOrderController.getDetail);
+// Add Invoice → upload: read the details off the file (dummy for now).
+router.post(
+  "/tracking-orders/:id/invoices/read",
+  authenticate,
+  requirePermission("invoices", "CREATE"),
+  uploadInvoiceForReading.single("invoiceFile"),
+  StockInvoiceController.readInvoiceFile
+);
 router.post(
   "/tracking-orders/:id/invoices",
   authenticate,
@@ -178,13 +186,22 @@ router.post(
 router.get("/invoices/board", authenticate, requirePermission("invoices", "READ"), StockInvoiceController.getBoard);
 
 router.get("/invoices/:id", authenticate, requirePermission("invoices", "READ"), StockInvoiceController.getInvoiceById);
+// Add Items — entered by whoever receives: Save as Draft / Submit.
+router.put("/invoices/:id/items", authenticate, requirePermission("invoices", "CREATE"), StockInvoiceController.saveItems);
+// ⋮ → Edit invoice / Delete: details as written on the vendor's invoice.
+// Their own action so it can be granted to a few people only.
 router.put(
   "/invoices/:id",
   authenticate,
-  requirePermission("invoices", "UPDATE"),
+  requirePermission("invoices", "EDIT_INVOICE"),
   uploadInvoiceFile.single("invoiceFile"),
   StockInvoiceController.updateInvoice
 );
+router.delete("/invoices/:id", authenticate, requirePermission("invoices", "EDIT_INVOICE"), StockInvoiceController.deleteInvoice);
+// ⋮ → Partial submit ON/OFF, and the per-entry decisions it brings.
+router.patch("/invoices/:id/partial", authenticate, requirePermission("invoices", "PARTIAL_SUBMIT"), StockInvoiceController.setPartialSubmit);
+router.patch("/invoices/:id/entries/:entryId/approve", authenticate, requirePermission("invoices", "APPROVE"), StockInvoiceController.approveEntry);
+router.patch("/invoices/:id/entries/:entryId/reject", authenticate, requirePermission("invoices", "REJECT"), StockInvoiceController.rejectEntry);
 router.patch("/invoices/:id/approve", authenticate, requirePermission("invoices", "APPROVE"), StockInvoiceController.approveInvoice);
 router.patch("/invoices/:id/reject", authenticate, requirePermission("invoices", "REJECT"), StockInvoiceController.rejectInvoice);
 

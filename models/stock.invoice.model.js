@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import {
   INVOICE_STATUS,
   INVOICE_STATUS_ARRAY,
+  INVOICE_ENTRY_STATUS,
+  INVOICE_ENTRY_STATUS_ARRAY,
   PAYMENT_APPROVAL_STATUS_ARRAY,
   PAYMENT_MODE_ARRAY,
   PAYMENT_STATE_OVERRIDE_ARRAY,
@@ -50,7 +52,14 @@ const invoiceLineSchema = new Schema(
     // from the PO later, same immutable-snapshot convention as everywhere else.
     unitPrice: { type: Number, default: 0 },
 
-    receivedQuantity: { type: Number, required: true, min: 0 },
+    // How many the vendor's invoice says — set when the invoice is added.
+    // Items can only be submitted once receivedQuantity has reached it.
+    invoiceQuantity: { type: Number, default: 0, min: 0 },
+
+    // How many have been entered (serial rows / batch quantity) so far.
+    // With partial submit ON this is the APPROVED total instead — the units
+    // being typed in live on the invoice's draft entry (see `entries`).
+    receivedQuantity: { type: Number, default: 0, min: 0 },
 
     // Free-of-cost units received alongside the paid receivedQuantity —
     // never counted against the PO line's ordered quantity (that guard only
@@ -73,6 +82,42 @@ const invoiceLineSchema = new Schema(
   { _id: true }
 );
 
+/*
+  One entry of a partial-submit invoice: what was entered and submitted in one
+  go ("20 routers today"), approved or rejected on its own. Embedded — an
+  entry only ever exists inside its invoice.
+*/
+const entryLineSchema = new Schema(
+  {
+    quotationItemId: { type: Schema.Types.ObjectId, default: null },
+    productDefinitionId: { type: Schema.Types.ObjectId, ref: "product_definitions", default: null },
+    productName: { type: String, trim: true, default: "" },
+    receivedQuantity: { type: Number, default: 0, min: 0 },
+    focQuantity: { type: Number, default: 0, min: 0 },
+    rows: {
+      type: [{ fieldValues: Schema.Types.Mixed, isFoc: { type: Boolean, default: false } }],
+      default: [],
+    },
+    createdInventoryItemIds: { type: [Schema.Types.ObjectId], ref: "inventory_items", default: [] },
+  },
+  { _id: false }
+);
+
+const invoiceEntrySchema = new Schema(
+  {
+    entryNumber: { type: Number, required: true, min: 1 },
+    status: { type: String, enum: INVOICE_ENTRY_STATUS_ARRAY, default: INVOICE_ENTRY_STATUS.DRAFT },
+    lines: { type: [entryLineSchema], default: [] },
+    submittedAt: { type: Date, default: null },
+    submittedByName: { type: String, trim: true, default: "" },
+    rejectedReason: { type: String, trim: true, default: "" },
+    reviewedBy: { type: Schema.Types.ObjectId, default: null },
+    reviewedByName: { type: String, trim: true, default: "" },
+    reviewedAt: { type: Date, default: null },
+  },
+  { _id: true, timestamps: true }
+);
+
 const invoiceSchema = new Schema(
   {
     trackingOrderId: { type: Schema.Types.ObjectId, ref: "tracking_orders", required: true },
@@ -88,6 +133,12 @@ const invoiceSchema = new Schema(
     vendorName: { type: String, trim: true, default: "" },
 
     invoiceNumber: { type: String, trim: true, required: true },
+    // invoiceNumber upper-cased with spaces removed — "inv-01" and "INV 01"
+    // are the same bill. Only ever compared, never shown.
+    invoiceNumberKey: { type: String, trim: true, default: "" },
+    // "2026-27" (April–March) of invoiceDate. The duplicate rule is one
+    // vendor, one invoice number, once per financial year.
+    financialYear: { type: String, trim: true, default: "" },
     invoiceDate: { type: Date, required: true },
     invoiceFile: { type: String, trim: true, default: "" }, // relative public path
 
@@ -106,10 +157,95 @@ const invoiceSchema = new Schema(
     // Server-computed: sum(receivedQuantity*unitPrice) + sum(billed extraCharges.amount)
     amount: { type: Number, default: 0 },
 
+    // The total as written on the vendor's invoice (filled from the upload,
+    // corrected by hand). Shown beside the computed amount so a mismatch is
+    // visible; the ledger still runs on the computed one.
+    invoiceAmount: { type: Number, default: 0, min: 0 },
+
     status: {
       type: String,
       enum: INVOICE_STATUS_ARRAY,
-      default: INVOICE_STATUS.PENDING,
+      default: INVOICE_STATUS.ADDED,
+    },
+
+    /*
+      Partial submit (turned on per invoice, by permission): items can be
+      submitted a part at a time, each part an entry approved on its own.
+      Off by default — then the invoice is submitted once, complete.
+    */
+    partialSubmit: { type: Boolean, default: false },
+    entries: { type: [invoiceEntrySchema], default: [] },
+
+    /*
+      The invoice counts in the vendor ledger / outstanding / payments list.
+      Set when it is approved — or, with partial submit, when its FIRST entry
+      is approved (the whole invoice amount counts from then on). Payment
+      itself still waits for status APPROVED.
+    */
+    inLedger: { type: Boolean, default: false },
+
+    /*
+      Who entered what, and when — one row per "Save as Draft" / "Submit".
+      Several people can carry the same invoice forward, so this is how
+      "who put in the first 20 routers" stays answerable.
+    */
+    entryLog: {
+      type: [
+        new Schema(
+          {
+            at: { type: Date, default: null },
+            by: { type: Schema.Types.ObjectId, default: null },
+            byName: { type: String, trim: true, default: "" },
+            action: { type: String, enum: ["DRAFT", "SUBMIT"], default: "DRAFT" },
+            // Partial submit: which entry this save belonged to.
+            entryNumber: { type: Number, default: null },
+            // Change in entered quantity per product on this save (+20, +30 …)
+            items: {
+              type: [
+                new Schema(
+                  {
+                    productName: { type: String, trim: true, default: "" },
+                    quantity: { type: Number, default: 0 },
+                    focQuantity: { type: Number, default: 0 },
+                  },
+                  { _id: false }
+                ),
+              ],
+              default: [],
+            },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+
+    // Every change made through "Edit invoice": who, when, field before/after.
+    editHistory: {
+      type: [
+        new Schema(
+          {
+            at: { type: Date, default: null },
+            by: { type: Schema.Types.ObjectId, default: null },
+            byName: { type: String, trim: true, default: "" },
+            changes: {
+              type: [
+                new Schema(
+                  {
+                    field: { type: String, trim: true, default: "" },
+                    from: { type: Schema.Types.Mixed, default: null },
+                    to: { type: Schema.Types.Mixed, default: null },
+                  },
+                  { _id: false }
+                ),
+              ],
+              default: [],
+            },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
     },
     rejectedReason: { type: String, trim: true, default: "" },
     reviewedBy: { type: Schema.Types.ObjectId, ref: "users", default: null },
@@ -288,6 +424,11 @@ invoiceSchema.index({ vendorId: 1 });
 invoiceSchema.index({ status: 1, isActive: 1 });
 // The Invoice List reads approved invoices ordered by when payment is due.
 invoiceSchema.index({ status: 1, isActive: 1, paymentScheduledOn: 1 });
+// Duplicate-invoice backstop — the service checks first for a readable message.
+invoiceSchema.index(
+  { vendorId: 1, invoiceNumberKey: 1, financialYear: 1 },
+  { unique: true, partialFilterExpression: { isActive: true } }
+);
 
 
 // who created / last touched this — see the plugin for why it is a hook

@@ -170,11 +170,28 @@ export const TRACKING_STATUS_ARRAY = Object.values(TRACKING_STATUS);
 
 
 // ─── Invoice (goods receiving) — ADD to constants/stock.enums.js ──────────────
+// ADDED  — the invoice is uploaded (number, date, quantities), no item entered
+// DRAFT  — items are being entered and saved as a draft, not submitted yet
+// PENDING — every invoiced unit is entered and submitted for approval
+// IN_PROGRESS — partial submit only: entries are being entered/approved one
+//               by one and not every invoiced unit is approved yet
 export const INVOICE_STATUS = {
+  ADDED: "ADDED",
+  DRAFT: "DRAFT",
+  PENDING: "PENDING",
+  IN_PROGRESS: "IN_PROGRESS",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+};
+
+// One entry of a partial-submit invoice (Entry 1, 2, 3 …).
+export const INVOICE_ENTRY_STATUS = {
+  DRAFT: "DRAFT",
   PENDING: "PENDING",
   APPROVED: "APPROVED",
   REJECTED: "REJECTED",
 };
+export const INVOICE_ENTRY_STATUS_ARRAY = Object.values(INVOICE_ENTRY_STATUS);
 export const INVOICE_STATUS_ARRAY = Object.values(INVOICE_STATUS);
 
 // Approval state of a received inventory item — independent of its physical

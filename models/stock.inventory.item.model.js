@@ -31,6 +31,12 @@ const stockInventoryItemSchema = new mongoose.Schema(
       ref: "invoices",
       default: null,
     },
+    // Partial-submit invoices: the entry (embedded in the invoice) this item
+    // arrived on — entries are approved one at a time, so approval acts on it.
+    invoiceEntryId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
     status: {
       type: String,
       enum: ITEM_STATUS_ARRAY,
@@ -90,6 +96,7 @@ stockInventoryItemSchema.index({ status: 1 });
 stockInventoryItemSchema.index({ approvalStatus: 1 });
 stockInventoryItemSchema.index({ branchId: 1 });
 stockInventoryItemSchema.index({ invoiceId: 1 });
+stockInventoryItemSchema.index({ invoiceEntryId: 1 }, { sparse: true });
 stockInventoryItemSchema.index({ "fieldValues.imei": 1 }, { sparse: true });
 stockInventoryItemSchema.index({ "fieldValues.serial_no": 1 }, { sparse: true });
 

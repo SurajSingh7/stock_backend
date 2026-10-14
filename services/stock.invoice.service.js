@@ -29,6 +29,7 @@ import { paginate } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import {
   INVOICE_STATUS,
+  INVOICE_ENTRY_STATUS,
   ITEM_APPROVAL_STATUS,
   TRACKING_STATUS,
   TRACKING_METHODS,
@@ -36,6 +37,25 @@ import {
 
 const log = getLogger(import.meta.url);
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+// An invoice is priced on what the INVOICE says (invoiceQuantity) — the
+// vendor's bill, whether or not every unit is entered yet. Lines from before
+// invoiceQuantity existed fall back to what was received.
+const pricedQty = (l) => ((l.invoiceQuantity || 0) > 0 ? l.invoiceQuantity : l.receivedQuantity || 0);
+const ymd = (d) => (d ? new Date(d).toISOString().slice(0, 10) : "");
+const sameValue = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const chargesText = (charges) =>
+  (charges || [])
+    .map((c) => `${c.note || "Charge"} ${c.amount}${c.includeInBilling === false ? " (note only)" : ""}`)
+    .join(", ");
+// Indian financial year, April–March: 12 Oct 2026 -> "2026-27". Read in UTC
+// because invoice dates arrive as "YYYY-MM-DD" (UTC midnight).
+const financialYearOf = (date) => {
+  const d = new Date(date);
+  const start = d.getUTCMonth() >= 3 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
+  return `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
+};
+// "inv-01", "INV 01" and " Inv-01 " are the same invoice.
+const invoiceNumberKey = (n) => String(n || "").toUpperCase().replace(/\s+/g, "");
 const ENTITY_TYPE = "invoices";
 
 const RECEIVABLE_TRACKING_STATUSES = new Set([
@@ -46,18 +66,15 @@ const RECEIVABLE_TRACKING_STATUSES = new Set([
 
 export default class StockInvoiceService {
   /* ---------------------------------------------------------------------- */
-  /* Over-receipt guard — sums receivedQuantity across all non-REJECTED      */
-  /* invoices for this tracking order, per PO line (quotationItemId).        */
-  /* REJECTED invoices never count, so a resubmit re-validates against       */
-  /* only the still-live invoices.                                          */
+  /* Caps + duplicate guard                                                  */
   /* ---------------------------------------------------------------------- */
 
-  static async _sumNonRejectedQtyByLine(trackingOrderId, session, excludeInvoiceId = null) {
-    const filter = {
-      trackingOrderId,
-      isActive: true,
-      status: { $ne: INVOICE_STATUS.REJECTED },
-    };
+  // Invoiced quantity per PO line across every OTHER live invoice of the
+  // order — the PO cap must count invoices the caller cannot see, so this is
+  // never scoped. A rejected invoice still counts: it is a real bill that
+  // will be corrected and resubmitted, not withdrawn.
+  static async _invoicedQtyByLine(trackingOrderId, session, excludeInvoiceId = null) {
+    const filter = { trackingOrderId, isActive: true };
     if (excludeInvoiceId) filter._id = { $ne: excludeInvoiceId };
 
     const invoices = await StockInvoiceModel.find(filter).session(session).lean();
@@ -65,61 +82,92 @@ export default class StockInvoiceService {
     invoices.forEach((inv) =>
       (inv.lines || []).forEach((l) => {
         const key = String(l.quotationItemId);
-        map.set(key, (map.get(key) || 0) + (l.receivedQuantity || 0));
+        map.set(key, (map.get(key) || 0) + (l.invoiceQuantity || 0));
       })
     );
     return map;
   }
 
-  // Validates each requested line against the PO line's ordered quantity and
-  // returns the resolved (snapshotted) line data ready to persist. Throws on
-  // any over-receipt or unknown quotationItemId.
-  static async _resolveLines(po, bodyLines, existingQtyByLine) {
-    const poLineByKey = new Map((po.items || []).map((it) => [String(it.quotationItemId), it]));
+  static async _assertUniqueNumber(vendorId, key, fy, excludeInvoiceId, session, shownNumber) {
+    const filter = { vendorId, invoiceNumberKey: key, financialYear: fy, isActive: true };
+    if (excludeInvoiceId) filter._id = { $ne: excludeInvoiceId };
+    const clash = await StockInvoiceModel.findOne(filter).select("_id").session(session).lean();
+    if (clash) {
+      throw new Error(`Invoice ${shownNumber} from this vendor is already added for financial year ${fy}`);
+    }
+  }
 
-    const result= bodyLines.map((bl) => {
+  /*
+    The invoice's lines — which products, how many the invoice says — priced
+    from the PO and capped by it. `previousLines` carries an edited invoice's
+    entered items, price snapshot and rating forward, and no product may drop
+    below what is already entered for it.
+  */
+  static _resolveInvoiceLines(po, bodyLines, invoicedElsewhere, previousLines = []) {
+    const poLineByKey = new Map((po.items || []).map((it) => [String(it.quotationItemId), it]));
+    const prevByKey = new Map(previousLines.map((l) => [String(l.quotationItemId), l]));
+    const seen = new Set();
+    const lines = [];
+
+    for (const bl of bodyLines || []) {
       const key = String(bl.quotationItemId);
       const poLine = poLineByKey.get(key);
-      if (!poLine) throw new Error("A received line does not belong to this purchase order");
+      if (!poLine) throw new Error("A product on the invoice does not belong to this purchase order");
+      if (seen.has(key)) throw new Error(`${poLine.productName}: listed twice on the invoice`);
+      seen.add(key);
 
-      const already = existingQtyByLine.get(key) || 0;
-      const requested = Number(bl.receivedQuantity) || 0;
-      if (already + requested > poLine.quantity) {
+      const qty = Number(bl.invoiceQuantity) || 0;
+      const prev = prevByKey.get(key);
+      const entered = prev?.floor ?? prev?.receivedQuantity ?? 0;
+      if (qty < entered) {
+        throw new Error(`${poLine.productName}: ${entered} already entered — invoice quantity can't be less than that`);
+      }
+      if (qty <= 0) continue;
+
+      const elsewhere = invoicedElsewhere.get(key) || 0;
+      if (elsewhere + qty > poLine.quantity) {
         throw new Error(
-          `${poLine.productName}: received quantity (${already + requested}) exceeds ordered quantity (${poLine.quantity})`
+          elsewhere
+            ? `${poLine.productName}: ${qty} here + ${elsewhere} on other invoices exceeds the ordered ${poLine.quantity}`
+            : `${poLine.productName}: invoice quantity (${qty}) exceeds the ordered ${poLine.quantity}`
         );
       }
 
-      return {
+      lines.push({
+        ...(prev?._id ? { _id: prev._id } : {}),
         quotationItemId: poLine.quotationItemId,
         categoryId: poLine.categoryId,
         categoryName: poLine.categoryName,
         productDefinitionId: poLine.productDefinitionId,
         productName: poLine.productName,
-        unitPrice: poLine.unitPrice,
-        receivedQuantity: requested,
-        // Free-of-cost — never validated against poLine.quantity above.
-        focQuantity: Math.max(0, Number(bl.focQuantity) || 0),
-        rows: Array.isArray(bl.rows)
-          ? bl.rows.map((r) => ({ fieldValues: r.fieldValues || {}, isFoc: !!r.isFoc }))
-          : [],
-        rating:
-          bl.rating && (bl.rating.rating !== undefined || bl.rating.notes !== undefined)
-            ? { rating: bl.rating.rating ?? null, notes: bl.rating.notes || "" }
-            : null,
-        createdInventoryItemIds: [],
-      };
-    });
+        unitPrice: prev ? prev.unitPrice : poLine.unitPrice,
+        invoiceQuantity: qty,
+        receivedQuantity: entered,
+        focQuantity: prev?.focQuantity || 0,
+        rows: prev?.rows || [],
+        createdInventoryItemIds: prev?.createdInventoryItemIds || [],
+        rating: prev?.rating || null,
+      });
+      delete lines[lines.length - 1].floor;
+    }
 
-    return result;
+    // A product dropped from the invoice must have nothing entered.
+    for (const [key, prev] of prevByKey) {
+      const held = prev.floor ?? prev.receivedQuantity ?? 0;
+      if (!seen.has(key) && held > 0) {
+        throw new Error(`${prev.productName}: ${held} already entered — it can't be removed from the invoice`);
+      }
+    }
+    return lines;
   }
+
 
   // Creates inventory_items (PENDING approval) for every line — one row per
   // generated Serial/MAC entry for individual-tracked products, one
   // aggregated doc for quantity-tracked products. Mutates each line in place
   // to record the created ids.
-  static async _createPendingInventoryItems(invoice, vendorId, branchId, receivedBy, session) {
-    for (const line of invoice.lines) {
+  static async _createPendingInventoryItems(invoice, vendorId, branchId, receivedBy, session, entry = null) {
+    for (const line of entry ? entry.lines : invoice.lines) {
       const productDef = await StockProductDefinitionModel.findOne({
         _id: line.productDefinitionId,
         isActive: true,
@@ -139,6 +187,7 @@ export default class StockInvoiceService {
             vendorId,
             branchId,
             invoiceId: invoice._id,
+            invoiceEntryId: entry?._id || null,
             approvalStatus: ITEM_APPROVAL_STATUS.PENDING,
             isFoc: !!row.isFoc,
             fieldValues: row.fieldValues || {},
@@ -181,6 +230,7 @@ export default class StockInvoiceService {
                 vendorId,
                 branchId,
                 invoiceId: invoice._id,
+                invoiceEntryId: entry?._id || null,
                 approvalStatus: ITEM_APPROVAL_STATUS.PENDING,
                 isFoc: qd.isFoc,
                 fieldValues: qd.fieldValues,
@@ -217,17 +267,67 @@ export default class StockInvoiceService {
     }
   }
 
+  /*
+    Writes what was entered onto the invoice lines and returns the change per
+    product (+20, +30 …) for the entry log. Never more than the invoice says.
+  */
+  static _applyEntries(invoice, bodyLines) {
+    const byKey = new Map((bodyLines || []).map((bl) => [String(bl.quotationItemId), bl]));
+    const delta = [];
+    for (const line of invoice.lines) {
+      const bl = byKey.get(String(line.quotationItemId));
+      if (!bl) continue;
+      const qty = Math.max(0, Number(bl.receivedQuantity) || 0);
+      const foc = Math.max(0, Number(bl.focQuantity) || 0);
+      if (qty > line.invoiceQuantity) {
+        throw new Error(`${line.productName}: ${qty} entered but the invoice says ${line.invoiceQuantity}`);
+      }
+      const dq = qty - (line.receivedQuantity || 0);
+      const df = foc - (line.focQuantity || 0);
+      if (dq || df) delta.push({ productName: line.productName, quantity: dq, focQuantity: df });
+
+      line.receivedQuantity = qty;
+      line.focQuantity = foc;
+      line.rows = Array.isArray(bl.rows)
+        ? bl.rows.map((r) => ({ fieldValues: r.fieldValues || {}, isFoc: !!r.isFoc }))
+        : [];
+      if (bl.rating !== undefined) {
+        line.rating =
+          bl.rating && (bl.rating.rating !== undefined || bl.rating.notes !== undefined)
+            ? { rating: bl.rating.rating ?? null, notes: bl.rating.notes || "" }
+            : null;
+      }
+    }
+    for (const key of byKey.keys()) {
+      if (!invoice.lines.some((l) => String(l.quotationItemId) === key)) {
+        throw new Error("An entered product is not on this invoice");
+      }
+    }
+    return delta;
+  }
+
+  // Payment has begun once approval was asked for (and not sent back), any
+  // money is recorded, or the state was forced. The invoice is frozen then.
+  static _paymentStarted(invoice) {
+    return (
+      ["PENDING", "APPROVED"].includes(invoice.paymentApprovalStatus) ||
+      (invoice.payments || []).length > 0 ||
+      !!invoice.paymentStateOverride
+    );
+  }
+
+
   // Basic/CGST/SGST/IGST/extraCharges/grandTotal for one invoice — shared by
   // getBoard (list rows) and getInvoiceById (Review page's Invoice Details).
   // `po` may be null (invoice without a linked PO); taxType then defaults to
   // CGST_SGST so the split still renders something sane.
-  static _computeInvoiceTotals(inv, po) {
+  static _computeInvoiceTotals(inv, po, qtyOf = pricedQty) {
     const poLineByKey = new Map((po?.items || []).map((it) => [String(it.quotationItemId), it]));
     const taxType = po?.taxType || "CGST_SGST";
 
     let basicAmount = 0, cgstAmount = 0, sgstAmount = 0, igstAmount = 0;
     (inv.lines || []).forEach((l) => {
-      const lineBasic = (l.receivedQuantity || 0) * (l.unitPrice || 0);
+      const lineBasic = qtyOf(l) * (l.unitPrice || 0);
       const gstRate = poLineByKey.get(String(l.quotationItemId))?.gstRate || 0;
       basicAmount += lineBasic;
       if (taxType === "IGST") {
@@ -248,7 +348,8 @@ export default class StockInvoiceService {
     return {
       taxType, basicAmount: round2(basicAmount),
       cgstAmount: round2(cgstAmount), sgstAmount: round2(sgstAmount), igstAmount: round2(igstAmount),
-      gstAmount, extraChargesTotal, nonBilledChargesTotal, grandTotal: round2((inv.amount || 0) + gstAmount),
+      gstAmount, extraChargesTotal, nonBilledChargesTotal,
+      grandTotal: round2(StockInvoiceService._computeAmount(inv.lines || [], inv.extraCharges, qtyOf) + gstAmount),
     };
   }
 
@@ -269,15 +370,57 @@ export default class StockInvoiceService {
     }));
   }
 
-  static _computeAmount(lines, extraCharges) {
+  static _computeAmount(lines, extraCharges, qtyOf = pricedQty) {
     const linesTotal = round2(
-      lines.reduce((s, l) => s + (l.receivedQuantity || 0) * (l.unitPrice || 0), 0)
+      lines.reduce((s, l) => s + qtyOf(l) * (l.unitPrice || 0), 0)
     );
     return round2(linesTotal + StockInvoiceService._sumCharges(extraCharges, true));
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Create — "Add Items" submit                                             */
+  /* Read the uploaded invoice                                               */
+  /* ---------------------------------------------------------------------- */
+
+  /*
+    What the uploaded invoice says. For now DUMMY values worked out from the
+    PO — every product at its still-uninvoiced quantity, priced at the PO
+    rate with GST. The Claude API reading the actual file replaces this body
+    later; the screen already treats the result as a suggestion to correct.
+  */
+  static async readInvoiceFile(trackingOrderId, dataAccess) {
+    const tracking = await StockTrackingOrderModel.findOne({ _id: trackingOrderId, isActive: true }).lean();
+    if (!tracking || !isWithinDataScope(tracking, dataAccess, "tracking-orders")) {
+      throw new Error("Tracking order not found");
+    }
+    const po = await StockPurchaseOrderModel.findOne({ _id: tracking.poId, isActive: true }).lean();
+    if (!po) throw new Error("Purchase order not found for this tracking order");
+
+    const invoiced = await StockInvoiceService._invoicedQtyByLine(trackingOrderId, null);
+    const lines = (po.items || []).map((it) => ({
+      quotationItemId: it.quotationItemId,
+      productName: it.productName,
+      invoiceQuantity: Math.max(0, (it.quantity || 0) - (invoiced.get(String(it.quotationItemId)) || 0)),
+    }));
+    const invoiceAmount = round2(
+      (po.items || []).reduce((s, it) => {
+        const qty = lines.find((l) => String(l.quotationItemId) === String(it.quotationItemId)).invoiceQuantity;
+        return s + qty * (it.unitPrice || 0) * (1 + (it.gstRate || 0) / 100);
+      }, 0)
+    );
+    const today = new Date();
+    const p = (x) => String(x).padStart(2, "0");
+    const ymdCompact = `${today.getFullYear()}${p(today.getMonth() + 1)}${p(today.getDate())}`;
+    return {
+      source: "DUMMY",
+      invoiceNumber: `DUMMY-${ymdCompact}`,
+      invoiceDate: `${today.getFullYear()}-${p(today.getMonth() + 1)}-${p(today.getDate())}`,
+      invoiceAmount,
+      lines,
+    };
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Add Invoice — upload, check the details, save (status ADDED)            */
   /* ---------------------------------------------------------------------- */
 
   static async createInvoice(trackingOrderId, body, user, session, dataAccess) {
@@ -291,7 +434,7 @@ export default class StockInvoiceService {
       throw new Error("Tracking order not found");
     }
     if (!RECEIVABLE_TRACKING_STATUSES.has(tracking.status)) {
-      throw new Error("Items can only be added while this order is PO Sent, In Progress or Partial");
+      throw new Error("An invoice can only be added while this order is PO Sent, In Progress or Partial");
     }
 
     const po = await StockPurchaseOrderModel.findOne({ _id: tracking.poId, isActive: true })
@@ -299,21 +442,20 @@ export default class StockInvoiceService {
       .lean();
     if (!po) throw new Error("Purchase order not found for this tracking order");
 
-    // The receiving branch is this invoice's branch: getBoard, getInvoiceById
-    // and every inventory item created below are all branch-scoped on it. Pinning
-    // it to the receiver's own scope here is what keeps a submitted invoice
-    // visible to the person who submitted it.
-    const branchId = await StockBranchService.assertBranchInScope(
-      body.branchId,
-      dataAccess,
-      session
-    );
+    // The receiving branch is this invoice's branch: every read and every
+    // inventory item is branch-scoped on it. Pinning it to the receiver's own
+    // scope keeps the invoice visible to the person who added it.
+    const branchId = await StockBranchService.assertBranchInScope(body.branchId, dataAccess, session);
 
-    const existingQtyByLine = await StockInvoiceService._sumNonRejectedQtyByLine(
-      trackingOrderId,
-      session
-    );
-    const lines = await StockInvoiceService._resolveLines(po, body.lines, existingQtyByLine);
+    const invoiced = await StockInvoiceService._invoicedQtyByLine(trackingOrderId, session);
+    const lines = StockInvoiceService._resolveInvoiceLines(po, body.lines, invoiced);
+    if (!lines.length) throw new Error("Enter the invoice quantity for at least one product");
+
+    const invoiceNumber = String(body.invoiceNumber).trim();
+    const key = invoiceNumberKey(invoiceNumber);
+    const fy = financialYearOf(body.invoiceDate);
+    await StockInvoiceService._assertUniqueNumber(po.vendorId, key, fy, null, session, invoiceNumber);
+
     const extraCharges = StockInvoiceService._normalizeCharges(body.extraCharges);
 
     const [invoice] = await StockInvoiceModel.create(
@@ -321,40 +463,31 @@ export default class StockInvoiceService {
         {
           trackingOrderId,
           poId: po._id,
-          // Denormalized so the invoice board can be entity-scoped without a
-          // join. By this point the tracking order always has an entity — an
-          // invoice can only be raised once the PO has been sent.
+          // Denormalized so the invoice board can be entity-scoped without a join.
           entityAlias: tracking.buyerEntity?.alias || "",
           vendorId: po.vendorId,
           vendorName: po.vendorName || "",
-          invoiceNumber: String(body.invoiceNumber).trim(),
+          invoiceNumber,
+          invoiceNumberKey: key,
+          financialYear: fy,
           invoiceDate: body.invoiceDate,
           invoiceFile: body.invoiceFile || "",
+          invoiceAmount: Number(body.invoiceAmount) || 0,
           branchId,
           receivedByName: body.receivedByName || user?.name || "",
           notes: String(body.notes || "").trim(),
           extraCharges,
           lines,
           amount: StockInvoiceService._computeAmount(lines, extraCharges),
-          status: INVOICE_STATUS.PENDING,
+          status: INVOICE_STATUS.ADDED,
         },
       ],
       { session }
     );
 
-    await StockInvoiceService._createPendingInventoryItems(
-      invoice,
-      po.vendorId,
-      branchId,
-      user?.id || user?._id || null,
-      session
-    );
-    await StockInvoiceService._writeRatings(invoice, po.vendorId, user, session);
-    await invoice.save({ session });
-
     await StockTrackingOrderService.recalculateStatus(trackingOrderId, session);
 
-    log.info(`Invoice created: ${invoice.invoiceNumber} for tracking order ${trackingOrderId}`);
+    log.info(`Invoice added: ${invoice.invoiceNumber} for tracking order ${trackingOrderId}`);
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE, entityId: invoice._id, action: "CREATE", actor: user, before: null, after: invoice.toObject(),
     });
@@ -362,78 +495,510 @@ export default class StockInvoiceService {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Edit + resubmit — REJECTED only                                         */
+  /* Add Items — Save as Draft / Submit                                      */
   /* ---------------------------------------------------------------------- */
 
+  /*
+    Anyone receiving can carry the invoice forward — draft by draft — and the
+    entry log records who entered what. Submit only goes through once every
+    product has exactly what the invoice says. A rejected invoice comes back
+    here to be corrected and submitted again.
+  */
+  static async saveItems(id, body, user, session, dataAccess, { submit = false } = {}) {
+    const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!invoice) throw new Error("Invoice not found");
+    assertDataScope(invoice, dataAccess);
+    if (invoice.partialSubmit) {
+      return StockInvoiceService._saveEntry(invoice, body, user, session, { submit });
+    }
+    const editable = [INVOICE_STATUS.ADDED, INVOICE_STATUS.DRAFT, INVOICE_STATUS.REJECTED];
+    if (!editable.includes(invoice.status)) {
+      throw new Error("Items can't be changed now — this invoice is already submitted");
+    }
+    const before = invoice.toObject();
+
+    const delta = StockInvoiceService._applyEntries(invoice, body.lines);
+
+    if (submit) {
+      const short = invoice.lines.filter((l) => (l.receivedQuantity || 0) !== l.invoiceQuantity);
+      if (short.length) {
+        throw new Error(
+          "Enter every item on the invoice before submitting — " +
+            short.map((l) => `${l.productName} ${l.receivedQuantity || 0}/${l.invoiceQuantity}`).join(", ")
+        );
+      }
+
+      const po = await StockPurchaseOrderModel.findOne({ _id: invoice.poId, isActive: true }).session(session).lean();
+      if (!po) throw new Error("Purchase order not found for this invoice");
+
+      // Items from an earlier, rejected submission were never stock.
+      const oldItemIds = invoice.lines.flatMap((l) => l.createdInventoryItemIds || []);
+      if (oldItemIds.length) {
+        await StockInventoryItemModel.deleteMany({ _id: { $in: oldItemIds } }, { session });
+      }
+      await StockInvoiceService._createPendingInventoryItems(
+        invoice, invoice.vendorId, invoice.branchId, user?.id || user?._id || null, session
+      );
+      await StockInvoiceService._writeRatings(invoice, invoice.vendorId, user, session);
+
+      invoice.status = INVOICE_STATUS.PENDING;
+      invoice.rejectedReason = "";
+      invoice.reviewedBy = null;
+      invoice.reviewedByName = "";
+      invoice.reviewedAt = null;
+    } else if (invoice.status === INVOICE_STATUS.ADDED) {
+      invoice.status = INVOICE_STATUS.DRAFT;
+    }
+
+    invoice.amount = StockInvoiceService._computeAmount(invoice.lines, invoice.extraCharges);
+    if (delta.length || submit) {
+      invoice.entryLog.push({
+        at: new Date(),
+        by: user?.id || user?._id || null,
+        byName: user?.name || "",
+        action: submit ? "SUBMIT" : "DRAFT",
+        items: delta,
+      });
+    }
+    await invoice.save({ session });
+    await StockTrackingOrderService.recalculateStatus(invoice.trackingOrderId, session);
+
+    log.info(`Invoice ${invoice.invoiceNumber}: items ${submit ? "submitted" : "saved as draft"}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: submit ? "SUBMIT" : "SAVE_DRAFT", actor: user, before, after: invoice.toObject(),
+    });
+    return invoice;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Edit invoice — details as written on the vendor's invoice               */
+  /* ---------------------------------------------------------------------- */
+
+  /*
+    Held by its own permission (EDIT_INVOICE). Every change goes into
+    editHistory. Rules: quantities can't go below what is entered, can't move
+    at all once the items are submitted, and nothing changes once payment
+    has started.
+  */
   static async updateInvoice(id, body, user, session, dataAccess) {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
     if (!invoice) throw new Error("Invoice not found");
     assertDataScope(invoice, dataAccess);
-    if (invoice.status !== INVOICE_STATUS.REJECTED) {
-      throw new Error("Only a rejected invoice can be edited");
+    if (StockInvoiceService._paymentStarted(invoice)) {
+      throw new Error("Payment has already started on this invoice — correct it with a credit note or misc charge instead");
+    }
+    const before = invoice.toObject();
+    const changes = [];
+    const note = (field, from, to) => {
+      if (!sameValue(from, to)) changes.push({ field, from, to });
+    };
+
+    if (body.invoiceNumber !== undefined) {
+      const next = String(body.invoiceNumber).trim();
+      note("Invoice number", invoice.invoiceNumber, next);
+      invoice.invoiceNumber = next;
+    }
+    if (body.invoiceDate !== undefined) {
+      const next = new Date(body.invoiceDate);
+      note("Invoice date", ymd(invoice.invoiceDate), ymd(next));
+      invoice.invoiceDate = next;
+    }
+    if (body.invoiceAmount !== undefined) {
+      const next = Number(body.invoiceAmount) || 0;
+      note("Invoice amount", invoice.invoiceAmount || 0, next);
+      invoice.invoiceAmount = next;
+    }
+    if (body.invoiceFile) {
+      note("Invoice file", invoice.invoiceFile || "", body.invoiceFile);
+      invoice.invoiceFile = body.invoiceFile;
+    }
+    if (body.notes !== undefined) {
+      const next = String(body.notes || "").trim();
+      note("Notes", invoice.notes || "", next);
+      invoice.notes = next;
+    }
+    if (body.extraCharges !== undefined) {
+      const next = StockInvoiceService._normalizeCharges(body.extraCharges);
+      note("Extra charges", chargesText(invoice.extraCharges), chargesText(next));
+      invoice.extraCharges = next;
+    }
+
+    if (body.lines !== undefined) {
+      const prevLines = invoice.lines.map((l) => l.toObject());
+      const po = await StockPurchaseOrderModel.findOne({ _id: invoice.poId, isActive: true }).session(session).lean();
+      if (!po) throw new Error("Purchase order not found for this invoice");
+      const invoiced = await StockInvoiceService._invoicedQtyByLine(invoice.trackingOrderId, session, invoice._id);
+      // With partial submit the floor is what its entries already hold
+      // (approved, pending and the open draft), not just the approved count.
+      const floorLines = invoice.partialSubmit
+        ? (() => {
+            const held = StockInvoiceService._entryQtyByLine(invoice, { withDraft: true });
+            return prevLines.map((l) => ({ ...l, floor: held.get(String(l.quotationItemId))?.qty || 0 }));
+          })()
+        : prevLines;
+      const nextLines = StockInvoiceService._resolveInvoiceLines(po, body.lines, invoiced, floorLines);
+      if (!nextLines.length) throw new Error("An invoice needs at least one product with a quantity");
+
+      const prevByKey = new Map(prevLines.map((l) => [String(l.quotationItemId), l]));
+      const nextByKey = new Map(nextLines.map((l) => [String(l.quotationItemId), l]));
+      const qtyChanges = [];
+      for (const key of new Set([...prevByKey.keys(), ...nextByKey.keys()])) {
+        const p = prevByKey.get(key);
+        const n = nextByKey.get(key);
+        const from = p?.invoiceQuantity || 0;
+        const to = n?.invoiceQuantity || 0;
+        if (from !== to) qtyChanges.push({ field: `${(n || p).productName} · quantity`, from, to });
+      }
+      // Submitted items equal the invoice exactly; moving the quantity now
+      // would leave an approved/pending invoice that no longer adds up.
+      if (qtyChanges.length && [INVOICE_STATUS.PENDING, INVOICE_STATUS.APPROVED].includes(invoice.status)) {
+        throw new Error("Items on this invoice are already submitted — its quantities can't change now");
+      }
+      changes.push(...qtyChanges);
+      invoice.lines = nextLines;
+    }
+
+    const key = invoiceNumberKey(invoice.invoiceNumber);
+    const fy = financialYearOf(invoice.invoiceDate);
+    if (key !== invoice.invoiceNumberKey || fy !== invoice.financialYear) {
+      await StockInvoiceService._assertUniqueNumber(invoice.vendorId, key, fy, invoice._id, session, invoice.invoiceNumber);
+      invoice.invoiceNumberKey = key;
+      invoice.financialYear = fy;
+    }
+    invoice.amount = StockInvoiceService._computeAmount(invoice.lines, invoice.extraCharges);
+
+    if (changes.length) {
+      invoice.editHistory.push({ at: new Date(), by: user?.id || user?._id || null, byName: user?.name || "", changes });
+    }
+    await invoice.save({ session });
+
+    log.info(`Invoice edited: ${invoice.invoiceNumber} (${changes.length} change(s))`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: "UPDATE", actor: user, before, after: invoice.toObject(),
+    });
+    return invoice;
+  }
+
+  // An invoice added by mistake. Not once approved: its stock is real then.
+  static async deleteInvoice(id, user, session, dataAccess) {
+    const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!invoice) throw new Error("Invoice not found");
+    assertDataScope(invoice, dataAccess);
+    if (invoice.status === INVOICE_STATUS.APPROVED || invoice.inLedger) {
+      throw new Error("An approved invoice (or one with an approved entry) can't be deleted");
     }
     const before = invoice.toObject();
 
-    const po = await StockPurchaseOrderModel.findOne({ _id: invoice.poId, isActive: true })
-      .session(session)
-      .lean();
-    if (!po) throw new Error("Purchase order not found for this invoice");
-
-    // Same branch pin as create — a resubmit may move the goods to a different
-    // branch, but only one the resubmitter can still see afterwards.
-    const branchId = await StockBranchService.assertBranchInScope(
-      body.branchId ?? invoice.branchId,
-      dataAccess,
-      session
-    );
-
-    // The old (rejected) inventory_items were never real stock — safe to
-    // hard-delete and recreate from the edited rows.
-    const oldItemIds = invoice.lines.flatMap((l) => l.createdInventoryItemIds || []);
-    if (oldItemIds.length) {
-      await StockInventoryItemModel.deleteMany({ _id: { $in: oldItemIds } }, { session });
-    }
-
-    const existingQtyByLine = await StockInvoiceService._sumNonRejectedQtyByLine(
-      invoice.trackingOrderId,
-      session,
-      invoice._id
-    );
-    const lines = await StockInvoiceService._resolveLines(po, body.lines, existingQtyByLine);
-
-    if (body.invoiceNumber !== undefined) invoice.invoiceNumber = String(body.invoiceNumber).trim();
-    if (body.invoiceDate !== undefined) invoice.invoiceDate = body.invoiceDate;
-    if (body.invoiceFile) invoice.invoiceFile = body.invoiceFile;
-    invoice.branchId = branchId;
-    if (body.receivedByName !== undefined) invoice.receivedByName = body.receivedByName;
-    if (body.notes !== undefined) invoice.notes = String(body.notes || "").trim();
-    if (body.extraCharges !== undefined) {
-      invoice.extraCharges = StockInvoiceService._normalizeCharges(body.extraCharges);
-    }
-
-    invoice.lines = lines;
-    invoice.amount = StockInvoiceService._computeAmount(lines, invoice.extraCharges);
-    invoice.status = INVOICE_STATUS.PENDING;
-    invoice.rejectedReason = "";
-    invoice.reviewedBy = null;
-    invoice.reviewedByName = "";
-    invoice.reviewedAt = null;
-
-    await StockInvoiceService._createPendingInventoryItems(
-      invoice,
-      po.vendorId,
-      invoice.branchId,
-      user?.id || user?._id || null,
-      session
-    );
-    await StockInvoiceService._writeRatings(invoice, po.vendorId, user, session);
+    await StockInventoryItemModel.deleteMany({ invoiceId: invoice._id }, { session });
+    invoice.isActive = false;
+    invoice.deletedAt = new Date();
     await invoice.save({ session });
-
     await StockTrackingOrderService.recalculateStatus(invoice.trackingOrderId, session);
 
-    log.info(`Invoice resubmitted: ${invoice.invoiceNumber}`);
+    log.info(`Invoice deleted: ${invoice.invoiceNumber}`);
     await StockAuditLogService.recordAudit({
-      entityType: ENTITY_TYPE, entityId: invoice._id, action: "UPDATE", actor: user, before, after: invoice.toObject(),
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: "DELETE", actor: user, before, after: invoice.toObject(),
+    });
+    return invoice;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Partial submit — entries                                                */
+  /* ---------------------------------------------------------------------- */
+
+  // Quantity held by entries other than `exceptEntryId` — submitted and
+  // approved ones (and the open draft, when `withDraft`), per product.
+  static _entryQtyByLine(invoice, { exceptEntryId = null, withDraft = false } = {}) {
+    const counted = [INVOICE_ENTRY_STATUS.PENDING, INVOICE_ENTRY_STATUS.APPROVED];
+    if (withDraft) counted.push(INVOICE_ENTRY_STATUS.DRAFT);
+    const map = new Map();
+    (invoice.entries || [])
+      .filter((e) => counted.includes(e.status) && String(e._id) !== String(exceptEntryId))
+      .forEach((e) =>
+        (e.lines || []).forEach((l) => {
+          const k = String(l.quotationItemId);
+          const c = map.get(k) || { qty: 0, foc: 0 };
+          c.qty += l.receivedQuantity || 0;
+          c.foc += l.focQuantity || 0;
+          map.set(k, c);
+        })
+      );
+    return map;
+  }
+
+  // Invoice status from its entries: Added → In progress → Approved.
+  static _statusFromEntries(invoice) {
+    const approvedAll = invoice.lines.every((l) => (l.receivedQuantity || 0) >= (l.invoiceQuantity || 0));
+    if (invoice.lines.length && approvedAll) return INVOICE_STATUS.APPROVED;
+    return (invoice.entries || []).length ? INVOICE_STATUS.IN_PROGRESS : INVOICE_STATUS.ADDED;
+  }
+
+  /*
+    Save the open draft entry (or resubmit a rejected one, `body.entryId`).
+    Each product is capped by what is still free on the invoice: its
+    quantity minus every other submitted / approved entry. Submit sends the
+    entry for approval with however much it holds — at least one unit.
+  */
+  static async _saveEntry(invoice, body, user, session, { submit }) {
+    if (invoice.status === INVOICE_STATUS.APPROVED) throw new Error("Everything on this invoice is already approved");
+    const before = invoice.toObject();
+
+    let entry;
+    if (body.entryId) {
+      entry = invoice.entries.id(body.entryId);
+      if (!entry) throw new Error("Entry not found");
+      if (entry.status !== INVOICE_ENTRY_STATUS.REJECTED) throw new Error("Only a rejected entry can be edited");
+      if (!submit) throw new Error("A rejected entry is corrected and submitted again — it can't go back to draft");
+    } else {
+      entry = invoice.entries.find((e) => e.status === INVOICE_ENTRY_STATUS.DRAFT);
+      if (!entry) {
+        invoice.entries.push({ entryNumber: invoice.entries.length + 1, status: INVOICE_ENTRY_STATUS.DRAFT, lines: [] });
+        entry = invoice.entries[invoice.entries.length - 1];
+      }
+    }
+
+    const others = StockInvoiceService._entryQtyByLine(invoice, { exceptEntryId: entry._id });
+    const prevByKey = new Map((entry.lines || []).map((l) => [String(l.quotationItemId), l]));
+    const lineByKey = new Map(invoice.lines.map((l) => [String(l.quotationItemId), l]));
+    const nextLines = [];
+    const delta = [];
+    for (const bl of body.lines || []) {
+      const key = String(bl.quotationItemId);
+      const il = lineByKey.get(key);
+      if (!il) throw new Error("An entered product is not on this invoice");
+      const qty = Math.max(0, Number(bl.receivedQuantity) || 0);
+      const foc = Math.max(0, Number(bl.focQuantity) || 0);
+      const o = others.get(key) || { qty: 0, foc: 0 };
+      if (qty > (il.invoiceQuantity || 0) - o.qty) {
+        throw new Error(`${il.productName}: only ${Math.max(0, (il.invoiceQuantity || 0) - o.qty)} left to enter on this invoice`);
+      }
+      if (bl.rating !== undefined && bl.rating && bl.rating.rating !== undefined) {
+        il.rating = { rating: bl.rating.rating ?? null, notes: bl.rating.notes || "" };
+      }
+      const prev = prevByKey.get(key);
+      const dq = qty - (prev?.receivedQuantity || 0);
+      const df = foc - (prev?.focQuantity || 0);
+      if (dq || df) delta.push({ productName: il.productName, quantity: dq, focQuantity: df });
+      if (qty <= 0 && foc <= 0) continue;
+      nextLines.push({
+        quotationItemId: il.quotationItemId,
+        productDefinitionId: il.productDefinitionId,
+        productName: il.productName,
+        receivedQuantity: qty,
+        focQuantity: foc,
+        rows: Array.isArray(bl.rows) ? bl.rows.map((r) => ({ fieldValues: r.fieldValues || {}, isFoc: !!r.isFoc })) : [],
+        createdInventoryItemIds: prev?.createdInventoryItemIds || [],
+      });
+    }
+
+    if (submit) {
+      if (!nextLines.some((l) => l.receivedQuantity > 0 || l.focQuantity > 0)) {
+        throw new Error("Enter at least one item on this entry before submitting");
+      }
+      // A rejected entry's earlier items were never stock.
+      const oldItemIds = (entry.lines || []).flatMap((l) => l.createdInventoryItemIds || []);
+      if (oldItemIds.length) await StockInventoryItemModel.deleteMany({ _id: { $in: oldItemIds } }, { session });
+      entry.lines = nextLines.map((l) => ({ ...l, createdInventoryItemIds: [] }));
+      await StockInvoiceService._createPendingInventoryItems(
+        invoice, invoice.vendorId, invoice.branchId, user?.id || user?._id || null, session, entry
+      );
+      entry.status = INVOICE_ENTRY_STATUS.PENDING;
+      entry.submittedAt = new Date();
+      entry.submittedByName = user?.name || "";
+      entry.rejectedReason = "";
+      entry.reviewedBy = null;
+      entry.reviewedByName = "";
+      entry.reviewedAt = null;
+    } else {
+      entry.lines = nextLines;
+    }
+    // A draft emptied back to nothing is no entry at all.
+    if (!submit && !nextLines.length) invoice.entries.pull(entry._id);
+
+    invoice.status = StockInvoiceService._statusFromEntries(invoice);
+    if (delta.length || submit) {
+      invoice.entryLog.push({
+        at: new Date(),
+        by: user?.id || user?._id || null,
+        byName: user?.name || "",
+        action: submit ? "SUBMIT" : "DRAFT",
+        entryNumber: entry.entryNumber,
+        items: delta,
+      });
+    }
+    await invoice.save({ session });
+    await StockTrackingOrderService.recalculateStatus(invoice.trackingOrderId, session);
+
+    log.info(`Invoice ${invoice.invoiceNumber}: entry ${entry.entryNumber} ${submit ? "submitted" : "saved as draft"}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: submit ? "SUBMIT_ENTRY" : "SAVE_DRAFT", actor: user, before, after: invoice.toObject(),
+    });
+    return invoice;
+  }
+
+  /*
+    ⋮ → Partial submit ON / OFF (permission PARTIAL_SUBMIT).
+    ON  — while nothing is submitted: whatever is entered becomes the draft
+          of Entry 1.
+    OFF — only while no entry has been submitted: the draft goes back to
+          being the invoice's single entry.
+  */
+  static async setPartialSubmit(id, on, user, session, dataAccess) {
+    const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!invoice) throw new Error("Invoice not found");
+    assertDataScope(invoice, dataAccess);
+    if (!!invoice.partialSubmit === !!on) return invoice;
+    const before = invoice.toObject();
+
+    if (on) {
+      if (![INVOICE_STATUS.ADDED, INVOICE_STATUS.DRAFT, INVOICE_STATUS.REJECTED].includes(invoice.status)) {
+        throw new Error("Items on this invoice are already submitted — partial submit can't be turned on now");
+      }
+      // Items from a rejected whole-invoice submission were never stock.
+      const oldItemIds = invoice.lines.flatMap((l) => l.createdInventoryItemIds || []);
+      if (oldItemIds.length) await StockInventoryItemModel.deleteMany({ _id: { $in: oldItemIds } }, { session });
+      const draftLines = invoice.lines
+        .filter((l) => (l.receivedQuantity || 0) > 0 || (l.focQuantity || 0) > 0)
+        .map((l) => ({
+          quotationItemId: l.quotationItemId,
+          productDefinitionId: l.productDefinitionId,
+          productName: l.productName,
+          receivedQuantity: l.receivedQuantity || 0,
+          focQuantity: l.focQuantity || 0,
+          rows: l.rows || [],
+          createdInventoryItemIds: [],
+        }));
+      invoice.entries = draftLines.length ? [{ entryNumber: 1, status: INVOICE_ENTRY_STATUS.DRAFT, lines: draftLines }] : [];
+      invoice.lines.forEach((l) => {
+        l.receivedQuantity = 0;
+        l.focQuantity = 0;
+        l.rows = [];
+        l.createdInventoryItemIds = [];
+      });
+      invoice.rejectedReason = "";
+      invoice.partialSubmit = true;
+    } else {
+      if ((invoice.entries || []).some((e) => e.status !== INVOICE_ENTRY_STATUS.DRAFT)) {
+        throw new Error("Entries on this invoice are already submitted — partial submit can't be turned off now");
+      }
+      const draft = (invoice.entries || [])[0];
+      const byKey = new Map((draft?.lines || []).map((l) => [String(l.quotationItemId), l]));
+      invoice.lines.forEach((l) => {
+        const d = byKey.get(String(l.quotationItemId));
+        l.receivedQuantity = d?.receivedQuantity || 0;
+        l.focQuantity = d?.focQuantity || 0;
+        l.rows = d?.rows || [];
+      });
+      invoice.entries = [];
+      invoice.partialSubmit = false;
+    }
+    invoice.status = on
+      ? StockInvoiceService._statusFromEntries(invoice)
+      : invoice.lines.some((l) => (l.receivedQuantity || 0) > 0)
+        ? INVOICE_STATUS.DRAFT
+        : INVOICE_STATUS.ADDED;
+    invoice.editHistory.push({
+      at: new Date(), by: user?.id || user?._id || null, byName: user?.name || "",
+      changes: [{ field: "Partial submit", from: on ? "OFF" : "ON", to: on ? "ON" : "OFF" }],
+    });
+    await invoice.save({ session });
+
+    log.info(`Invoice ${invoice.invoiceNumber}: partial submit ${on ? "ON" : "OFF"}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: on ? "PARTIAL_ON" : "PARTIAL_OFF", actor: user, before, after: invoice.toObject(),
+    });
+    return invoice;
+  }
+
+  static async approveEntry(id, entryId, user, session, dataAccess) {
+    const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!invoice) throw new Error("Invoice not found");
+    assertDataScope(invoice, dataAccess);
+    const entry = invoice.entries.id(entryId);
+    if (!entry) throw new Error("Entry not found");
+    if (entry.status !== INVOICE_ENTRY_STATUS.PENDING) throw new Error("Only a pending entry can be approved");
+    const before = invoice.toObject();
+
+    const lineByKey = new Map(invoice.lines.map((l) => [String(l.quotationItemId), l]));
+    for (const el of entry.lines) {
+      const il = lineByKey.get(String(el.quotationItemId));
+      if (!il) throw new Error(`${el.productName} is no longer on this invoice — reject this entry instead`);
+      il.receivedQuantity = (il.receivedQuantity || 0) + (el.receivedQuantity || 0);
+      il.focQuantity = (il.focQuantity || 0) + (el.focQuantity || 0);
+    }
+    entry.status = INVOICE_ENTRY_STATUS.APPROVED;
+    entry.reviewedBy = user?.id || user?._id || null;
+    entry.reviewedByName = user?.name || "";
+    entry.reviewedAt = new Date();
+
+    // The whole invoice counts in the ledger from its first approved entry.
+    invoice.inLedger = true;
+    invoice.status = StockInvoiceService._statusFromEntries(invoice);
+    if (invoice.status === INVOICE_STATUS.APPROVED) {
+      invoice.reviewedBy = entry.reviewedBy;
+      invoice.reviewedByName = entry.reviewedByName;
+      invoice.reviewedAt = entry.reviewedAt;
+      await StockInvoiceService._writeRatings(invoice, invoice.vendorId, user, session);
+    }
+    await invoice.save({ session });
+
+    await StockInventoryItemModel.updateMany(
+      { invoiceEntryId: entry._id },
+      { $set: { approvalStatus: ITEM_APPROVAL_STATUS.APPROVED } },
+      { session }
+    );
+    const tracking = await StockTrackingOrderModel.findOne({ _id: invoice.trackingOrderId }).session(session);
+    for (const el of entry.lines) {
+      if (!(el.receivedQuantity > 0)) continue;
+      await StockVendorPurchaseHistoryModel.create(
+        [
+          {
+            vendorId: invoice.vendorId,
+            productDefinitionId: el.productDefinitionId,
+            receivedQuantity: el.receivedQuantity,
+            purchasePrice: lineByKey.get(String(el.quotationItemId))?.unitPrice || 0,
+            purchaseDate: invoice.invoiceDate,
+            sourceQuotationId: tracking?.sourceQuotationId || null,
+          },
+        ],
+        { session }
+      );
+    }
+    await StockTrackingOrderService.recalculateStatus(invoice.trackingOrderId, session);
+
+    log.info(`Invoice ${invoice.invoiceNumber}: entry ${entry.entryNumber} approved`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: "APPROVE_ENTRY", actor: user, before, after: invoice.toObject(),
+    });
+    return invoice;
+  }
+
+  static async rejectEntry(id, entryId, reason, user, session, dataAccess) {
+    const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
+    if (!invoice) throw new Error("Invoice not found");
+    assertDataScope(invoice, dataAccess);
+    const entry = invoice.entries.id(entryId);
+    if (!entry) throw new Error("Entry not found");
+    if (entry.status !== INVOICE_ENTRY_STATUS.PENDING) throw new Error("Only a pending entry can be rejected");
+    const before = invoice.toObject();
+
+    entry.status = INVOICE_ENTRY_STATUS.REJECTED;
+    entry.rejectedReason = typeof reason === "string" ? reason : "";
+    entry.reviewedBy = user?.id || user?._id || null;
+    entry.reviewedByName = user?.name || "";
+    entry.reviewedAt = new Date();
+    await invoice.save({ session });
+
+    await StockInventoryItemModel.updateMany(
+      { invoiceEntryId: entry._id },
+      { $set: { approvalStatus: ITEM_APPROVAL_STATUS.REJECTED } },
+      { session }
+    );
+    await StockTrackingOrderService.recalculateStatus(invoice.trackingOrderId, session);
+
+    log.info(`Invoice ${invoice.invoiceNumber}: entry ${entry.entryNumber} rejected`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: "REJECT_ENTRY", actor: user, before, after: invoice.toObject(), reason,
     });
     return invoice;
   }
@@ -446,6 +1011,7 @@ export default class StockInvoiceService {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
     if (!invoice) throw new Error("Invoice not found");
     assertDataScope(invoice, dataAccess);
+    if (invoice.partialSubmit) throw new Error("This invoice is approved entry by entry");
     if (invoice.status !== INVOICE_STATUS.PENDING) {
       throw new Error("Only a pending invoice can be approved");
     }
@@ -456,6 +1022,7 @@ export default class StockInvoiceService {
     );
 
     invoice.status = INVOICE_STATUS.APPROVED;
+    invoice.inLedger = true;
     invoice.rejectedReason = "";
     invoice.reviewedBy = user?.id || user?._id || null;
     invoice.reviewedByName = user?.name || "";
@@ -497,6 +1064,7 @@ export default class StockInvoiceService {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session);
     if (!invoice) throw new Error("Invoice not found");
     assertDataScope(invoice, dataAccess);
+    if (invoice.partialSubmit) throw new Error("This invoice is approved entry by entry");
     if (invoice.status !== INVOICE_STATUS.PENDING) {
       throw new Error("Only a pending invoice can be rejected");
     }
@@ -532,7 +1100,7 @@ export default class StockInvoiceService {
   // type/pdf, per-line GST rate, product tracking method) for the Invoice
   // Approval "Review" full page — same "resolve at read-time, no schema
   // change" posture as getBoard's poNumber/orderedQty.
-  static async getInvoiceById(id, dataAccess) {
+  static async getInvoiceById(id, dataAccess, { entryId = null } = {}) {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).lean();
     if (!invoice) {
       throw new Error("Invoice not found");
@@ -541,7 +1109,7 @@ export default class StockInvoiceService {
 
     const po = invoice.poId
       ? await StockPurchaseOrderModel.findOne({ _id: invoice.poId })
-          .select("poNumber taxType pdfPath items.quotationItemId items.gstRate")
+          .select("poNumber taxType pdfPath items.quotationItemId items.gstRate items.quantity")
           .lean()
       : null;
     const poLineByKey = new Map((po?.items || []).map((it) => [String(it.quotationItemId), it]));
@@ -553,23 +1121,76 @@ export default class StockInvoiceService {
       .lean();
     const productDefById = new Map(productDefs.map((p) => [String(p._id), p]));
 
+    // What OTHER approved invoices of this order already brought in, so the
+    // reviewer sees PO qty / earlier received / this invoice side by side.
+    const otherApproved = await StockInvoiceModel.find({
+      trackingOrderId: invoice.trackingOrderId,
+      _id: { $ne: invoice._id },
+      status: INVOICE_STATUS.APPROVED,
+      isActive: true,
+    })
+      .select("lines.quotationItemId lines.receivedQuantity")
+      .lean();
+    const earlierByKey = new Map();
+    otherApproved.forEach((inv) =>
+      (inv.lines || []).forEach((l) => {
+        const k = String(l.quotationItemId);
+        earlierByKey.set(k, (earlierByKey.get(k) || 0) + (l.receivedQuantity || 0));
+      })
+    );
+
     const lines = (invoice.lines || []).map((l) => {
       const poLine = poLineByKey.get(String(l.quotationItemId));
       const productDef = productDefById.get(String(l.productDefinitionId));
       return {
         ...l,
+        orderedQuantity: poLine?.quantity || 0,
+        earlierReceivedQuantity: earlierByKey.get(String(l.quotationItemId)) || 0,
         gstRate: poLine?.gstRate || 0,
         trackingMethod: productDef?.trackingMethod || "quantity",
         unit: productDef?.unit || null,
       };
     });
 
-    return {
+    const base = {
       ...invoice,
       poNumber: po?.poNumber || "",
       poPdfPath: po?.pdfPath || "",
       lines,
       ...totals,
+    };
+    if (!entryId) return base;
+
+    // One entry under review: its own quantities and rows, against the
+    // invoice, with "earlier" counting this invoice's other approved entries.
+    const entry = (invoice.entries || []).find((e) => String(e._id) === String(entryId));
+    if (!entry) throw new Error("Entry not found");
+    const entryByKey = new Map((entry.lines || []).map((l) => [String(l.quotationItemId), l]));
+    const earlierHere = new Map();
+    (invoice.entries || [])
+      .filter((e) => e.status === INVOICE_ENTRY_STATUS.APPROVED && String(e._id) !== String(entryId))
+      .forEach((e) => (e.lines || []).forEach((l) => {
+        const k = String(l.quotationItemId);
+        earlierHere.set(k, (earlierHere.get(k) || 0) + (l.receivedQuantity || 0));
+      }));
+    return {
+      ...base,
+      entry: { ...entry, lines: undefined },
+      status: entry.status,
+      rejectedReason: entry.rejectedReason,
+      reviewedByName: entry.reviewedByName,
+      lines: lines
+        .filter((l) => entryByKey.has(String(l.quotationItemId)))
+        .map((l) => {
+          const el = entryByKey.get(String(l.quotationItemId));
+          return {
+            ...l,
+            earlierReceivedQuantity: (l.earlierReceivedQuantity || 0) + (earlierHere.get(String(l.quotationItemId)) || 0),
+            receivedQuantity: el.receivedQuantity || 0,
+            focQuantity: el.focQuantity || 0,
+            rows: el.rows || [],
+          };
+        }),
     };
   }
 
@@ -596,15 +1217,44 @@ export default class StockInvoiceService {
       filter.$or = [{ invoiceNumber: regex }, { vendorName: regex }, { "lines.productName": regex }];
     }
 
-    const [allRows, counts] = await Promise.all([
-      StockInvoiceModel.find(filter).sort({ createdAt: -1 }).lean(),
-      StockInvoiceModel.aggregate([{ $match: filter }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
-    ]);
+    const loaded = await StockInvoiceModel.find(filter).sort({ createdAt: -1 }).lean();
 
-    const countMap = { ALL: 0, PENDING: 0, APPROVED: 0, REJECTED: 0 };
-    counts.forEach((c) => {
-      if (countMap[c._id] !== undefined) countMap[c._id] = c.count;
-      countMap.ALL += c.count;
+    /*
+      The Invoice Approval page (view=approval) lists what can be decided on:
+      a whole invoice, or — with partial submit — each submitted entry of it
+      as its own row. The Tracking card lists invoices.
+    */
+    const approvalView = query.view === "approval";
+    const decidable = [INVOICE_STATUS.PENDING, INVOICE_STATUS.APPROVED, INVOICE_STATUS.REJECTED];
+    const allRows = !approvalView
+      ? loaded
+      : loaded.flatMap((inv) =>
+          !inv.partialSubmit
+            ? decidable.includes(inv.status) ? [inv] : []
+            : (inv.entries || [])
+                .filter((e) => e.status !== INVOICE_ENTRY_STATUS.DRAFT)
+                .map((e) => {
+                  const byKey = new Map((e.lines || []).map((l) => [String(l.quotationItemId), l]));
+                  return {
+                    ...inv,
+                    status: e.status,
+                    entryId: e._id,
+                    entryNumber: e.entryNumber,
+                    rejectedReason: e.rejectedReason,
+                    reviewedByName: e.reviewedByName,
+                    entryLines: (inv.lines || [])
+                      .filter((l) => byKey.has(String(l.quotationItemId)))
+                      .map((l) => ({ ...l, receivedQuantity: byKey.get(String(l.quotationItemId)).receivedQuantity, focQuantity: byKey.get(String(l.quotationItemId)).focQuantity })),
+                  };
+                })
+        );
+
+    // Counted off the rows already loaded: an aggregate $match would not cast
+    // the id filters (trackingOrderId, vendorId …) and silently count 0.
+    const countMap = { ALL: 0, ADDED: 0, DRAFT: 0, PENDING: 0, IN_PROGRESS: 0, APPROVED: 0, REJECTED: 0 };
+    allRows.forEach((r) => {
+      if (countMap[r.status] !== undefined) countMap[r.status] += 1;
+      countMap.ALL += 1;
     });
 
     const filteredRows = status ? allRows.filter((r) => r.status === status) : allRows;
@@ -634,19 +1284,57 @@ export default class StockInvoiceService {
 
     const paged = pageSlice.map((inv) => {
       const po = poById.get(String(inv.poId));
-      const lines = (inv.lines || []).map((l) => {
+      const lines = (inv.entryLines || inv.lines || []).map((l) => {
         const pd = productDefById.get(String(l.productDefinitionId));
         return { ...l, trackingMethod: pd?.trackingMethod || "quantity", unit: pd?.unit || null };
       });
+      // Partial submit: how much each product's entries hold, so the card can
+      // say what is approved, waiting, in the draft, and still to enter.
+      const held = inv.partialSubmit ? StockInvoiceService._entryQtyByLine(inv, { withDraft: true }) : null;
+      const pending = inv.partialSubmit
+        ? (inv.entries || []).filter((e) => e.status === INVOICE_ENTRY_STATUS.PENDING)
+            .reduce((s, e) => s + (e.lines || []).reduce((t, l) => t + (l.receivedQuantity || 0), 0), 0)
+        : 0;
+      const draft = (inv.entries || []).find((e) => e.status === INVOICE_ENTRY_STATUS.DRAFT);
       return {
         ...inv,
         lines,
+        entries: (inv.entries || []).map((e) => ({
+          _id: e._id,
+          entryNumber: e.entryNumber,
+          status: e.status,
+          submittedAt: e.submittedAt,
+          submittedByName: e.submittedByName,
+          updatedAt: e.updatedAt,
+          rejectedReason: e.rejectedReason,
+          reviewedByName: e.reviewedByName,
+          qty: (e.lines || []).reduce((t, l) => t + (l.receivedQuantity || 0), 0),
+          focQty: (e.lines || []).reduce((t, l) => t + (l.focQuantity || 0), 0),
+          items: (e.lines || []).map((l) => `${l.productName} ${l.receivedQuantity || 0}`).join(", "),
+        })),
+        qtyPendingApproval: pending,
+        qtyDraft: draft ? (draft.lines || []).reduce((t, l) => t + (l.receivedQuantity || 0), 0) : 0,
+        hasDraftEntry: !!draft,
+        // Units still free to enter on this invoice (partial submit).
+        qtyLeftToEnter: held
+          ? (inv.lines || []).reduce((t, l) => t + Math.max(0, (l.invoiceQuantity || 0) - (held.get(String(l.quotationItemId))?.qty || 0)), 0)
+          : null,
         poNumber: po?.poNumber || "",
         orderedQty: (po?.items || []).reduce((s, it) => s + (it.quantity || 0), 0),
         itemsSummary: lines.map((l) => l.productName).join(", "),
-        qtyReceived: lines.reduce((s, l) => s + (l.receivedQuantity || 0), 0),
+        qtyInvoiced: lines.reduce((s, l) => s + (l.invoiceQuantity || 0), 0),
+        qtyReceived: inv.partialSubmit && !inv.entryLines
+          ? (inv.lines || []).reduce((s, l) => s + (held.get(String(l.quotationItemId))?.qty || 0), 0)
+          : lines.reduce((s, l) => s + (l.receivedQuantity || 0), 0),
+        qtyApproved: (inv.lines || []).reduce((s, l) => s + (inv.partialSubmit || inv.status === INVOICE_STATUS.APPROVED ? l.receivedQuantity || 0 : 0), 0),
         focQtyReceived: lines.reduce((s, l) => s + (l.focQuantity || 0), 0),
+        // Priced on the invoice's quantities (what the vendor billed) …
         ...StockInvoiceService._computeInvoiceTotals(inv, po),
+        // … and on what has been entered so far, for the ⓘ breakup.
+        atEntered: StockInvoiceService._computeInvoiceTotals(inv, po, (l) => {
+          if (!inv.partialSubmit) return l.receivedQuantity || 0;
+          return held.get(String(l.quotationItemId))?.qty || 0;
+        }),
       };
     });
 

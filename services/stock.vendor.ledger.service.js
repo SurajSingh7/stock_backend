@@ -140,7 +140,7 @@ export default class StockVendorLedgerService {
   */
   static async _loadFacts(dataAccess, extraFilter = {}, moduleKey = SCOPE_MODULE_KEY) {
     const filter = applyDataScope(
-      { isActive: true, status: INVOICE_STATUS.APPROVED, ...extraFilter },
+      { isActive: true, $or: [{ status: INVOICE_STATUS.APPROVED }, { inLedger: true }], ...extraFilter },
       dataAccess,
       moduleKey
     );

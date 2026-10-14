@@ -34,6 +34,17 @@ export const uploadInvoiceFile = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES },
 });
 
+/*
+  For reading an invoice (Add Invoice → upload → details filled in). Kept in
+  memory, never written to disk: the file is only looked at here, and is
+  saved for real when the invoice itself is saved.
+*/
+export const uploadInvoiceForReading = multer({
+  storage: multer.memoryStorage(),
+  fileFilter,
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+});
+
 export function toPublicInvoicePath(filename) {
   return `/uploads/stock/invoices/${filename}`;
 }

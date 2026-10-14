@@ -261,7 +261,7 @@ export default class StockInvoicePaymentService {
         every one of these is also enforced on the write path.
       */
       canEditAdjustments: !inApprovalFlow,
-      canSendForApproval: !inApprovalFlow && daysLeft <= 0 && payable > 0,
+      canSendForApproval: !inApprovalFlow && daysLeft <= 0 && payable > 0 && invoice.status === INVOICE_STATUS.APPROVED,
       canEnterPayment:
         approvalStatus === PAYMENT_APPROVAL_STATUS.APPROVED && !paymentClosed && balance > 0,
     };
@@ -281,7 +281,7 @@ export default class StockInvoicePaymentService {
     const { search, vendorId, approvalStatus, paymentState, payable, dateFrom, dateTo } = query;
 
     const filter = applyDataScope(
-      { isActive: true, status: INVOICE_STATUS.APPROVED },
+      { isActive: true, $or: [{ status: INVOICE_STATUS.APPROVED }, { inLedger: true }] },
       dataAccess,
       moduleKey
     );
@@ -521,7 +521,7 @@ export default class StockInvoicePaymentService {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session ?? null);
     if (!invoice) throw new Error("Invoice not found");
     if (!isWithinDataScope(invoice, dataAccess, moduleKey)) throw new Error("Invoice not found");
-    if (invoice.status !== INVOICE_STATUS.APPROVED) {
+    if (invoice.status !== INVOICE_STATUS.APPROVED && !invoice.inLedger) {
       throw new Error("Only an approved invoice has a payment side");
     }
     return invoice;
@@ -1113,6 +1113,12 @@ export default class StockInvoicePaymentService {
   */
   static async sendForPaymentApproval(id, payload, actor, session, dataAccess, moduleKey) {
     const invoice = await StockInvoicePaymentService._loadScopedInvoice(id, dataAccess, moduleKey, session);
+
+    // A partial-submit invoice is in the ledger from its first approved
+    // entry, but is paid only once every entry is approved.
+    if (invoice.status !== INVOICE_STATUS.APPROVED) {
+      throw new Error("Payment can be asked for only once every item on this invoice is approved");
+    }
 
     const s = invoice.paymentApprovalStatus;
     if (s === PAYMENT_APPROVAL_STATUS.PENDING) {

@@ -813,37 +813,80 @@ export const validateRejectTransferRequest = (body) => {
 };
 
 // ─── Invoice (goods receiving) Validators ────────────────────────────────────
+// Add Invoice saves what the vendor's invoice says (number, date, quantities);
+// Add Items then enters the actual units against it, draft by draft.
 
-export const validateCreateInvoice = (body) => {
-  if (!body || typeof body !== "object") throw new Error("Request body is required");
+const validateExtraCharges = (extraCharges) => {
+  if (extraCharges === undefined) return;
+  if (!Array.isArray(extraCharges)) throw new Error("extraCharges must be an array");
+  extraCharges.forEach((c, idx) => {
+    // Required on every charge, billed or note-only — a charge with no
+    // amount says nothing a plain invoice note couldn't.
+    if (typeof c.amount !== "number" || !Number.isFinite(c.amount) || c.amount <= 0) {
+      throw new Error(`Extra charge ${idx + 1}: amount is required and must be greater than 0`);
+    }
+    if (c.includeInBilling !== undefined && typeof c.includeInBilling !== "boolean") {
+      throw new Error(`Extra charge ${idx + 1}: includeInBilling must be true or false`);
+    }
+  });
+};
 
-  const { invoiceNumber, invoiceDate, branchId, lines, extraCharges } = body;
-  if (!invoiceNumber || !String(invoiceNumber).trim()) throw new Error("Invoice number is required");
-  if (!invoiceDate) throw new Error("Invoice date is required");
-  // The branch is the invoice's branch — the service checks it is one the
-  // receiver may use; here we only insist it was sent at all.
-  if (!isNonEmptyString(branchId)) throw new Error("Receiving branch is required");
-
+const validateInvoiceLines = (lines) => {
   if (!Array.isArray(lines) || lines.length === 0) {
-    throw new Error("At least one product line must be received");
+    throw new Error("Enter the invoice quantity for at least one product");
   }
   lines.forEach((line, idx) => {
     const where = `Line ${idx + 1}`;
-    if (!isNonEmptyString(line.quotationItemId)) {
-      throw new Error(`${where}: quotationItemId is required`);
+    if (!isNonEmptyString(line.quotationItemId)) throw new Error(`${where}: quotationItemId is required`);
+    if (!isNonNegativeNumber(line.invoiceQuantity)) {
+      throw new Error(`${where}: invoice quantity must be 0 or greater`);
     }
-    if (!isNonNegativeNumber(line.receivedQuantity)) {
-      throw new Error(`${where}: received quantity must be 0 or greater`);
-    }
+  });
+};
+
+// Every field optional on an edit — only what is sent changes.
+export const validateUpdateInvoice = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (body.invoiceNumber !== undefined && !String(body.invoiceNumber).trim()) {
+    throw new Error("Invoice number is required");
+  }
+  if (body.invoiceDate !== undefined && Number.isNaN(new Date(body.invoiceDate).getTime())) {
+    throw new Error("Invoice date is not a valid date");
+  }
+  if (body.invoiceAmount !== undefined && !isNonNegativeNumber(Number(body.invoiceAmount))) {
+    throw new Error("Invoice amount must be 0 or greater");
+  }
+  if (body.lines !== undefined) validateInvoiceLines(body.lines);
+  validateExtraCharges(body.extraCharges);
+  if (body.notes !== undefined && typeof body.notes !== "string") throw new Error("Notes must be text");
+};
+
+export const validateCreateInvoice = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!body.invoiceNumber || !String(body.invoiceNumber).trim()) throw new Error("Invoice number is required");
+  if (!body.invoiceDate) throw new Error("Invoice date is required");
+  // The branch is the invoice's branch — the service checks it is one the
+  // receiver may use; here we only insist it was sent at all.
+  if (!isNonEmptyString(body.branchId)) throw new Error("Receiving branch is required");
+  validateUpdateInvoice(body);
+  validateInvoiceLines(body.lines);
+};
+
+// Add Items — what has been entered so far (draft) or in full (submit).
+export const validateSaveItems = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (body.entryId !== undefined && body.entryId !== null && !isNonEmptyString(body.entryId)) {
+    throw new Error("entryId must be an id");
+  }
+  if (!Array.isArray(body.lines)) throw new Error("lines must be an array");
+  body.lines.forEach((line, idx) => {
+    const where = `Line ${idx + 1}`;
+    if (!isNonEmptyString(line.quotationItemId)) throw new Error(`${where}: quotationItemId is required`);
+    if (!isNonNegativeNumber(line.receivedQuantity)) throw new Error(`${where}: quantity must be 0 or greater`);
     if (line.focQuantity !== undefined && !isNonNegativeNumber(line.focQuantity)) {
       throw new Error(`${where}: FOC quantity must be 0 or greater`);
     }
-    if ((line.receivedQuantity || 0) <= 0 && (line.focQuantity || 0) <= 0) {
-      throw new Error(`${where}: received or FOC quantity must be greater than 0`);
-    }
-    if (line.rows !== undefined && !Array.isArray(line.rows)) {
-      throw new Error(`${where}: rows must be an array`);
-    }
+    if (line.rows !== undefined && !Array.isArray(line.rows)) throw new Error(`${where}: rows must be an array`);
     if (line.rating !== undefined && line.rating !== null) {
       const r = line.rating.rating;
       if (r !== undefined && r !== null && (typeof r !== "number" || r < 0 || r > 5)) {
@@ -851,27 +894,7 @@ export const validateCreateInvoice = (body) => {
       }
     }
   });
-
-  if (extraCharges !== undefined) {
-    if (!Array.isArray(extraCharges)) throw new Error("extraCharges must be an array");
-    extraCharges.forEach((c, idx) => {
-      // Required on every charge, billed or note-only — a charge with no
-      // amount says nothing a plain invoice note couldn't.
-      if (typeof c.amount !== "number" || !Number.isFinite(c.amount) || c.amount <= 0) {
-        throw new Error(`Extra charge ${idx + 1}: amount is required and must be greater than 0`);
-      }
-      if (c.includeInBilling !== undefined && typeof c.includeInBilling !== "boolean") {
-        throw new Error(`Extra charge ${idx + 1}: includeInBilling must be true or false`);
-      }
-    });
-  }
-
-  if (body.notes !== undefined && typeof body.notes !== "string") {
-    throw new Error("Notes must be text");
-  }
 };
-
-export const validateUpdateInvoice = (body) => validateCreateInvoice(body);
 
 export const validateRejectInvoice = (body) => {
   if (!body?.reason || !String(body.reason).trim()) throw new Error("A reason is required");

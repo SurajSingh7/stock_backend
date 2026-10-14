@@ -254,7 +254,10 @@ const UNSCOPED_BY_DESIGN = {
     recalculateStatus: "internal recalculation",
     getByQuotationAndVendor: "internal lookup, not routed",
   },
-  invoices: { _sumNonRejectedQtyByLine: "over-receipt cap must sum every invoice" },
+  invoices: {
+    _invoicedQtyByLine: "PO cap must sum every invoice",
+    _assertUniqueNumber: "a duplicate invoice must be caught whoever added the first one",
+  },
 };
 
 const SCOPE_CALL = /applyDataScope|isWithinDataScope|assertDataScope|resolveDimensionAllowList|unscopedInternalQuery/;

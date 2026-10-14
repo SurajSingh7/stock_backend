@@ -100,7 +100,9 @@ function lineBreakup(invoice, po) {
   const isIgst = taxType === "IGST";
 
   return (invoice.lines || []).map((l) => {
-    const quantity = l.receivedQuantity || 0;
+    // As billed: the invoice's quantity (lines from before it existed fall
+    // back to what was received) — the same basis the invoice is priced on.
+    const quantity = (l.invoiceQuantity || 0) > 0 ? l.invoiceQuantity : l.receivedQuantity || 0;
     const unitPrice = l.unitPrice || 0;
     const basic = round2(quantity * unitPrice);
     const gstRate = gstByItem.get(String(l.quotationItemId)) || 0;

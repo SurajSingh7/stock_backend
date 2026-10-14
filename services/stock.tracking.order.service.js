@@ -7,7 +7,7 @@ import StockInvoiceModel from "../models/stock.invoice.model.js";
 import { paginate } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
-import { readVendorOrders, sumBy, sortBoardByLatest } from "./stock.vendor.order.reader.js";
+import { readVendorOrders, sumBy } from "./stock.vendor.order.reader.js";
 import StockInternalEntityService from "./stock.internal.entity.service.js";
 import {
   QUOTATION_STATUS,
@@ -69,7 +69,7 @@ export default class StockTrackingOrderService {
     const trackingIds = vendorOrders.flatMap((g) => g.vendors.map((v) => v.tracking?._id).filter(Boolean));
     const approvedInvoices = await StockInvoiceModel.find({
       trackingOrderId: { $in: trackingIds },
-      status: INVOICE_STATUS.APPROVED,
+      status: { $in: [INVOICE_STATUS.APPROVED, INVOICE_STATUS.IN_PROGRESS] },
       isActive: true,
     })
       .select("trackingOrderId lines.receivedQuantity")
@@ -80,6 +80,16 @@ export default class StockTrackingOrderService {
       const k = String(inv.trackingOrderId);
       receivedByTracking.set(k, (receivedByTracking.get(k) || 0) + sum);
     });
+
+    // Latest change to any invoice of each order (added, draft saved, entry
+    // submitted/approved …) — so the order just worked on rises to the top.
+    const invoiceActivity = await StockInvoiceModel.aggregate([
+      { $match: { trackingOrderId: { $in: trackingIds } } },
+      { $group: { _id: "$trackingOrderId", at: { $max: "$updatedAt" } } },
+    ]);
+    const lastInvoiceAt = new Map(invoiceActivity.map((a) => [String(a._id), a.at]));
+    const latestOf = (...dates) =>
+      dates.filter(Boolean).reduce((m, d) => (!m || new Date(d) > new Date(m) ? d : m), null);
 
     const fullBoard = [];
     vendorOrders.forEach(({ quotation: q, approvalDate, vendors }) => {
@@ -153,6 +163,9 @@ export default class StockTrackingOrderService {
           closures: tracking.closures || [],
           mailResult: tracking.mailResult || null,
           filterDate: po?.createdAt || approvalDate,
+          // Last time anything happened on this order — PO, the order itself,
+          // or any of its invoices. The board is sorted by it.
+          lastActivityAt: latestOf(po?.updatedAt, tracking.updatedAt, lastInvoiceAt.get(String(tracking._id)), po?.createdAt || approvalDate),
         });
       });
 
@@ -164,7 +177,10 @@ export default class StockTrackingOrderService {
       }
     });
 
-    sortBoardByLatest(fullBoard);
+    // Most recently worked-on first: a card floats up the moment an invoice on
+    // it is added, saved or approved, instead of staying where its PO put it.
+    const cardLatest = (rows) => rows.reduce((m, r) => latestOf(m, r.lastActivityAt), null);
+    fullBoard.sort((a, b) => new Date(cardLatest(b.rows) || 0) - new Date(cardLatest(a.rows) || 0));
 
     const t = search ? String(search).toLowerCase().trim() : "";
     const from = dateFrom ? new Date(dateFrom) : null;
@@ -792,7 +808,7 @@ export default class StockTrackingOrderService {
 
     const approvedInvoices = await StockInvoiceModel.find({
       trackingOrderId,
-      status: INVOICE_STATUS.APPROVED,
+      status: { $in: [INVOICE_STATUS.APPROVED, INVOICE_STATUS.IN_PROGRESS] },
       isActive: true,
     })
       .session(session)
@@ -839,7 +855,7 @@ export default class StockTrackingOrderService {
 
     const approved = await StockInvoiceModel.find({
       trackingOrderId: tracking._id,
-      status: INVOICE_STATUS.APPROVED,
+      status: { $in: [INVOICE_STATUS.APPROVED, INVOICE_STATUS.IN_PROGRESS] },
       isActive: true,
     })
       .session(session)
@@ -882,15 +898,20 @@ export default class StockTrackingOrderService {
     }
 
     // Checked here, not just by hiding the button: an invoice can be submitted
-    // between the board being drawn and this request arriving.
+    // between the board being drawn and this request arriving. An invoice
+    // still being entered (Added / Draft) blocks it too: its goods have
+    // arrived, they just are not in the system yet.
     const pendingCount = await StockInvoiceModel.countDocuments({
       trackingOrderId: tracking._id,
-      status: INVOICE_STATUS.PENDING,
+      $or: [
+        { status: { $in: [INVOICE_STATUS.ADDED, INVOICE_STATUS.DRAFT, INVOICE_STATUS.PENDING, INVOICE_STATUS.IN_PROGRESS] } },
+        { "entries.status": { $in: ["DRAFT", "PENDING"] } },
+      ],
       isActive: true,
     }).session(session);
     if (pendingCount > 0) {
       throw new Error(
-        `${pendingCount} invoice${pendingCount > 1 ? "s are" : " is"} still awaiting approval — approve or reject ${pendingCount > 1 ? "them" : "it"} before short closing this order`
+        `${pendingCount} invoice${pendingCount > 1 ? "s are" : " is"} still being entered or awaiting approval — finish ${pendingCount > 1 ? "them" : "it"} before short closing this order`
       );
     }
 
