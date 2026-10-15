@@ -9,6 +9,8 @@ import StockInventoryItemService from "./stock.inventory.item.service.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import StockBranchService from "./stock.branch.service.js";
+import StockCategoryModel from "../models/stock.category.model.js";
+import StockCategoryService from "./stock.category.service.js";
 
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 
@@ -1123,20 +1125,34 @@ export default class StockInvoiceService {
 
     // What OTHER approved invoices of this order already brought in, so the
     // reviewer sees PO qty / earlier received / this invoice side by side.
+    // A partial-submit invoice still IN_PROGRESS counts too: its lines carry
+    // what its approved entries brought in.
     const otherApproved = await StockInvoiceModel.find({
       trackingOrderId: invoice.trackingOrderId,
       _id: { $ne: invoice._id },
-      status: INVOICE_STATUS.APPROVED,
+      status: { $in: [INVOICE_STATUS.APPROVED, INVOICE_STATUS.IN_PROGRESS] },
       isActive: true,
     })
-      .select("lines.quotationItemId lines.receivedQuantity")
+      .select("lines.quotationItemId lines.receivedQuantity lines.focQuantity")
       .lean();
     const earlierByKey = new Map();
+    const earlierFocByKey = new Map();
     otherApproved.forEach((inv) =>
       (inv.lines || []).forEach((l) => {
         const k = String(l.quotationItemId);
         earlierByKey.set(k, (earlierByKey.get(k) || 0) + (l.receivedQuantity || 0));
+        earlierFocByKey.set(k, (earlierFocByKey.get(k) || 0) + (l.focQuantity || 0));
       })
+    );
+
+    // Full category breadcrumb per line ("Network / Router / Single") — the
+    // line only snapshots the leaf name.
+    const categoryIds = [...new Set((invoice.lines || []).map((l) => String(l.categoryId)).filter((x) => x && x !== "null"))];
+    const categories = await StockCategoryModel.find({ _id: { $in: categoryIds } }).select("path name").lean();
+    const pathById = new Map(
+      await Promise.all(
+        categories.map(async (c) => [String(c._id), (await StockCategoryService.buildDisplayPath(c.path || "")) || c.name])
+      )
     );
 
     const lines = (invoice.lines || []).map((l) => {
@@ -1144,38 +1160,87 @@ export default class StockInvoiceService {
       const productDef = productDefById.get(String(l.productDefinitionId));
       return {
         ...l,
+        categoryPath: pathById.get(String(l.categoryId)) || l.categoryName || "",
         orderedQuantity: poLine?.quantity || 0,
         earlierReceivedQuantity: earlierByKey.get(String(l.quotationItemId)) || 0,
+        earlierFocQuantity: earlierFocByKey.get(String(l.quotationItemId)) || 0,
         gstRate: poLine?.gstRate || 0,
         trackingMethod: productDef?.trackingMethod || "quantity",
         unit: productDef?.unit || null,
       };
     });
 
+    // A partial invoice viewed whole: its serials live on its entries — gather
+    // every APPROVED entry's rows onto the line (its quantities already are
+    // the approved totals).
+    const approvedRowsByKey = new Map();
+    if (invoice.partialSubmit) {
+      (invoice.entries || [])
+        .filter((e) => e.status === INVOICE_ENTRY_STATUS.APPROVED)
+        .sort((x, y) => x.entryNumber - y.entryNumber)
+        .forEach((e) => (e.lines || []).forEach((l) => {
+          const k = String(l.quotationItemId);
+          approvedRowsByKey.set(k, [...(approvedRowsByKey.get(k) || []), ...(l.rows || [])]);
+        }));
+    }
+    const viewLines = invoice.partialSubmit
+      ? lines.map((l) => ({ ...l, rows: approvedRowsByKey.get(String(l.quotationItemId)) || [] }))
+      : lines;
+
     const base = {
       ...invoice,
       poNumber: po?.poNumber || "",
       poPdfPath: po?.pdfPath || "",
-      lines,
+      lines: viewLines,
       ...totals,
     };
     if (!entryId) return base;
 
-    // One entry under review: its own quantities and rows, against the
-    // invoice, with "earlier" counting this invoice's other approved entries.
+    // One entry under review: its own quantities and rows, set against the
+    // whole invoice and the PO.
     const entry = (invoice.entries || []).find((e) => String(e._id) === String(entryId));
     if (!entry) throw new Error("Entry not found");
     const entryByKey = new Map((entry.lines || []).map((l) => [String(l.quotationItemId), l]));
     const earlierHere = new Map();
+    const earlierFocHere = new Map();
     (invoice.entries || [])
       .filter((e) => e.status === INVOICE_ENTRY_STATUS.APPROVED && String(e._id) !== String(entryId))
       .forEach((e) => (e.lines || []).forEach((l) => {
         const k = String(l.quotationItemId);
         earlierHere.set(k, (earlierHere.get(k) || 0) + (l.receivedQuantity || 0));
+        earlierFocHere.set(k, (earlierFocHere.get(k) || 0) + (l.focQuantity || 0));
       }));
+    // The whole bill at a glance, so an entry is never mistaken for a bill.
+    const gstByKey = new Map((po?.items || []).map((it) => [String(it.quotationItemId), it.gstRate || 0]));
+    const unitByKey = new Map((invoice.lines || []).map((l) => [String(l.quotationItemId), l.unitPrice || 0]));
+    const entryValue = (e) =>
+      round2((e.lines || []).reduce((t, l) => {
+        const k = String(l.quotationItemId);
+        return t + (l.receivedQuantity || 0) * (unitByKey.get(k) || 0) * (1 + (gstByKey.get(k) || 0) / 100);
+      }, 0));
+    const sumQty = (e, f) => (e.lines || []).reduce((t, l) => t + (l[f] || 0), 0);
+    const glance = {
+      invoiceQty: (invoice.lines || []).reduce((t, l) => t + (l.invoiceQuantity || 0), 0),
+      // A partial invoice's lines carry what its approved entries brought in.
+      approvedQty: (invoice.lines || []).reduce((t, l) => t + (l.receivedQuantity || 0), 0),
+      thisQty: sumQty(entry, "receivedQuantity"),
+      thisFoc: sumQty(entry, "focQuantity"),
+      thisValue: entryValue(entry),
+      // Approving the first entry is what puts the whole bill in the ledger.
+      firstApproval: !invoice.inLedger,
+      entries: (invoice.entries || [])
+        .filter((e) => e.status !== INVOICE_ENTRY_STATUS.DRAFT)
+        .sort((a, b) => a.entryNumber - b.entryNumber)
+        .map((e) => ({ _id: e._id, entryNumber: e.entryNumber, status: e.status, qty: sumQty(e, "receivedQuantity"), foc: sumQty(e, "focQuantity") })),
+    };
+
     return {
       ...base,
       entry: { ...entry, lines: undefined },
+      glance,
+      // Every product on the invoice — the review's Invoice Details lists the
+      // whole bill, while `lines` below is just this entry.
+      invoiceLines: lines,
       status: entry.status,
       rejectedReason: entry.rejectedReason,
       reviewedByName: entry.reviewedByName,
@@ -1185,7 +1250,14 @@ export default class StockInvoiceService {
           const el = entryByKey.get(String(l.quotationItemId));
           return {
             ...l,
-            earlierReceivedQuantity: (l.earlierReceivedQuantity || 0) + (earlierHere.get(String(l.quotationItemId)) || 0),
+            // "Earlier" stays OTHER invoices; this invoice's own approved
+            // entries are their own figure, so the two never blur.
+            approvedEarlierQuantity: earlierHere.get(String(l.quotationItemId)) || 0,
+            approvedEarlierFocQuantity: earlierFocHere.get(String(l.quotationItemId)) || 0,
+            leftOnInvoiceQuantity: Math.max(
+              0,
+              (l.invoiceQuantity || 0) - (earlierHere.get(String(l.quotationItemId)) || 0) - (el.receivedQuantity || 0)
+            ),
             receivedQuantity: el.receivedQuantity || 0,
             focQuantity: el.focQuantity || 0,
             rows: el.rows || [],
@@ -1220,44 +1292,39 @@ export default class StockInvoiceService {
     const loaded = await StockInvoiceModel.find(filter).sort({ createdAt: -1 }).lean();
 
     /*
-      The Invoice Approval page (view=approval) lists what can be decided on:
-      a whole invoice, or — with partial submit — each submitted entry of it
-      as its own row. The Tracking card lists invoices.
+      The Invoice Approval page (view=approval) lists one row per INVOICE —
+      a partial-submit invoice's entries live inside its row, so one bill is
+      never shown as several. Its tab comes from what needs doing:
+        PENDING  — the invoice, or any entry of it, awaits a decision
+        REJECTED — sent back and not corrected yet
+        APPROVED — fully approved, or a partial invoice with approved entries
+                   and nothing waiting (shown "In progress · 47%")
+      The Tracking card lists invoices as they are.
     */
     const approvalView = query.view === "approval";
     const decidable = [INVOICE_STATUS.PENDING, INVOICE_STATUS.APPROVED, INVOICE_STATUS.REJECTED];
+    const approvalTabOf = (inv) => {
+      if (!inv.partialSubmit) return decidable.includes(inv.status) ? inv.status : null;
+      const seen = new Set((inv.entries || []).map((e) => e.status));
+      if (seen.has(INVOICE_ENTRY_STATUS.PENDING)) return INVOICE_STATUS.PENDING;
+      if (seen.has(INVOICE_ENTRY_STATUS.REJECTED)) return INVOICE_STATUS.REJECTED;
+      if (seen.has(INVOICE_ENTRY_STATUS.APPROVED)) return INVOICE_STATUS.APPROVED;
+      return null; // only a draft so far — nothing to decide yet
+    };
     const allRows = !approvalView
       ? loaded
-      : loaded.flatMap((inv) =>
-          !inv.partialSubmit
-            ? decidable.includes(inv.status) ? [inv] : []
-            : (inv.entries || [])
-                .filter((e) => e.status !== INVOICE_ENTRY_STATUS.DRAFT)
-                .map((e) => {
-                  const byKey = new Map((e.lines || []).map((l) => [String(l.quotationItemId), l]));
-                  return {
-                    ...inv,
-                    status: e.status,
-                    entryId: e._id,
-                    entryNumber: e.entryNumber,
-                    rejectedReason: e.rejectedReason,
-                    reviewedByName: e.reviewedByName,
-                    entryLines: (inv.lines || [])
-                      .filter((l) => byKey.has(String(l.quotationItemId)))
-                      .map((l) => ({ ...l, receivedQuantity: byKey.get(String(l.quotationItemId)).receivedQuantity, focQuantity: byKey.get(String(l.quotationItemId)).focQuantity })),
-                  };
-                })
-        );
+      : loaded.map((inv) => ({ ...inv, approvalTab: approvalTabOf(inv) })).filter((inv) => inv.approvalTab);
+    const tabOf = (r) => (approvalView ? r.approvalTab : r.status);
 
     // Counted off the rows already loaded: an aggregate $match would not cast
     // the id filters (trackingOrderId, vendorId …) and silently count 0.
     const countMap = { ALL: 0, ADDED: 0, DRAFT: 0, PENDING: 0, IN_PROGRESS: 0, APPROVED: 0, REJECTED: 0 };
     allRows.forEach((r) => {
-      if (countMap[r.status] !== undefined) countMap[r.status] += 1;
+      if (countMap[tabOf(r)] !== undefined) countMap[tabOf(r)] += 1;
       countMap.ALL += 1;
     });
 
-    const filteredRows = status ? allRows.filter((r) => r.status === status) : allRows;
+    const filteredRows = status ? allRows.filter((r) => tabOf(r) === status) : allRows;
 
     const { skip, limit, page } = paginate(query);
     const total = filteredRows.length;
@@ -1282,11 +1349,28 @@ export default class StockInvoiceService {
       .lean();
     const productDefById = new Map(productDefs.map((p) => [String(p._id), p]));
 
+    // Full category breadcrumb per line ("Network / Router / Single") — the
+    // invoice line only snapshots the leaf.
+    const boardCategoryIds = [
+      ...new Set(pageSlice.flatMap((inv) => (inv.lines || []).map((l) => String(l.categoryId))).filter((x) => x && x !== "null")),
+    ];
+    const boardCategories = await StockCategoryModel.find({ _id: { $in: boardCategoryIds } }).select("path name").lean();
+    const boardPathById = new Map(
+      await Promise.all(
+        boardCategories.map(async (c) => [String(c._id), (await StockCategoryService.buildDisplayPath(c.path || "")) || c.name])
+      )
+    );
+
     const paged = pageSlice.map((inv) => {
       const po = poById.get(String(inv.poId));
-      const lines = (inv.entryLines || inv.lines || []).map((l) => {
+      const lines = (inv.lines || []).map((l) => {
         const pd = productDefById.get(String(l.productDefinitionId));
-        return { ...l, trackingMethod: pd?.trackingMethod || "quantity", unit: pd?.unit || null };
+        return {
+          ...l,
+          categoryPath: boardPathById.get(String(l.categoryId)) || l.categoryName || "",
+          trackingMethod: pd?.trackingMethod || "quantity",
+          unit: pd?.unit || null,
+        };
       });
       // Partial submit: how much each product's entries hold, so the card can
       // say what is approved, waiting, in the draft, and still to enter.
@@ -1296,6 +1380,21 @@ export default class StockInvoiceService {
             .reduce((s, e) => s + (e.lines || []).reduce((t, l) => t + (l.receivedQuantity || 0), 0), 0)
         : 0;
       const draft = (inv.entries || []).find((e) => e.status === INVOICE_ENTRY_STATUS.DRAFT);
+      // An entry's worth at PO rates (+GST) — its share of the bill.
+      const gstByKey = new Map((po?.items || []).map((it) => [String(it.quotationItemId), it.gstRate || 0]));
+      const unitByKey = new Map((inv.lines || []).map((l) => [String(l.quotationItemId), l.unitPrice || 0]));
+      const entryValue = (e) =>
+        round2((e.lines || []).reduce((t, l) => {
+          const k = String(l.quotationItemId);
+          return t + (l.receivedQuantity || 0) * (unitByKey.get(k) || 0) * (1 + (gstByKey.get(k) || 0) / 100);
+        }, 0));
+      const firstWith = (st) => (inv.entries || []).filter((e) => e.status === st).sort((x, y) => x.entryNumber - y.entryNumber)[0];
+      const pendingEntry = firstWith(INVOICE_ENTRY_STATUS.PENDING);
+      const rejectedEntry = firstWith(INVOICE_ENTRY_STATUS.REJECTED);
+      const invoicedTotal = (inv.lines || []).reduce((t, l) => t + (l.invoiceQuantity || 0), 0);
+      const approvedTotal = (inv.lines || []).reduce(
+        (t, l) => t + (inv.partialSubmit || inv.status === INVOICE_STATUS.APPROVED ? l.receivedQuantity || 0 : 0), 0
+      );
       return {
         ...inv,
         lines,
@@ -1311,8 +1410,21 @@ export default class StockInvoiceService {
           qty: (e.lines || []).reduce((t, l) => t + (l.receivedQuantity || 0), 0),
           focQty: (e.lines || []).reduce((t, l) => t + (l.focQuantity || 0), 0),
           items: (e.lines || []).map((l) => `${l.productName} ${l.receivedQuantity || 0}`).join(", "),
+          value: entryValue(e),
+          // Per product, for the entry cards.
+          lines: (e.lines || []).map((l) => ({
+            quotationItemId: l.quotationItemId,
+            productName: l.productName,
+            receivedQuantity: l.receivedQuantity || 0,
+            focQuantity: l.focQuantity || 0,
+          })),
         })),
         qtyPendingApproval: pending,
+        pendingEntryCount: (inv.entries || []).filter((e) => e.status === INVOICE_ENTRY_STATUS.PENDING).length,
+        pendingEntry: pendingEntry ? { _id: pendingEntry._id, entryNumber: pendingEntry.entryNumber } : null,
+        rejectedEntry: rejectedEntry ? { _id: rejectedEntry._id, entryNumber: rejectedEntry.entryNumber } : null,
+        // Partial invoices: how much of the bill is approved, in percent.
+        progressPct: invoicedTotal > 0 ? Math.round((approvedTotal / invoicedTotal) * 100) : 0,
         qtyDraft: draft ? (draft.lines || []).reduce((t, l) => t + (l.receivedQuantity || 0), 0) : 0,
         hasDraftEntry: !!draft,
         // Units still free to enter on this invoice (partial submit).
@@ -1323,10 +1435,10 @@ export default class StockInvoiceService {
         orderedQty: (po?.items || []).reduce((s, it) => s + (it.quantity || 0), 0),
         itemsSummary: lines.map((l) => l.productName).join(", "),
         qtyInvoiced: lines.reduce((s, l) => s + (l.invoiceQuantity || 0), 0),
-        qtyReceived: inv.partialSubmit && !inv.entryLines
+        qtyReceived: inv.partialSubmit
           ? (inv.lines || []).reduce((s, l) => s + (held.get(String(l.quotationItemId))?.qty || 0), 0)
           : lines.reduce((s, l) => s + (l.receivedQuantity || 0), 0),
-        qtyApproved: (inv.lines || []).reduce((s, l) => s + (inv.partialSubmit || inv.status === INVOICE_STATUS.APPROVED ? l.receivedQuantity || 0 : 0), 0),
+        qtyApproved: approvedTotal,
         focQtyReceived: lines.reduce((s, l) => s + (l.focQuantity || 0), 0),
         // Priced on the invoice's quantities (what the vendor billed) …
         ...StockInvoiceService._computeInvoiceTotals(inv, po),
