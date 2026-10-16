@@ -43,7 +43,7 @@ const MODULE_DEFINITIONS = [
   // "invoice-list"), which is why nobody could see it.
   { key: "invoice-list", name: "Invoice List", actions: withMenu(["READ", "SCHEDULE_PAYMENT"]) },
   // The account team's screen. Three separate write actions on purpose: the
-  // person who clears a credit note need not be the one who asks for payment
+  // person who clears a debit note need not be the one who asks for payment
   // approval, nor the one who records the money leaving.
   { key: "payments", name: "Payments", actions: withMenu(["READ", "MANAGE_ADJUSTMENT", "REQUEST_PAYMENT_APPROVAL", "ENTER_PAYMENT"]) },
   // The approval team's screen. Read and decide, nothing else — they approve a
@@ -67,12 +67,13 @@ const MODULE_DEFINITIONS = [
     in config/data.scope.registry.js.
   */
   { key: "billing-report", name: "Billing Report", actions: withMenu(["READ"]) },
-  { key: "outstanding-report", name: "Outstanding Report", actions: withMenu(["READ"]) },
   { key: "paid-report", name: "Paid", actions: withMenu(["READ"]) },
   { key: "transaction-register", name: "Transaction Register", actions: withMenu(["READ"]) },
   { key: "invoice-breakup", name: "Invoice Breakup", actions: withMenu(["READ"]) },
+  { key: "account-summary", name: "Vendor Outstanding Overview", actions: withMenu(["READ"]) },
   { key: "branches", name: "Branches", actions: withMenu(STANDARD_ACTIONS) },
   { key: "gst-rates", name: "GST Rates", actions: withMenu(STANDARD_ACTIONS) },
+  { key: "tds-rates", name: "TDS Rates", actions: withMenu(STANDARD_ACTIONS) },
   { key: "transfer-requests", name: "Transfer Requests", actions: withMenu(["CREATE", "READ", "PROCESS", "REJECT"]) },
   { key: "notifications", name: "Notifications", actions: withMenu(STANDARD_ACTIONS) },
 ];

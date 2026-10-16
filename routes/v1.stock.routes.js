@@ -12,6 +12,7 @@ import StockTrackingOrderController from "../controllers/stock.tracking.order.co
 import StockNotificationController from "../controllers/stock.notification.controller.js";
 import StockBranchController from "../controllers/stock.branch.controller.js";
 import StockGstRateController from "../controllers/stock.gst.rate.controller.js";
+import StockTdsRateController from "../controllers/stock.tds.rate.controller.js";
 import StockInvoiceController from "../controllers/stock.invoice.controller.js";
 import { uploadInvoiceFile, uploadInvoiceForReading } from "../helpers/stock.invoice.upload.helper.js";
 import StockTransferRequestController from "../controllers/stock.transfer.request.controller.js";
@@ -222,10 +223,10 @@ router.patch("/invoice-list/:id/schedule", authenticate, requirePermission("invo
 // Same documents, different module: an admin can give accounts every branch
 // here while the stock team stays on its own. MANAGE_ADJUSTMENT and
 // ENTER_PAYMENT are separate from REQUEST_PAYMENT_APPROVAL so the person who
-// raises a credit note need not be the one who releases the money.
+// raises a debit note need not be the one who releases the money.
 router.get("/payments", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getPaymentsList);
 router.get("/payments/:id/adjustments", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getAdjustmentsForAccounts);
-router.get("/payments/:id/creditable-items", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getCreditableItems);
+router.get("/payments/:id/debit-note-items", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getDebitNoteItems);
 // Raised by accounts and in force at once — there is nobody left to ask.
 router.post("/payments/:id/adjustments", authenticate, requirePermission("payments", "MANAGE_ADJUSTMENT"), StockInvoicePaymentController.createAdjustment);
 // :id below is the ADJUSTMENT, not the invoice. Editing reverses the old one
@@ -258,7 +259,7 @@ router.patch("/payment-approval/:id/decide", authenticate, requirePermission("pa
 
 // ─── Vendor Ledger ───────────────────────────────────────────────────────────
 // Read-only by design: every figure here already happened on an invoice, a
-// credit note or a payment. A write action would be a second way to change a
+// debit note or a payment. A write action would be a second way to change a
 // balance, and then two places to look when one is wrong.
 //
 // Its own module, not a corner of "payments": a ledger is what gets shown to a
@@ -268,25 +269,24 @@ router.patch("/payment-approval/:id/decide", authenticate, requirePermission("pa
   Reports. Four modules, four routes, each checked against its own key so the
   data scope can differ per report.
 
-  /reports/billing and /reports/outstanding deliberately hit the same service
-  method as /vendor-ledger below. They are the same figures with different
+  /reports/billing and /reports/account-summary deliberately hit the same
+  service method (getVendorSummary). They are the same figures with different
   columns and different default filters — the alternative was a second copy of
   that arithmetic, and then two answers to one question.
 */
 router.get("/reports/billing", authenticate, requirePermission("billing-report", "READ"), StockReportController.getBilling);
-router.get("/reports/outstanding", authenticate, requirePermission("outstanding-report", "READ"), StockReportController.getOutstanding);
 
 // The invoices behind one vendor's row. Guarded by the report that links to
 // them, so a drill-down never 403s on somebody who can see the row above it.
 router.get("/reports/billing/:vendorId/invoices", authenticate, requirePermission("billing-report", "READ"), StockReportController.getBillingInvoices);
-router.get("/reports/outstanding/:vendorId/invoices", authenticate, requirePermission("outstanding-report", "READ"), StockReportController.getOutstandingInvoices);
-// One route, four tabs: ?type=ALL|PAYMENT|CREDIT_NOTE|MISC
+router.get("/reports/account-summary", authenticate, requirePermission("account-summary", "READ"), StockReportController.getAccountSummary);
+router.get("/reports/account-summary/:vendorId/invoices", authenticate, requirePermission("account-summary", "READ"), StockReportController.getAccountSummaryInvoices);
+// One route, four tabs: ?type=ALL|PAYMENT|DEBIT_NOTE|MISC
 router.get("/reports/paid", authenticate, requirePermission("paid-report", "READ"), StockReportController.getPaid);
 router.get("/reports/paid/:vendorId/payments", authenticate, requirePermission("paid-report", "READ"), StockReportController.getPaidPayments);
 router.get("/reports/transactions", authenticate, requirePermission("transaction-register", "READ"), StockReportController.getTransactions);
 router.get("/reports/invoice-breakup", authenticate, requirePermission("invoice-breakup", "READ"), StockReportController.getInvoiceBreakup);
 
-router.get("/vendor-ledger", authenticate, requirePermission("vendor-ledger", "READ"), StockVendorLedgerController.getVendorSummary);
 router.get("/vendor-ledger/:vendorId", authenticate, requirePermission("vendor-ledger", "READ"), StockVendorLedgerController.getVendorLedger);
 router.get("/vendor-ledger/:vendorId/invoices", authenticate, requirePermission("vendor-ledger", "READ"), StockVendorLedgerController.getVendorInvoices);
 router.get("/vendor-ledger/:vendorId/month", authenticate, requirePermission("vendor-ledger", "READ"), StockVendorLedgerController.getMonthDetail);
@@ -330,6 +330,14 @@ router.get("/gst-rates/:id", authenticate, requirePermission("gst-rates", "READ"
 router.put("/gst-rates/:id", authenticate, requirePermission("gst-rates", "UPDATE"), StockGstRateController.updateGstRate);
 router.delete("/gst-rates/:id", authenticate, requirePermission("gst-rates", "DELETE"), StockGstRateController.softDeleteGstRate);
 router.patch("/gst-rates/:id/restore", authenticate, requirePermission("gst-rates", "RESTORE"), StockGstRateController.restoreGstRate);
+
+// ─── TDS Rates (one per buyer entity) ───────────────────────────────────────
+router.post("/tds-rates", authenticate, requirePermission("tds-rates", "CREATE"), StockTdsRateController.createTdsRate);
+router.get("/tds-rates", authenticate, requirePermission("tds-rates", "READ"), StockTdsRateController.getAllTdsRates);
+router.get("/tds-rates/:id", authenticate, requirePermission("tds-rates", "READ"), StockTdsRateController.getTdsRateById);
+router.put("/tds-rates/:id", authenticate, requirePermission("tds-rates", "UPDATE"), StockTdsRateController.updateTdsRate);
+router.delete("/tds-rates/:id", authenticate, requirePermission("tds-rates", "DELETE"), StockTdsRateController.softDeleteTdsRate);
+router.patch("/tds-rates/:id/restore", authenticate, requirePermission("tds-rates", "RESTORE"), StockTdsRateController.restoreTdsRate);
 
 // ─── Inventory Transfer Requests ──────────────────────────────────────────────
 router.post("/transfer-requests", authenticate, requirePermission("transfer-requests", "CREATE"), StockTransferRequestController.createTransferRequest);

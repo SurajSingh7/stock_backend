@@ -21,6 +21,7 @@ const MODEL_FILE = {
   notifications: "stock.notification.model.js",
   branches: "stock.branch.model.js",
   "gst-rates": "stock.gst.rate.model.js",
+  "tds-rates": "stock.tds.rate.model.js",
   "inventory-items": "stock.inventory.item.model.js",
   "transfer-requests": "stock.transfer.request.model.js",
   quotations: "stock.quotation.model.js",

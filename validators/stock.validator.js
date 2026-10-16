@@ -592,7 +592,7 @@ export const validateCreateAdjustment = (body) => {
 
 /*
   Editing one. Same shape as a create minus the type, which cannot change: a
-  credit note does not become a misc charge, it gets withdrawn and a misc
+  debit note does not become a misc charge, it gets withdrawn and a misc
   charge raised instead.
 */
 export const validateUpdateAdjustment = (body) => {
@@ -765,6 +765,18 @@ export const validateUpdateGstRate = (body) => {
   if (rate !== undefined) assertGstRateValue(rate);
   if (order !== undefined && order !== null && order !== "" && !Number.isFinite(Number(order)))
     throw new Error("order must be a number");
+};
+
+export const validateCreateTdsRate = (body) => {
+  const { entityAlias, rate } = body || {};
+  if (!entityAlias || !String(entityAlias).trim()) throw new Error("entity is required");
+  assertGstRateValue(rate);
+};
+
+export const validateUpdateTdsRate = (body) => {
+  const { entityAlias, rate } = body || {};
+  if (entityAlias !== undefined && !String(entityAlias).trim()) throw new Error("entity is required");
+  if (rate !== undefined) assertGstRateValue(rate);
 };
 
 // ─── Inventory Transfer Request Validators ───────────────────────────────────

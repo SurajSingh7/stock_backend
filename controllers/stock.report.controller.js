@@ -11,10 +11,10 @@ const log = getLogger(import.meta.url);
 
   Each handler passes its OWN module key down, because requirePermission
   resolves the data scope per module: that is what lets somebody be
-  branch-limited on Billing while seeing every branch on Outstanding. Passing
+  branch-limited on Billing while seeing every branch on the overview. Passing
   a shared key would quietly give all four the same scope.
 
-  Billing and Outstanding call the vendor ledger's summary rather than having
+  Billing and Vendor Outstanding Overview call the vendor ledger's summary rather than having
   their own service code. They are the same figures read with different
   columns — the difference is entirely in what the screen shows and what it
   defaults its filters to. Two implementations of that arithmetic would drift
@@ -24,10 +24,10 @@ const log = getLogger(import.meta.url);
 */
 const MODULE = {
   BILLING: "billing-report",
-  OUTSTANDING: "outstanding-report",
   PAID: "paid-report",
   TRANSACTIONS: "transaction-register",
   BREAKUP: "invoice-breakup",
+  ACCOUNT: "account-summary",
 };
 
 export default class StockReportController {
@@ -47,29 +47,7 @@ export default class StockReportController {
   }
 
   /*
-    Outstanding: what is still owed, as on today.
-
-    Same endpoint shape as Billing on purpose. The period filter still reaches
-    the service and still moves the billing columns, but outstanding and
-    ageing ignore it by design — "how much is stuck" is not a question about a
-    date range. See the note at the top of the vendor ledger service.
-  */
-  static async getOutstanding(req, res) {
-    try {
-      const { data, total, page, limit } = await StockVendorLedgerService.getVendorSummary(
-        req.query,
-        req.dataAccess,
-        MODULE.OUTSTANDING
-      );
-      successResponseHandler(res, paginateReturn(data, total, page, limit), "Outstanding report fetched successfully");
-    } catch (error) {
-      log.error("Error fetching outstanding report", error);
-      errorResponseHandler(res, error);
-    }
-  }
-
-  /*
-    Transaction register: payments, credit notes and misc charges.
+    Transaction register: payments, debit notes and misc charges.
 
     One handler for all four tabs. `type` picks which kind of row comes back,
     and ALL interleaves them by date — so the screen's tabs are a query
@@ -91,12 +69,12 @@ export default class StockReportController {
   }
 
   /*
-    The invoices behind one vendor's row, on Billing and on Outstanding.
+    The invoices behind one vendor's row, on Billing and on the overview.
 
     Both hand off to the same getInvoiceBreakup the Invoice Breakup page uses:
     it already returns everything either drill-down needs — the tax split and
-    extra charges for Billing, the payable/paid/outstanding and stage for
-    Outstanding. The two screens differ only in which columns they render and
+    extra charges for Billing, billing through to balance due for the
+    overview. The two screens differ only in which columns they render and
     whether they pass a period.
 
     Separate routes rather than reusing /reports/invoice-breakup because
@@ -140,6 +118,41 @@ export default class StockReportController {
     }
   }
 
+  /*
+    Vendor Outstanding Overview — billing through to what is still due, one row per
+    vendor. The period picks invoices by INVOICE DATE (billedFrom/billedTo),
+    and every figure on them is as on today, so each row adds up:
+    Net Payable − Paid − Written Off = Balance Due.
+  */
+  static async getAccountSummary(req, res) {
+    try {
+      const { from, to, ...rest } = req.query;
+      const { data, total, page, limit } = await StockVendorLedgerService.getVendorSummary(
+        { ...rest, billedFrom: from, billedTo: to },
+        req.dataAccess,
+        MODULE.ACCOUNT
+      );
+      successResponseHandler(res, paginateReturn(data, total, page, limit), "Vendor account summary fetched successfully");
+    } catch (error) {
+      log.error("Error fetching vendor account summary", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
+  static async getAccountSummaryInvoices(req, res) {
+    try {
+      const { data, total, page, limit } = await StockReportService.getInvoiceBreakup(
+        { ...req.query, vendorId: req.params.vendorId },
+        req.dataAccess,
+        MODULE.ACCOUNT
+      );
+      successResponseHandler(res, paginateReturn(data, total, page, limit), "Vendor invoices fetched successfully");
+    } catch (error) {
+      log.error("Error fetching account summary invoices for vendor", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
   static async getBillingInvoices(req, res) {
     try {
       const { data, total, page, limit } = await StockReportService.getInvoiceBreakup(
@@ -150,20 +163,6 @@ export default class StockReportController {
       successResponseHandler(res, paginateReturn(data, total, page, limit), "Vendor invoices fetched successfully");
     } catch (error) {
       log.error("Error fetching billing invoices for vendor", error);
-      errorResponseHandler(res, error);
-    }
-  }
-
-  static async getOutstandingInvoices(req, res) {
-    try {
-      const { data, total, page, limit } = await StockReportService.getInvoiceBreakup(
-        { ...req.query, vendorId: req.params.vendorId },
-        req.dataAccess,
-        MODULE.OUTSTANDING
-      );
-      successResponseHandler(res, paginateReturn(data, total, page, limit), "Vendor invoices fetched successfully");
-    } catch (error) {
-      log.error("Error fetching outstanding invoices for vendor", error);
       errorResponseHandler(res, error);
     }
   }

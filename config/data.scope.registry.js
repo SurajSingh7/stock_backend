@@ -36,6 +36,8 @@ export const DATA_SCOPE_REGISTRY = {
   // The GST slab ladder — the same rows for the whole company. No branch,
   // entity or ownership dimension exists to scope them on.
   "gst-rates": {},
+  // One TDS rate per buyer company — company-wide, nothing to scope on.
+  "tds-rates": {},
 
   // ── Branch-scoped ────────────────────────────────────────────────────────
   // A branch record IS a branch, so it scopes on its own _id. The unscoped
@@ -84,10 +86,10 @@ export const DATA_SCOPE_REGISTRY = {
     impossible.
   */
   "billing-report": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
-  "outstanding-report": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
   "paid-report": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
   "transaction-register": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
   "invoice-breakup": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+  "account-summary": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
 };
 
 /**

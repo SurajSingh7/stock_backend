@@ -57,10 +57,10 @@ const MODEL_FILE = {
   // Reports — all read the same invoices, each through its own module so the
   // data scope can differ per report.
   "billing-report": "stock.invoice.model.js",
-  "outstanding-report": "stock.invoice.model.js",
   "paid-report": "stock.invoice.model.js",
   "transaction-register": "stock.invoice.model.js",
   "invoice-breakup": "stock.invoice.model.js",
+  "account-summary": "stock.invoice.model.js",
 };
 
 for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
@@ -118,10 +118,10 @@ const SERVICE_FILE = {
   // the ledger's summary with different columns, so the scope check that
   // matters is the one already asserted on stock.vendor.ledger.service.js.
   "billing-report": "stock.vendor.ledger.service.js",
-  "outstanding-report": "stock.vendor.ledger.service.js",
   "paid-report": "stock.report.service.js",
   "transaction-register": "stock.report.service.js",
   "invoice-breakup": "stock.report.service.js",
+  "account-summary": "stock.vendor.ledger.service.js",
 };
 
 /*
@@ -147,7 +147,7 @@ const SCOPED_BY_DELEGATION = {
   Collections with no scope fields of their own, which inherit visibility from
   a parent that was already scoped.
 
-  The adjustment collection is the case: a credit note is exactly as visible as
+  The adjustment collection is the case: a debit note is exactly as visible as
   the invoice it sits on, so it is deliberately absent from the registry and is
   only ever queried for invoice ids a scoped query returned — see
   StockVendorLedgerService._loadFacts and StockReportService._adjustmentRows.
@@ -228,10 +228,10 @@ const OWN_MODEL = {
   "payment-approval": "StockInvoiceModel",
   "vendor-ledger": "StockInvoiceModel",
   "billing-report": "StockInvoiceModel",
-  "outstanding-report": "StockInvoiceModel",
   "paid-report": "StockInvoiceModel",
   "transaction-register": "StockInvoiceModel",
   "invoice-breakup": "StockInvoiceModel",
+  "account-summary": "StockInvoiceModel",
 };
 
 // Internal mechanics that legitimately see every row. Each is named here

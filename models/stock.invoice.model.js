@@ -185,6 +185,26 @@ const invoiceSchema = new Schema(
     inLedger: { type: Boolean, default: false },
 
     /*
+      TDS, snapshotted the moment the invoice first enters the ledger (approval,
+      or with partial submit its first approved entry) from Master > TDS Rates
+      for entityAlias. Only the RATE is stored; the amount is rate × basic,
+      worked out on read, so an admin correcting a price moves it too. Null on
+      invoices approved before TDS existed — those carry no TDS.
+    */
+    tds: {
+      type: new Schema(
+        {
+          rate: { type: Number, default: 0, min: 0 },
+          entityAlias: { type: String, trim: true, default: "" },
+          note: { type: String, trim: true, default: "" },
+          appliedAt: { type: Date, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+
+    /*
       Who entered what, and when — one row per "Save as Draft" / "Submit".
       Several people can carry the same invoice forward, so this is how
       "who put in the first 20 routers" stays answerable.

@@ -23,11 +23,11 @@ const log = getLogger(import.meta.url);
 
   What IS here needs data the ledger deliberately does not surface:
 
-      Transaction        every payment, credit note and misc charge across
+      Transaction        every payment, debit note and misc charge across
       register           every vendor, one row each, newest first. The ledger
                          only ever gives per-vendor totals, or one vendor's one
                          month — neither can be ticked off against a bank
-                         statement, and neither shows a withdrawn credit note
+                         statement, and neither shows a withdrawn debit note
                          at all.
 
       Invoice breakup    an invoice's LINES. The ledger stops at the invoice
@@ -58,7 +58,7 @@ const startOfDay = (d) => {
 export const TXN_TYPE = {
   ALL: "ALL",
   PAYMENT: "PAYMENT",
-  CREDIT_NOTE: "CREDIT_NOTE",
+  DEBIT_NOTE: "DEBIT_NOTE",
   MISC: "MISC",
 };
 const TXN_TYPE_ARRAY = Object.values(TXN_TYPE);
@@ -66,13 +66,13 @@ const TXN_TYPE_ARRAY = Object.values(TXN_TYPE);
 /*
   What the row DID, which is not the same as its sign.
 
-  A payment and a credit note both make us owe less, but only one of them
+  A payment and a debit note both make us owe less, but only one of them
   moved money — and a reader reconciling a bank statement needs to tell them
   apart at a glance.
 */
 export const TXN_EFFECT = {
   MONEY_OUT: "MONEY_OUT",                   // a payment actually left
-  REDUCES_PAYABLE: "REDUCES_PAYABLE",       // credit note
+  REDUCES_PAYABLE: "REDUCES_PAYABLE",       // debit note
   INCREASES_PAYABLE: "INCREASES_PAYABLE",   // misc charge
 };
 
@@ -225,11 +225,11 @@ export default class StockReportService {
   }
 
   /*
-    Credit notes and misc charges, one row each, with their history.
+    Debit notes and misc charges, one row each, with their history.
 
     Queried directly rather than through _loadFacts's adjByInvoice for one
-    reason: that map is built with isActive: true, so a withdrawn credit note
-    is invisible there — and a withdrawn credit note is precisely what somebody
+    reason: that map is built with isActive: true, so a withdrawn debit note
+    is invisible there — and a withdrawn debit note is precisely what somebody
     comes to a history page looking for ("we raised one, where did it go").
 
     Scope is inherited from the invoices, not applied here. The adjustment
@@ -251,11 +251,11 @@ export default class StockReportService {
       const inv = invById.get(String(a.invoiceId)) || {};
       const po = poById.get(String(inv.poId)) || null;
       const vendor = vendorById.get(String(inv.vendorId || po?.vendorId || "")) || null;
-      const isCredit = a.type === ADJUSTMENT_TYPE.CREDIT_NOTE;
+      const isDebit = a.type === ADJUSTMENT_TYPE.DEBIT_NOTE;
 
       /*
         A one-line summary of what the adjustment is claiming, so the All tab
-        can show every kind of row with the same column. A credit note is
+        can show every kind of row with the same column. A debit note is
         described by the units it claimed; a misc charge has no units, so its
         reason IS the description.
       */
@@ -266,7 +266,7 @@ export default class StockReportService {
       return {
         rowKey: `adjustment:${a._id}`,
         adjustmentId: a._id,
-        type: isCredit ? TXN_TYPE.CREDIT_NOTE : TXN_TYPE.MISC,
+        type: isDebit ? TXN_TYPE.DEBIT_NOTE : TXN_TYPE.MISC,
         /*
           createdOn, falling back to the document timestamp. An adjustment
           belongs to the day it was PUT ON the invoice — that is when the
@@ -292,7 +292,7 @@ export default class StockReportService {
         /*
           The edit trail, straight off the document. Nothing else in the system
           shows it, and "it used to be 60,000, who changed it" is the second
-          question after "where did the credit note go".
+          question after "where did the debit note go".
         */
         edits: (a.edits || []).map((e) => ({
           fromAmount: e.fromAmount || 0,
@@ -386,7 +386,7 @@ export default class StockReportService {
 
     /*
       Mode is a payment-only filter, so asking for one legitimately empties the
-      adjustment tabs — a credit note was not paid by NEFT. The screen only
+      adjustment tabs — a debit note was not paid by NEFT. The screen only
       offers it on the All and Payments tabs for that reason.
     */
     if (mode) everything = everything.filter((r) => r.mode === mode);
@@ -411,8 +411,8 @@ export default class StockReportService {
 
     // Counted over everything the other filters allow, before the tab filter.
     const byMode = Object.fromEntries(PAYMENT_MODE_ARRAY.map((m) => [m, 0]));
-    const counts = { ALL: everything.length, PAYMENT: 0, CREDIT_NOTE: 0, MISC: 0, WITHDRAWN: 0 };
-    const amounts = { PAYMENT: 0, CREDIT_NOTE: 0, MISC: 0 };
+    const counts = { ALL: everything.length, PAYMENT: 0, DEBIT_NOTE: 0, MISC: 0, WITHDRAWN: 0 };
+    const amounts = { PAYMENT: 0, DEBIT_NOTE: 0, MISC: 0 };
     const vendors = new Set();
 
     everything.forEach((r) => {
@@ -442,7 +442,7 @@ export default class StockReportService {
           transactions: rows.length,
           vendors: vendors.size,
           paid: amounts.PAYMENT,
-          creditNotes: amounts.CREDIT_NOTE,
+          debitNotes: amounts.DEBIT_NOTE,
           misc: amounts.MISC,
           counts,
           byMode,
@@ -586,12 +586,12 @@ export default class StockReportService {
 
     The question this answers is "how was this amount reached" — so it returns
     the whole chain in one row, in the order the arithmetic runs: lines priced,
-    extra charges added, GST applied, credit notes taken off, misc charges
+    extra charges added, GST applied, debit notes taken off, misc charges
     added, payments deducted. A screen can then print the working rather than
     asking somebody to trust a total.
 
     Adjustments come back whole, with their own lines and extras, because a
-    credit note's amount is only checkable against the units it claimed.
+    debit note's amount is only checkable against the units it claimed.
   */
   static async getInvoiceBreakup(query = {}, dataAccess, moduleKey) {
     const { skip, limit, page } = paginate(query);
@@ -654,6 +654,8 @@ export default class StockReportService {
           igstAmount: totals.igstAmount,
           gstAmount: totals.gstAmount,
           grandTotal: totals.grandTotal,
+          tdsRate: totals.tdsRate,
+          tdsAmount: totals.tdsAmount,
         },
         /*
           Returned so a reader can see the lines reconcile to the stored
@@ -682,7 +684,7 @@ export default class StockReportService {
           })),
           extras: (a.extras || []).map((e) => ({ note: e.note || "", amount: e.amount || 0 })),
         })),
-        creditTotal: f.creditTotal,
+        debitTotal: f.debitTotal,
         miscTotal: f.miscTotal,
 
         payable: f.payable,
@@ -738,15 +740,16 @@ export default class StockReportService {
 
     const totals = {
       invoiceCount: rows.length,
-      basic: 0, extraCharges: 0, gst: 0, billing: 0,
-      creditNotes: 0, misc: 0, payable: 0, paid: 0, writtenOff: 0, outstanding: 0,
+      basic: 0, extraCharges: 0, gst: 0, billing: 0, tds: 0,
+      debitNotes: 0, misc: 0, payable: 0, paid: 0, writtenOff: 0, outstanding: 0,
     };
     rows.forEach((r) => {
       totals.basic = round2(totals.basic + r.totals.basicAmount);
       totals.extraCharges = round2(totals.extraCharges + r.totals.extraChargesTotal);
       totals.gst = round2(totals.gst + r.totals.gstAmount);
       totals.billing = round2(totals.billing + r.totals.grandTotal);
-      totals.creditNotes = round2(totals.creditNotes + r.creditTotal);
+      totals.tds = round2(totals.tds + r.totals.tdsAmount);
+      totals.debitNotes = round2(totals.debitNotes + r.debitTotal);
       totals.misc = round2(totals.misc + r.miscTotal);
       totals.payable = round2(totals.payable + r.payable);
       totals.paid = round2(totals.paid + r.paidTotal);

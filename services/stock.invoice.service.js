@@ -11,6 +11,7 @@ import StockAuditLogService from "./stock.audit.log.service.js";
 import StockBranchService from "./stock.branch.service.js";
 import StockCategoryModel from "../models/stock.category.model.js";
 import StockCategoryService from "./stock.category.service.js";
+import StockTdsRateService from "./stock.tds.rate.service.js";
 
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 
@@ -347,11 +348,37 @@ export default class StockInvoiceService {
     const extraChargesTotal = StockInvoiceService._sumCharges(inv.extraCharges, true);
     const nonBilledChargesTotal = StockInvoiceService._sumCharges(inv.extraCharges, false);
 
+    const grandTotal = round2(StockInvoiceService._computeAmount(inv.lines || [], inv.extraCharges, qtyOf) + gstAmount);
+    // TDS: on the BASIC only — not GST, not extra charges — at the rate the
+    // invoice snapshotted when it entered the ledger (0 when it has none).
+    const tdsRate = inv.tds?.rate || 0;
+    const tdsAmount = round2((basicAmount * tdsRate) / 100);
+
     return {
       taxType, basicAmount: round2(basicAmount),
       cgstAmount: round2(cgstAmount), sgstAmount: round2(sgstAmount), igstAmount: round2(igstAmount),
       gstAmount, extraChargesTotal, nonBilledChargesTotal,
-      grandTotal: round2(StockInvoiceService._computeAmount(inv.lines || [], inv.extraCharges, qtyOf) + gstAmount),
+      // grandTotal stays the bill as the vendor wrote it; netTotal is what is
+      // owed once TDS is held back.
+      grandTotal,
+      tdsRate, tdsAmount,
+      netTotal: round2(grandTotal - tdsAmount),
+    };
+  }
+
+  /*
+    Snapshot the buyer entity's TDS rate onto the invoice — once, the first
+    time it enters the ledger. Never re-read: a later change in Master > TDS
+    Rates must not move an invoice already approved. No rate set → 0%.
+  */
+  static async _applyTds(invoice, session) {
+    if (invoice.tds?.appliedAt) return;
+    const row = await StockTdsRateService.getActiveRateFor(invoice.entityAlias, session);
+    invoice.tds = {
+      rate: row?.rate || 0,
+      entityAlias: invoice.entityAlias || "",
+      note: row?.note || "",
+      appliedAt: new Date(),
     };
   }
 
@@ -587,7 +614,7 @@ export default class StockInvoiceService {
     if (!invoice) throw new Error("Invoice not found");
     assertDataScope(invoice, dataAccess);
     if (StockInvoiceService._paymentStarted(invoice)) {
-      throw new Error("Payment has already started on this invoice — correct it with a credit note or misc charge instead");
+      throw new Error("Payment has already started on this invoice — correct it with a debit note or misc charge instead");
     }
     const before = invoice.toObject();
     const changes = [];
@@ -933,7 +960,9 @@ export default class StockInvoiceService {
     entry.reviewedByName = user?.name || "";
     entry.reviewedAt = new Date();
 
-    // The whole invoice counts in the ledger from its first approved entry.
+    // The whole invoice counts in the ledger from its first approved entry —
+    // and its whole TDS is taken then too.
+    await StockInvoiceService._applyTds(invoice, session);
     invoice.inLedger = true;
     invoice.status = StockInvoiceService._statusFromEntries(invoice);
     if (invoice.status === INVOICE_STATUS.APPROVED) {
@@ -1024,6 +1053,7 @@ export default class StockInvoiceService {
     );
 
     invoice.status = INVOICE_STATUS.APPROVED;
+    await StockInvoiceService._applyTds(invoice, session);
     invoice.inLedger = true;
     invoice.rejectedReason = "";
     invoice.reviewedBy = user?.id || user?._id || null;

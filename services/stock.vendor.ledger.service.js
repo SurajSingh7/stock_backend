@@ -25,7 +25,7 @@ const log = getLogger(import.meta.url);
   one row's columns come from three DIFFERENT dates.
 
       billing        the INVOICE date     — the bill's own date
-      credit / misc  the date RAISED      — when accounts put it on the invoice
+      debit / misc  the date RAISED      — when accounts put it on the invoice
       paid           the date PAID        — when the money actually left
 
   That is correct, not a bug: a January bill settled in March belongs to
@@ -220,12 +220,12 @@ export default class StockVendorLedgerService {
     const days = termDays(po?.paymentTerms || "");
     const dueDate = addDays(startOfDay(invoice.invoiceDate), days);
 
-    const credits = (adjustments || []).filter((a) => a.direction === ADJUSTMENT_DIRECTION.DEDUCT);
+    const debits = (adjustments || []).filter((a) => a.direction === ADJUSTMENT_DIRECTION.DEDUCT);
     const miscs = (adjustments || []).filter((a) => a.direction === ADJUSTMENT_DIRECTION.ADD);
 
-    const creditTotal = round2(credits.reduce((s, a) => s + (a.amount || 0), 0));
+    const debitTotal = round2(debits.reduce((s, a) => s + (a.amount || 0), 0));
     const miscTotal = round2(miscs.reduce((s, a) => s + (a.amount || 0), 0));
-    const payable = round2(totals.grandTotal - creditTotal + miscTotal);
+    const payable = round2(totals.netTotal - debitTotal + miscTotal);
     const paidTotal = round2((invoice.payments || []).reduce((s, p) => s + (p.amount || 0), 0));
 
     /*
@@ -290,7 +290,7 @@ export default class StockVendorLedgerService {
         Editing one later does not move it — the correction belongs where the
         original decision was made.
       */
-      creditEvents: credits.map((a) => ({
+      debitEvents: debits.map((a) => ({
         at: a.createdOn || a.createdAt,
         amount: a.amount || 0,
         basicAmount: a.itemsBasicAmount || 0,
@@ -324,7 +324,7 @@ export default class StockVendorLedgerService {
             }]
           : [],
 
-      creditTotal,
+      debitTotal,
       miscTotal,
       payable,
       paidTotal,
@@ -336,12 +336,12 @@ export default class StockVendorLedgerService {
   /*
     The list page: one row per vendor.
 
-    Period columns (billing, credit, misc, paid) respect from/to. Outstanding
+    Period columns (billing, debit, misc, paid) respect from/to. Outstanding
     and ageing deliberately do not — see the note at the top of this file.
   */
   static async getVendorSummary(query = {}, dataAccess, moduleKey = SCOPE_MODULE_KEY) {
     const { skip, limit, page } = paginate(query);
-    const { search, branchId, from, to, ageing, movement, stage } = query;
+    const { search, branchId, from, to, billedFrom, billedTo, ageing, movement, stage } = query;
 
     const extra = {};
     if (branchId) extra.branchId = branchId;
@@ -364,6 +364,41 @@ export default class StockVendorLedgerService {
 
     const wanted = movement && movement !== MOVEMENT_FILTER.ALL ? movement : null;
 
+    /*
+      billedFrom/billedTo (Vendor Outstanding Overview) is a different question from
+      from/to: not "what moved in this window" but "of the invoices DATED in
+      this window, what is still owed today". An invoice outside it is left out
+      whole, so every column on the row belongs to the same set of invoices.
+    */
+    const billedFromDate = billedFrom ? startOfDay(billedFrom) : null;
+    const billedToDate = billedTo ? startOfDay(billedTo) : null;
+    const inBilled = (d) => {
+      const x = startOfDay(d);
+      if (billedFromDate && x < billedFromDate) return false;
+      if (billedToDate && x > billedToDate) return false;
+      return true;
+    };
+
+    /*
+      The vendor's position TODAY, across every invoice — taken before any
+      filter below, so "Total Outstanding (till date)" and the payment-status
+      popup never shrink when somebody narrows the period.
+    */
+    const tillByVendor = new Map();
+    const tillFor = (key) => {
+      if (!tillByVendor.has(key)) {
+        tillByVendor.set(key, {
+          outstanding: 0, writtenOff: 0,
+          overdueAmount: 0, overdueCount: 0,
+          outstandingBy: emptyStages(),
+          stageCount: emptyStages(),
+          ageing: Object.fromEntries(AGEING_BUCKETS.map((b) => [b.key, 0])),
+          lastPaid: null,
+        });
+      }
+      return tillByVendor.get(key);
+    };
+
     invoices.forEach((inv) => {
       const po = poById.get(String(inv.poId)) || null;
       const vendorKey = String(inv.vendorId || po?.vendorId || "");
@@ -371,11 +406,32 @@ export default class StockVendorLedgerService {
         inv, po, adjByInvoice.get(String(inv._id)), vendorById.get(vendorKey) || null
       );
 
+      const till = tillFor(vendorKey || "none");
+      till.outstanding = round2(till.outstanding + f.outstanding);
+      till.writtenOff = round2(till.writtenOff + f.writtenOff);
+      if (f.outstanding > 0) {
+        till.outstandingBy[f.stage] = round2(till.outstandingBy[f.stage] + f.outstanding);
+        till.stageCount[f.stage] += 1;
+        const overdueBy = dayDiff(today, f.dueDate);
+        till.ageing[bucketFor(overdueBy)] = round2(till.ageing[bucketFor(overdueBy)] + f.outstanding);
+        if (overdueBy > 0) {
+          till.overdueCount += 1;
+          till.overdueAmount = round2(till.overdueAmount + f.outstanding);
+        }
+      }
+      f.paymentEvents.forEach((e) => {
+        if (!e.at) return;
+        if (!till.lastPaid || new Date(e.at) > new Date(till.lastPaid.at)) {
+          till.lastPaid = { at: e.at, amount: e.amount, mode: e.mode, refNo: e.refNo, invoiceNumber: f.invoiceNumber };
+        }
+      });
+
       /*
         Applied per INVOICE, before anything is added up: a vendor whose
         invoices all fail the filter should drop off the list entirely, not
         appear with a zero in every column.
       */
+      if ((billedFromDate || billedToDate) && !inBilled(f.invoiceDate)) return;
       if (wanted === MOVEMENT_FILTER.MOVED && f.paidTotal <= 0) return;
       if (wanted === MOVEMENT_FILTER.NONE && f.paidTotal > 0) return;
 
@@ -394,7 +450,7 @@ export default class StockVendorLedgerService {
             thing a reader does is distrust the total.
           */
           basic: 0, extraCharges: 0, cgst: 0, sgst: 0, igst: 0,
-          billing: 0, creditNotes: 0, misc: 0, netPayable: 0, paid: 0,
+          billing: 0, tds: 0, debitNotes: 0, misc: 0, netPayable: 0, paid: 0,
           writtenOff: 0,
           outstanding: 0,
           // The same outstanding, split by why it has not moved.
@@ -414,8 +470,9 @@ export default class StockVendorLedgerService {
         v.sgst = round2(v.sgst + f.totals.sgstAmount);
         v.igst = round2(v.igst + f.totals.igstAmount);
         v.billing = round2(v.billing + f.totals.grandTotal);
+        v.tds = round2(v.tds + f.totals.tdsAmount);
       }
-      f.creditEvents.forEach((e) => { if (inPeriod(e.at)) v.creditNotes = round2(v.creditNotes + e.amount); });
+      f.debitEvents.forEach((e) => { if (inPeriod(e.at)) v.debitNotes = round2(v.debitNotes + e.amount); });
       f.miscEvents.forEach((e) => { if (inPeriod(e.at)) v.misc = round2(v.misc + e.amount); });
       f.paymentEvents.forEach((e) => { if (inPeriod(e.at)) v.paid = round2(v.paid + e.amount); });
       f.writeOffEvents.forEach((e) => { if (inPeriod(e.at)) v.writtenOff = round2(v.writtenOff + e.amount); });
@@ -435,9 +492,10 @@ export default class StockVendorLedgerService {
       }
     });
 
-    let rows = [...byVendor.values()].map((v) => ({
+    let rows = [...byVendor.entries()].map(([key, v]) => ({
       ...v,
-      netPayable: round2(v.billing - v.creditNotes + v.misc),
+      netPayable: round2(v.billing - v.tds - v.debitNotes + v.misc),
+      tillDate: tillByVendor.get(key) || tillFor(key),
     }));
 
     const text = String(search || "").trim().toLowerCase();
@@ -464,8 +522,10 @@ export default class StockVendorLedgerService {
       // undefined and every screen rendered the footer as zero while the rows
       // above it held real figures.
       basic: 0, extraCharges: 0, cgst: 0, sgst: 0, igst: 0, gst: 0,
-      billing: 0, creditNotes: 0, misc: 0,
+      billing: 0, tds: 0, debitNotes: 0, misc: 0,
       netPayable: 0, paid: 0, writtenOff: 0, outstanding: 0,
+      // Sum of each listed vendor's position today, whatever the period.
+      outstandingTillDate: 0,
       // Overdue sat on every row but was never totalled, so the Outstanding
       // footer had nothing to show under a column the page leans on.
       overdueCount: 0, overdueAmount: 0,
@@ -483,12 +543,14 @@ export default class StockVendorLedgerService {
       // agreeing.
       totals.gst = round2(totals.gst + r.cgst + r.sgst + r.igst);
       totals.billing = round2(totals.billing + r.billing);
-      totals.creditNotes = round2(totals.creditNotes + r.creditNotes);
+      totals.tds = round2(totals.tds + r.tds);
+      totals.debitNotes = round2(totals.debitNotes + r.debitNotes);
       totals.misc = round2(totals.misc + r.misc);
       totals.netPayable = round2(totals.netPayable + r.netPayable);
       totals.paid = round2(totals.paid + r.paid);
       totals.writtenOff = round2(totals.writtenOff + r.writtenOff);
       totals.outstanding = round2(totals.outstanding + r.outstanding);
+      totals.outstandingTillDate = round2(totals.outstandingTillDate + r.tillDate.outstanding);
       totals.overdueCount += r.overdueCount;
       totals.overdueAmount = round2(totals.overdueAmount + r.overdueAmount);
       Object.keys(OUTSTANDING_STAGE).forEach((k) => {
@@ -536,7 +598,7 @@ export default class StockVendorLedgerService {
 
     const empty = () => ({
       invoiceCount: 0, basic: 0, cgst: 0, sgst: 0, igst: 0,
-      billing: 0, creditNotes: 0, creditBasic: 0, creditGst: 0, misc: 0, paid: 0,
+      billing: 0, tds: 0, debitNotes: 0, debitBasic: 0, debitGst: 0, misc: 0, paid: 0,
       writtenOff: 0,
     });
     const months = Array.from({ length: 12 }, (_, i) => ({
@@ -557,7 +619,7 @@ export default class StockVendorLedgerService {
     };
 
     facts.forEach((f) => {
-      if (beforeYear(f.invoiceDate)) opening = round2(opening + f.totals.grandTotal);
+      if (beforeYear(f.invoiceDate)) opening = round2(opening + f.totals.netTotal);
       put(f.invoiceDate, (m) => {
         m.invoiceCount += 1;
         m.basic = round2(m.basic + f.totals.basicAmount);
@@ -565,14 +627,15 @@ export default class StockVendorLedgerService {
         m.sgst = round2(m.sgst + f.totals.sgstAmount);
         m.igst = round2(m.igst + f.totals.igstAmount);
         m.billing = round2(m.billing + f.totals.grandTotal);
+        m.tds = round2(m.tds + f.totals.tdsAmount);
       });
 
-      f.creditEvents.forEach((e) => {
+      f.debitEvents.forEach((e) => {
         if (beforeYear(e.at)) opening = round2(opening - e.amount);
         put(e.at, (m) => {
-          m.creditNotes = round2(m.creditNotes + e.amount);
-          m.creditBasic = round2(m.creditBasic + e.basicAmount + e.extrasAmount);
-          m.creditGst = round2(m.creditGst + e.gstAmount);
+          m.debitNotes = round2(m.debitNotes + e.amount);
+          m.debitBasic = round2(m.debitBasic + e.basicAmount + e.extrasAmount);
+          m.debitGst = round2(m.debitGst + e.gstAmount);
         });
       });
       f.miscEvents.forEach((e) => {
@@ -595,7 +658,7 @@ export default class StockVendorLedgerService {
     // The carry-forward itself.
     let running = opening;
     const rows = months.map((m) => {
-      const netPayable = round2(m.billing - m.creditNotes + m.misc);
+      const netPayable = round2(m.billing - m.tds - m.debitNotes + m.misc);
       const openingBalance = running;
       const closing = round2(openingBalance + netPayable - m.paid - m.writtenOff);
       running = closing;
@@ -610,15 +673,16 @@ export default class StockVendorLedgerService {
         sgst: round2(t.sgst + r.sgst),
         igst: round2(t.igst + r.igst),
         billing: round2(t.billing + r.billing),
-        creditNotes: round2(t.creditNotes + r.creditNotes),
-        creditBasic: round2(t.creditBasic + r.creditBasic),
-        creditGst: round2(t.creditGst + r.creditGst),
+        tds: round2(t.tds + r.tds),
+        debitNotes: round2(t.debitNotes + r.debitNotes),
+        debitBasic: round2(t.debitBasic + r.debitBasic),
+        debitGst: round2(t.debitGst + r.debitGst),
         misc: round2(t.misc + r.misc),
         netPayable: round2(t.netPayable + r.netPayable),
         paid: round2(t.paid + r.paid),
         writtenOff: round2(t.writtenOff + r.writtenOff),
       }),
-      { invoiceCount: 0, basic: 0, cgst: 0, sgst: 0, igst: 0, billing: 0, creditNotes: 0, creditBasic: 0, creditGst: 0, misc: 0, netPayable: 0, paid: 0, writtenOff: 0 }
+      { invoiceCount: 0, basic: 0, cgst: 0, sgst: 0, igst: 0, billing: 0, tds: 0, debitNotes: 0, debitBasic: 0, debitGst: 0, misc: 0, netPayable: 0, paid: 0, writtenOff: 0 }
     );
 
     // Which years actually have something in them, so the year pager only
@@ -663,7 +727,7 @@ export default class StockVendorLedgerService {
     );
 
     const billing = [];
-    const credits = [];
+    const debits = [];
     const miscs = [];
     const payments = [];
     const writeOffs = [];
@@ -680,6 +744,8 @@ export default class StockVendorLedgerService {
           basic: f.totals.basicAmount, cgst: f.totals.cgstAmount,
           sgst: f.totals.sgstAmount, igst: f.totals.igstAmount,
           amount: f.totals.grandTotal,
+          tdsRate: f.totals.tdsRate,
+          tds: f.totals.tdsAmount,
         });
       }
       /*
@@ -699,9 +765,9 @@ export default class StockVendorLedgerService {
         invoiceDate: f.invoiceDate,
       };
 
-      f.creditEvents.forEach((e) => {
+      f.debitEvents.forEach((e) => {
         if (monthKey(e.at) === key) {
-          credits.push({ ...ref, date: e.at, amount: e.amount, basicAmount: e.basicAmount, gstAmount: e.gstAmount, reason: e.reason });
+          debits.push({ ...ref, date: e.at, amount: e.amount, basicAmount: e.basicAmount, gstAmount: e.gstAmount, reason: e.reason });
         }
       });
       f.miscEvents.forEach((e) => {
@@ -722,11 +788,11 @@ export default class StockVendorLedgerService {
     });
 
     const byDate = (a, b) => new Date(a.date) - new Date(b.date);
-    billing.sort(byDate); credits.sort(byDate); miscs.sort(byDate);
+    billing.sort(byDate); debits.sort(byDate); miscs.sort(byDate);
     payments.sort(byDate); writeOffs.sort(byDate);
 
     log.info(`Vendor ledger month detail ${key} for vendor ${vendorId}`);
-    return { year, month, billing, credits, miscs, payments, writeOffs };
+    return { year, month, billing, debits, miscs, payments, writeOffs };
   }
 
   /*
@@ -770,11 +836,13 @@ export default class StockVendorLedgerService {
         paymentTerms: f.paymentTerms,
 
         billing: f.totals.grandTotal,
+        tdsRate: f.totals.tdsRate,
+        tds: f.totals.tdsAmount,
         basic: f.totals.basicAmount,
         cgst: f.totals.cgstAmount,
         sgst: f.totals.sgstAmount,
         igst: f.totals.igstAmount,
-        creditNotes: f.creditTotal,
+        debitNotes: f.debitTotal,
         misc: f.miscTotal,
         payable: f.payable,
         paid: f.paidTotal,
@@ -827,12 +895,13 @@ export default class StockVendorLedgerService {
 
     const totals = {
       invoiceCount: rows.length,
-      billing: 0, creditNotes: 0, misc: 0, payable: 0,
+      billing: 0, tds: 0, debitNotes: 0, misc: 0, payable: 0,
       paid: 0, writtenOff: 0, outstanding: 0,
     };
     rows.forEach((r) => {
       totals.billing = round2(totals.billing + r.billing);
-      totals.creditNotes = round2(totals.creditNotes + r.creditNotes);
+      totals.tds = round2(totals.tds + r.tds);
+      totals.debitNotes = round2(totals.debitNotes + r.debitNotes);
       totals.misc = round2(totals.misc + r.misc);
       totals.payable = round2(totals.payable + r.payable);
       totals.paid = round2(totals.paid + r.paid);

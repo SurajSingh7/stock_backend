@@ -74,14 +74,14 @@ const netAdjustment = (adjustments) =>
   );
 
 /*
-  One credit-note line, priced the way the invoice priced it: basic at the
+  One debit-note line, priced the way the invoice priced it: basic at the
   snapshotted rate, plus the slab that line was billed at.
 
   Rounded per line rather than once at the end, so the stored line totals add
   up to the stored note total exactly — a note whose rows do not sum to its own
   figure is the first thing anyone queries.
 */
-const creditLine = (src, quantity, inventoryItemIds) => {
+const debitLine = (src, quantity, inventoryItemIds) => {
   const basicAmount = round2(quantity * (src.rate || 0));
   const gstAmount = round2((basicAmount * (src.gstRate || 0)) / 100);
   return {
@@ -158,7 +158,8 @@ export default class StockInvoicePaymentService {
 
     const totals = StockInvoiceService._computeInvoiceTotals(invoice, po);
     const adjustmentTotal = netAdjustment(adjustments);
-    const payable = round2(totals.grandTotal + adjustmentTotal);
+    // TDS is held back from the bill itself, before any adjustment.
+    const payable = round2(totals.netTotal + adjustmentTotal);
     const paidTotal = round2((invoice.payments || []).reduce((s, p) => s + (p.amount || 0), 0));
     const balance = round2(payable - paidTotal);
 
@@ -190,7 +191,7 @@ export default class StockInvoicePaymentService {
 
     /*
       Adjustments may be touched while nothing is pending a verdict, and again
-      after a rejection — a rejection usually MEANS "the credit note is wrong,
+      after a rejection — a rejection usually MEANS "the debit note is wrong,
       fix it". They are frozen while an approval is pending or granted, because
       by then the payable has been quoted to somebody.
     */
@@ -222,7 +223,23 @@ export default class StockInvoicePaymentService {
       // The GRAND total as billed — what the vendor invoiced, GST included.
       // invoice.amount is only basic + extra charges.
       grossAmount: totals.grandTotal,
-      // Negative when credit notes outweigh misc charges, which is the usual
+      // Held back on the basic at the invoice's snapshotted rate.
+      tdsRate: totals.tdsRate,
+      tdsAmount: totals.tdsAmount,
+      // What the Billing figure is made of, and the adjustments split by
+      // direction — so a screen can show the whole Net Payable working
+      // without a second request.
+      breakup: {
+        basicAmount: totals.basicAmount,
+        extraChargesTotal: totals.extraChargesTotal,
+        cgstAmount: totals.cgstAmount,
+        sgstAmount: totals.sgstAmount,
+        igstAmount: totals.igstAmount,
+        gstAmount: totals.gstAmount,
+        miscTotal: round2((adjustments || []).filter((a) => a.direction !== ADJUSTMENT_DIRECTION.DEDUCT).reduce((t, a) => t + (a.amount || 0), 0)),
+        debitTotal: round2((adjustments || []).filter((a) => a.direction === ADJUSTMENT_DIRECTION.DEDUCT).reduce((t, a) => t + (a.amount || 0), 0)),
+      },
+      // Negative when debit notes outweigh misc charges, which is the usual
       // case. Its own number because three teams need to see WHY payable
       // differs from the invoice, not just that it does.
       adjustmentTotal,
@@ -336,6 +353,7 @@ export default class StockInvoicePaymentService {
         scheduleWindow: StockInvoicePaymentService.scheduleWindow(),
         paymentApproval: inv.paymentApproval || null,
         payments: inv.payments || [],
+        invoiceFile: inv.invoiceFile || "",
         // Carried for the sort below: it breaks ties between invoices that
         // share an invoice date.
         createdAt: inv.createdAt || null,
@@ -509,7 +527,7 @@ export default class StockInvoicePaymentService {
   }
 
   /* -------------------------------------------------------------------- */
-  /* Adjustments — credit notes and misc charges                           */
+  /* Adjustments — debit notes and misc charges                           */
   /* -------------------------------------------------------------------- */
 
   /*
@@ -547,11 +565,11 @@ export default class StockInvoicePaymentService {
   }
 
   /*
-    What a credit note may be claimed against: the units this invoice brought
+    What a debit note may be claimed against: the units this invoice brought
     in, that are STILL here to be written off.
 
     Only APPROVED items still AVAILABLE in the invoice's own branch qualify. A
-    unit already transferred out, allocated, scrapped or previously credited
+    unit already transferred out, allocated, scrapped or previously debited
     cannot be marked FAULTY by this invoice — money and stock would stop
     agreeing, which is the whole reason FAULTY exists. Blocked units are still
     RETURNED, each with a reason, so the screen can grey them out and say why
@@ -561,14 +579,14 @@ export default class StockInvoicePaymentService {
     must not count its own claims as "already taken", or every unit it already
     holds would come back blocked.
   */
-  static async getCreditableItems(invoiceId, dataAccess, moduleKey = SCOPE_MODULE_KEY, excludeAdjustmentId = null) {
+  static async getDebitNoteItems(invoiceId, dataAccess, moduleKey = SCOPE_MODULE_KEY, excludeAdjustmentId = null) {
     const invoice = await StockInvoicePaymentService._loadScopedInvoice(invoiceId, dataAccess, moduleKey);
 
     /*
       The GST slab each line was billed at. It lives on the PURCHASE ORDER, not
       the invoice — the invoice line only snapshots the basic unitPrice — so a
-      credit note has to reach back here for it. Without the slab the note
-      would credit basic only and under-settle by the whole tax.
+      debit note has to reach back here for it. Without the slab the note
+      would debit basic only and under-settle by the whole tax.
     */
     const po = invoice.poId
       ? await StockPurchaseOrderModel.findOne({ _id: invoice.poId })
@@ -590,14 +608,14 @@ export default class StockInvoicePaymentService {
       .select("productDefinitionId status approvalStatus branchId fieldValues quantity isFoc")
       .lean();
 
-    // Claimed by some OTHER live credit note on this invoice. Offering the
-    // same unit twice would let one faulty piece be credited on two notes.
+    // Claimed by some OTHER live debit note on this invoice. Offering the
+    // same unit twice would let one faulty piece be debited on two notes.
     const claimedUnits = new Set();
     const claimedQtyByLine = new Map();
     const mineByLine = new Map();
     const existing = await StockInvoiceAdjustmentModel.find({
       invoiceId: invoice._id,
-      type: ADJUSTMENT_TYPE.CREDIT_NOTE,
+      type: ADJUSTMENT_TYPE.DEBIT_NOTE,
       isActive: true,
     })
       .select("lines")
@@ -645,9 +663,9 @@ export default class StockInvoicePaymentService {
         if (mineUnits.has(String(it._id))) return null;
         if (it.approvalStatus !== ITEM_APPROVAL_STATUS.APPROVED) return "not approved yet";
         if (String(it.branchId) !== String(invoice.branchId)) return "moved to another branch";
-        if (it.status === ITEM_STATUS.FAULTY) return "already credited";
+        if (it.status === ITEM_STATUS.FAULTY) return "already debited";
         if (it.status !== ITEM_STATUS.AVAILABLE) return String(it.status).toLowerCase().replace(/_/g, " ");
-        if (claimedUnits.has(String(it._id))) return "on another credit note";
+        if (claimedUnits.has(String(it._id))) return "on another debit note";
         return null;
       };
 
@@ -677,9 +695,9 @@ export default class StockInvoicePaymentService {
               blockReason: blockReason(it),
             }))
           : [],
-        // Group: how much of this line is still creditable, after what OTHER
+        // Group: how much of this line is still debitable, after what OTHER
         // notes have claimed. This note's own quantity is added back in.
-        creditableQuantity: isIndividual
+        debitableQuantity: isIndividual
           ? lineItems.filter((it) => !blockReason(it)).length
           : Math.max(0, round2(freeQty + mine.quantity - (claimedQtyByLine.get(key) || 0))),
       };
@@ -695,11 +713,11 @@ export default class StockInvoicePaymentService {
     what it adds up to — a total taken on trust is a total that can be edited
     in the browser.
   */
-  static async _resolveCreditLines(invoiceId, lines, dataAccess, moduleKey, excludeAdjustmentId) {
-    const creditable = await StockInvoicePaymentService.getCreditableItems(
+  static async _resolveDebitLines(invoiceId, lines, dataAccess, moduleKey, excludeAdjustmentId) {
+    const debitable = await StockInvoicePaymentService.getDebitNoteItems(
       invoiceId, dataAccess, moduleKey, excludeAdjustmentId
     );
-    const byLine = new Map(creditable.lines.map((l) => [String(l.quotationItemId), l]));
+    const byLine = new Map(debitable.lines.map((l) => [String(l.quotationItemId), l]));
 
     return (lines || [])
       .map((sent) => {
@@ -714,21 +732,21 @@ export default class StockInvoicePaymentService {
           if (bad.length) {
             throw new Error(
               src.productName + ": " + bad.length + " selected unit" +
-                (bad.length > 1 ? "s are" : " is") + " no longer available to credit"
+                (bad.length > 1 ? "s are" : " is") + " no longer available to debit"
             );
           }
-          return creditLine(src, wanted.length, wanted);
+          return debitLine(src, wanted.length, wanted);
         }
 
         const qty = Math.max(0, Number(sent.quantity) || 0);
         if (!qty) return null;
-        if (qty > src.creditableQuantity) {
+        if (qty > src.debitableQuantity) {
           throw new Error(
-            src.productName + ": only " + src.creditableQuantity + " " +
-              (src.unit || "unit") + " can still be credited"
+            src.productName + ": only " + src.debitableQuantity + " " +
+              (src.unit || "unit") + " can still be debited"
           );
         }
-        return creditLine(src, qty, []);
+        return debitLine(src, qty, []);
       })
       .filter(Boolean);
   }
@@ -748,7 +766,7 @@ export default class StockInvoicePaymentService {
     Frozen while an approval is pending or granted: by then the payable has
     been quoted to the approval team, and changing it underneath them is
     exactly what this blocks. A REJECTED invoice is open again — a rejection
-    usually means "the credit note is wrong, fix it".
+    usually means "the debit note is wrong, fix it".
   */
   static async createAdjustment(invoiceId, payload, actor, session, dataAccess, opts = {}) {
     const { moduleKey = SCOPE_MODULE_KEY } = opts;
@@ -759,12 +777,12 @@ export default class StockInvoicePaymentService {
     );
     StockInvoicePaymentService._assertAdjustable(invoice);
 
-    const isCreditNote = type === ADJUSTMENT_TYPE.CREDIT_NOTE;
-    const direction = isCreditNote ? ADJUSTMENT_DIRECTION.DEDUCT : ADJUSTMENT_DIRECTION.ADD;
+    const isDebitNote = type === ADJUSTMENT_TYPE.DEBIT_NOTE;
+    const direction = isDebitNote ? ADJUSTMENT_DIRECTION.DEDUCT : ADJUSTMENT_DIRECTION.ADD;
 
     const { rows: extraRows, total: extrasAmount } = StockInvoicePaymentService._resolveExtras(extras);
-    const resolvedLines = isCreditNote
-      ? await StockInvoicePaymentService._resolveCreditLines(invoiceId, lines, dataAccess, moduleKey, null)
+    const resolvedLines = isDebitNote
+      ? await StockInvoicePaymentService._resolveDebitLines(invoiceId, lines, dataAccess, moduleKey, null)
       : [];
 
     const itemsBasicAmount = round2(resolvedLines.reduce((s, l) => s + l.basicAmount, 0));
@@ -805,8 +823,8 @@ export default class StockInvoicePaymentService {
 
     // The stock side happens NOW, in this same transaction — never as a second
     // step somebody could miss.
-    if (isCreditNote) {
-      await StockInvoicePaymentService._applyCreditNoteToStock(adjustment, session);
+    if (isDebitNote) {
+      await StockInvoicePaymentService._applyDebitNoteToStock(adjustment, session);
     }
 
     log.info(`${type} of ${amount} raised on invoice ${invoice.invoiceNumber}`);
@@ -849,19 +867,19 @@ export default class StockInvoicePaymentService {
 
     const before = adjustment.toObject();
     const fromAmount = adjustment.amount;
-    const isCreditNote = adjustment.type === ADJUSTMENT_TYPE.CREDIT_NOTE;
+    const isDebitNote = adjustment.type === ADJUSTMENT_TYPE.DEBIT_NOTE;
 
     // 1 ── UNDO. Refuses if the stock has moved on since, because putting a
     //      scrapped unit back on the shelf would be a lie.
-    if (isCreditNote) {
-      await StockInvoicePaymentService._reverseCreditNoteFromStock(adjustment, session);
+    if (isDebitNote) {
+      await StockInvoicePaymentService._reverseDebitNoteFromStock(adjustment, session);
     }
 
     // 2 ── Re-price from what was picked. Excluding this note's own claims is
     //      what lets it keep the units it already had.
     const { rows: extraRows, total: extrasAmount } = StockInvoicePaymentService._resolveExtras(extras);
-    const resolvedLines = isCreditNote
-      ? await StockInvoicePaymentService._resolveCreditLines(
+    const resolvedLines = isDebitNote
+      ? await StockInvoicePaymentService._resolveDebitLines(
           adjustment.invoiceId, lines, dataAccess, moduleKey, adjustment._id
         )
       : [];
@@ -895,8 +913,8 @@ export default class StockInvoicePaymentService {
     await adjustment.save({ session });
 
     // 3 ── APPLY, exactly as a new note would.
-    if (isCreditNote) {
-      await StockInvoicePaymentService._applyCreditNoteToStock(adjustment, session);
+    if (isDebitNote) {
+      await StockInvoicePaymentService._applyDebitNoteToStock(adjustment, session);
     }
 
     log.info(`Adjustment ${adjustment._id} edited: ${fromAmount} -> ${amount}`);
@@ -929,11 +947,11 @@ export default class StockInvoicePaymentService {
 
     const before = adjustment.toObject();
 
-    if (adjustment.type === ADJUSTMENT_TYPE.CREDIT_NOTE) {
-      await StockInvoicePaymentService._reverseCreditNoteFromStock(adjustment, session);
+    if (adjustment.type === ADJUSTMENT_TYPE.DEBIT_NOTE) {
+      await StockInvoicePaymentService._reverseDebitNoteFromStock(adjustment, session);
     }
 
-    // Soft, like everything else here: what was credited and then withdrawn is
+    // Soft, like everything else here: what was debited and then withdrawn is
     // a question somebody will ask.
     adjustment.isActive = false;
     adjustment.deletedAt = new Date();
@@ -974,13 +992,13 @@ export default class StockInvoicePaymentService {
     const { payable } = await StockInvoicePaymentService._payableNow(invoice, session, excludeAdjustmentId);
     if (amount > payable) {
       throw new Error(
-        "A credit note cannot exceed the payable amount (" + payable + "). Reduce the claim or split it."
+        "A debit note cannot exceed the payable amount (" + payable + "). Reduce the claim or split it."
       );
     }
   }
 
   /*
-    The stock half of a credit note.
+    The stock half of a debit note.
 
     Individual units named on the note become FAULTY. A group line has no
     per-unit identity, so the quantity comes off its batch documents instead,
@@ -990,7 +1008,7 @@ export default class StockInvoicePaymentService {
     A batch reduced to nothing is kept and marked FAULTY rather than deleted:
     deleting it would erase the fact that those units were ever received.
   */
-  static async _applyCreditNoteToStock(adjustment, session) {
+  static async _applyDebitNoteToStock(adjustment, session) {
     for (const line of adjustment.lines || []) {
       if ((line.inventoryItemIds || []).length) {
         await StockInventoryItemModel.updateMany(
@@ -1030,7 +1048,7 @@ export default class StockInvoicePaymentService {
       // aborts the transaction, so nothing is half-applied.
       if (remaining > 0) {
         throw new Error(
-          line.productName + ": only part of the credited quantity is still in stock — refresh and raise it again"
+          line.productName + ": only part of the debited quantity is still in stock — refresh and raise it again"
         );
       }
       line.batchDraws = draws;
@@ -1042,9 +1060,9 @@ export default class StockInvoicePaymentService {
   }
 
   /*
-    Undo the stock half of a credit note.
+    Undo the stock half of a debit note.
 
-    The mirror of _applyCreditNoteToStock, and the reason an edit does not need
+    The mirror of _applyDebitNoteToStock, and the reason an edit does not need
     to work out a diff.
 
     It refuses rather than guesses. A unit this note marked FAULTY that is now
@@ -1052,7 +1070,7 @@ export default class StockInvoicePaymentService {
     invent stock that does not exist. Better to stop and say so than to leave a
     warehouse count that can never be reconciled.
   */
-  static async _reverseCreditNoteFromStock(adjustment, session) {
+  static async _reverseDebitNoteFromStock(adjustment, session) {
     for (const line of adjustment.lines || []) {
       const unitIds = line.inventoryItemIds || [];
       if (unitIds.length) {
@@ -1060,10 +1078,10 @@ export default class StockInvoicePaymentService {
         const moved = units.filter((u) => u.status !== ITEM_STATUS.FAULTY);
         if (moved.length) {
           throw new Error(
-            line.productName + ": " + moved.length + " credited unit" +
+            line.productName + ": " + moved.length + " debited unit" +
               (moved.length > 1 ? "s have" : " has") +
               " since been changed to " + [...new Set(moved.map((u) => u.status))].join(", ") +
-              " — this credit note can no longer be edited. Withdraw it and raise a new one."
+              " — this debit note can no longer be edited. Withdraw it and raise a new one."
           );
         }
         await StockInventoryItemModel.updateMany(
@@ -1078,7 +1096,7 @@ export default class StockInvoicePaymentService {
         const batch = await StockInventoryItemModel.findOne({ _id: draw.inventoryItemId }).session(session);
         if (!batch) {
           throw new Error(
-            line.productName + ": the batch this credit note drew from no longer exists — withdraw it and raise a new one."
+            line.productName + ": the batch this debit note drew from no longer exists — withdraw it and raise a new one."
           );
         }
         batch.quantity = round2((batch.quantity || 0) + (draw.quantity || 0));

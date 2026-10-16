@@ -9,9 +9,9 @@ import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 const { Schema } = mongoose;
 
 /*
-  One line of a credit note: which product, which units, and what that comes
+  One line of a debit note: which product, which units, and what that comes
   to. The rate is SNAPSHOTTED from the invoice line, not read live from the
-  purchase order — a credit note is a claim about a specific delivery at the
+  purchase order — a debit note is a claim about a specific delivery at the
   price it was billed at, and that must not move afterwards.
 
   inventoryItemIds is filled for individual-tracked products (the exact units
@@ -57,16 +57,16 @@ const adjustmentLineSchema = new Schema(
     rate: { type: Number, default: 0, min: 0 },
 
     /*
-      A credit note carries GST, exactly as the invoice did.
+      A debit note carries GST, exactly as the invoice did.
 
       The invoice was billed at basic + GST and the payable is the GRAND total,
-      so crediting back only the basic under-credits by the whole tax. Return
-      3 pieces at 500 with 18% GST and the vendor credits 1,770, not 1,500 —
+      so claiming back only the basic under-claims by the whole tax. Return
+      3 pieces at 500 with 18% GST and the debit note is for 1,770, not 1,500 —
       settle it at 1,500 and the ledger never reconciles.
 
       All three are stored rather than derived at read time: the rate can be
       retired and the slab changed years later, and this row has to keep saying
-      what was actually credited on the day.
+      what was actually debited on the day.
     */
     gstRate: { type: Number, default: 0, min: 0 },
     basicAmount: { type: Number, default: 0, min: 0 },
@@ -84,7 +84,7 @@ const adjustmentLineSchema = new Schema(
   Same {note, amount} shape as the invoice's own extraCharges, but NOT the
   same meaning: there they push the invoice total up, here they follow the
   adjustment's direction. The screens call these "Other deductions" on a
-  credit note for exactly that reason — reusing the words "extra charges"
+  debit note for exactly that reason — reusing the words "extra charges"
   would have the label saying the opposite of what the row does.
 */
 const adjustmentExtraSchema = new Schema(
@@ -129,7 +129,7 @@ const invoiceAdjustmentSchema = new Schema(
     // a screen cannot disagree with the database about the money.
     //
     // The basic/GST split is kept at this level too, because the vendor ledger
-    // shows credit notes in a GST column of their own and should not have to
+    // shows debit notes in a GST column of their own and should not have to
     // re-add the lines to find it.
     itemsBasicAmount: { type: Number, default: 0, min: 0 },
     itemsGstAmount: { type: Number, default: 0, min: 0 },

@@ -96,23 +96,23 @@ export default class StockInvoicePaymentController {
   static getApprovalList = StockInvoicePaymentController.list(MODULE.PAYMENT_APPROVAL);
 
   /*
-    Feeds the Credit Note page: which units of this invoice can still be
+    Feeds the Debit Note page: which units of this invoice can still be
     written off, and why the rest cannot.
 
     ?adjustmentId is passed when EDITING one — its own claims must not count as
     "already taken", or every unit it already holds would come back blocked.
   */
-  static async getCreditableItems(req, res) {
+  static async getDebitNoteItems(req, res) {
     try {
-      const data = await StockInvoicePaymentService.getCreditableItems(
+      const data = await StockInvoicePaymentService.getDebitNoteItems(
         req.params.id,
         req.dataAccess,
         MODULE.PAYMENTS,
         req.query.adjustmentId || null
       );
-      successResponseHandler(res, data, "Creditable items fetched successfully");
+      successResponseHandler(res, data, "Debitable items fetched successfully");
     } catch (error) {
-      log.error("Error fetching creditable items", error);
+      log.error("Error fetching debitable items", error);
       errorResponseHandler(res, error);
     }
   }

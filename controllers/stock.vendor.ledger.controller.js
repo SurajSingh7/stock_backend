@@ -9,25 +9,11 @@ const log = getLogger(import.meta.url);
   Read-only, all four of them.
 
   A ledger never writes: every figure on it already happened somewhere else —
-  an invoice was approved, a credit note accepted, a payment recorded. Giving
+  an invoice was approved, a debit note accepted, a payment recorded. Giving
   this module a write action would create a second way to change a balance,
   and then two places to look when one is wrong.
 */
 export default class StockVendorLedgerController {
-  // One row per vendor: period totals, plus outstanding and ageing as on today.
-  static async getVendorSummary(req, res) {
-    try {
-      const { data, total, page, limit } = await StockVendorLedgerService.getVendorSummary(
-        req.query,
-        req.dataAccess
-      );
-      successResponseHandler(res, paginateReturn(data, total, page, limit), "Vendor ledger fetched successfully");
-    } catch (error) {
-      log.error("Error fetching vendor ledger summary", error);
-      errorResponseHandler(res, error);
-    }
-  }
-
   // Twelve months of one year for one vendor, balance carried forward.
   static async getVendorLedger(req, res) {
     try {

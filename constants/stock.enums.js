@@ -29,10 +29,10 @@ export const ITEM_STATUS = {
   IN_TRANSIT: "IN_TRANSIT",
   /*
     Came in, was accepted into stock, and was later found defective — and a
-    credit note took the money for it back off the invoice.
+    debit note took the money for it back off the invoice.
 
-    Set only by accepting a CREDIT_NOTE adjustment, in the same transaction, so
-    the books and the shelf never disagree. Without it a credited item would
+    Set only by accepting a DEBIT_NOTE adjustment, in the same transaction, so
+    the books and the shelf never disagree. Without it a debited item would
     sit in stock as AVAILABLE: not paid for, but still transferable — which is
     exactly the mismatch nobody notices until an audit.
 
@@ -378,7 +378,7 @@ export const DUE_FILTER = {
 export const ADJUSTMENT_TYPE = {
   // Goods were defective. Carries the items it is claimed against, and
   // accepting it also marks those items FAULTY.
-  CREDIT_NOTE: "CREDIT_NOTE",
+  DEBIT_NOTE: "DEBIT_NOTE",
   // Anything else with an amount and a reason — freight, handling, a charge
   // the vendor passed on. No items, no stock effect.
   MISC: "MISC",
@@ -387,7 +387,7 @@ export const ADJUSTMENT_TYPE_ARRAY = Object.values(ADJUSTMENT_TYPE);
 
 /*
   Which way the money moves. Stored explicitly rather than derived from the
-  type: today CREDIT_NOTE is always DEDUCT and MISC always ADD, but the next
+  type: today DEBIT_NOTE is always DEDUCT and MISC always ADD, but the next
   type added may be either, and a stored direction means that type needs no
   change to how payable is computed.
 */
