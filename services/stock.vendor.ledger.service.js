@@ -6,6 +6,7 @@ import StockInvoiceService from "./stock.invoice.service.js";
 import { applyDataScope } from "../helpers/data.scope.helper.js";
 import { paginate } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
+import { PAYABLE_ADJUSTMENT_FILTER } from "../helpers/adjustment.helper.js";
 import {
   INVOICE_STATUS,
   ADJUSTMENT_TYPE,
@@ -167,12 +168,12 @@ export default class StockVendorLedgerService {
       .lean();
     const poById = new Map(pos.map((p) => [String(p._id), p]));
 
-    // Every live adjustment counts. They no longer carry a status — accounts
-    // create them and they take effect at once — so isActive is the whole
-    // test: a withdrawn one is soft-deleted and drops out here by itself.
+    // Only what moves the payable: misc charges, and debit notes once
+    // approved. A debit note still in review or approval is a claim, not money.
     const adjustments = await StockInvoiceAdjustmentModel.find({
       invoiceId: { $in: invoices.map((i) => i._id) },
       isActive: true,
+      ...PAYABLE_ADJUSTMENT_FILTER,
     }).lean();
 
     const adjByInvoice = new Map();
@@ -224,8 +225,12 @@ export default class StockVendorLedgerService {
     const miscs = (adjustments || []).filter((a) => a.direction === ADJUSTMENT_DIRECTION.ADD);
 
     const debitTotal = round2(debits.reduce((s, a) => s + (a.amount || 0), 0));
-    const miscTotal = round2(miscs.reduce((s, a) => s + (a.amount || 0), 0));
-    const payable = round2(totals.netTotal - debitTotal + miscTotal);
+    // Misc on the invoice itself (its extra charges), plus any misc charge
+    // added separately before misc moved onto the invoice. netTotal already
+    // carries the invoice's own misc, so only the separate ones are added.
+    const adjMiscTotal = round2(miscs.reduce((s, a) => s + (a.amount || 0), 0));
+    const miscTotal = round2((totals.miscTotal || 0) + adjMiscTotal);
+    const payable = round2(totals.netTotal - debitTotal + adjMiscTotal);
     const paidTotal = round2((invoice.payments || []).reduce((s, p) => s + (p.amount || 0), 0));
 
     /*
@@ -298,11 +303,17 @@ export default class StockVendorLedgerService {
         extrasAmount: a.extrasAmount || 0,
         reason: a.reason || "",
       })),
-      miscEvents: miscs.map((a) => ({
-        at: a.createdOn || a.createdAt,
-        amount: a.amount || 0,
-        reason: a.reason || "",
-      })),
+      // The invoice's own misc belongs to the invoice date, like its billing.
+      miscEvents: [
+        ...((totals.miscTotal || 0) > 0
+          ? [{ at: invoice.invoiceDate, amount: totals.miscTotal, reason: "On the invoice" }]
+          : []),
+        ...miscs.map((a) => ({
+          at: a.createdOn || a.createdAt,
+          amount: a.amount || 0,
+          reason: a.reason || "",
+        })),
+      ],
       paymentEvents: (invoice.payments || []).map((p) => ({
         at: p.paidOn,
         amount: p.amount || 0,
@@ -619,7 +630,9 @@ export default class StockVendorLedgerService {
     };
 
     facts.forEach((f) => {
-      if (beforeYear(f.invoiceDate)) opening = round2(opening + f.totals.netTotal);
+      // Billing less TDS; misc arrives through miscEvents below, so it is not
+      // counted here a second time.
+      if (beforeYear(f.invoiceDate)) opening = round2(opening + f.totals.grandTotal - f.totals.tdsAmount);
       put(f.invoiceDate, (m) => {
         m.invoiceCount += 1;
         m.basic = round2(m.basic + f.totals.basicAmount);

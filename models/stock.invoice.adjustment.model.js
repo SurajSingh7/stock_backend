@@ -3,6 +3,7 @@ import {
   ADJUSTMENT_TYPE,
   ADJUSTMENT_TYPE_ARRAY,
   ADJUSTMENT_DIRECTION_ARRAY,
+  DEBIT_NOTE_STATUS_ARRAY,
 } from "../constants/stock.enums.js";
 import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
@@ -148,13 +149,37 @@ const invoiceAdjustmentSchema = new Schema(
     reason: { type: String, trim: true, default: "" },
 
     /*
-      There is no status here, and that is deliberate.
+      Debit notes only (null on misc, and on debit notes that predate the
+      chain — those count as approved). See DEBIT_NOTE_STATUS for the flow.
+    */
+    status: { type: String, enum: [...DEBIT_NOTE_STATUS_ARRAY, null], default: null },
+    // DN-1, DN-2 … per invoice, so "the second one" is something people can say.
+    dnNumber: { type: Number, default: null },
+    /*
+      Every step of the chain: raised, resubmitted (with what changed), review
+      rejected / sent, approved / rejected, withdrawn — who, when, why.
+    */
+    history: {
+      type: [
+        new Schema(
+          {
+            at: { type: Date, default: null },
+            by: { type: Schema.Types.ObjectId, default: null },
+            byName: { type: String, trim: true, default: "" },
+            action: { type: String, trim: true, default: "" },
+            note: { type: String, trim: true, default: "" },
+            fromAmount: { type: Number, default: null },
+            toAmount: { type: Number, default: null },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
 
-      Adjustments used to be raised by the stock team and reviewed by accounts,
-      so they needed PENDING / ACCEPTED / REJECTED. They are now created by
-      accounts themselves and take effect at once, so every live row is in
-      force — a status field would have exactly one value and tell nobody
-      anything. Withdrawing one is a soft delete, which isActive already says.
+    /*
+      Misc charges are accounts' own and in force at once, so they carry no
+      status. Withdrawing one is a soft delete, which isActive already says.
     */
     createdByName: { type: String, trim: true, default: "" },
     createdOn: { type: Date, default: null },
@@ -188,6 +213,7 @@ const invoiceAdjustmentSchema = new Schema(
 // Every screen starts from an invoice and asks the same thing: what is on it.
 invoiceAdjustmentSchema.index({ invoiceId: 1, isActive: 1 });
 invoiceAdjustmentSchema.index({ vendorId: 1, isActive: 1 });
+invoiceAdjustmentSchema.index({ type: 1, status: 1, isActive: 1 });
 
 invoiceAdjustmentSchema.plugin(actorStampPlugin);
 

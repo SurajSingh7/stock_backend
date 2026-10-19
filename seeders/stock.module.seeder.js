@@ -41,14 +41,14 @@ const MODULE_DEFINITIONS = [
   // the receiving permissions. The nav entry for it has existed unbacked since
   // before this module did (layouts/navbar/NavCategories.js, moduleKey
   // "invoice-list"), which is why nobody could see it.
-  { key: "invoice-list", name: "Invoice List", actions: withMenu(["READ", "SCHEDULE_PAYMENT"]) },
+  { key: "invoice-list", name: "Invoice List", actions: withMenu(["READ", "SCHEDULE_PAYMENT", "RAISE_DEBIT_NOTE"]) },
   // The account team's screen. Three separate write actions on purpose: the
   // person who clears a debit note need not be the one who asks for payment
   // approval, nor the one who records the money leaving.
-  { key: "payments", name: "Payments", actions: withMenu(["READ", "MANAGE_ADJUSTMENT", "REQUEST_PAYMENT_APPROVAL", "ENTER_PAYMENT"]) },
+  { key: "payments", name: "Payments", actions: withMenu(["READ", "MANAGE_ADJUSTMENT", "REVIEW_DEBIT_NOTE", "REQUEST_PAYMENT_APPROVAL", "ENTER_PAYMENT"]) },
   // The approval team's screen. Read and decide, nothing else — they approve a
   // payable somebody else computed, so they get no action that can change one.
-  { key: "payment-approval", name: "Payment Approval", actions: withMenu(["READ", "APPROVE"]) },
+  { key: "payment-approval", name: "Approvals", actions: withMenu(["READ", "APPROVE", "APPROVE_DEBIT_NOTE"]) },
   // READ only, and that is the whole module: a ledger reports what already
   // happened elsewhere. Its own key because a vendor statement is shown to a
   // wider audience than the desk that records payments.
@@ -80,9 +80,29 @@ const MODULE_DEFINITIONS = [
 
 export const seedModules = async () => {
   try {
-    const existingKeys = new Set((await StockModuleModel.find({}, "key").lean()).map((m) => m.key));
+    const existing = await StockModuleModel.find({}, "key actions").lean();
+    const existingKeys = new Set(existing.map((m) => m.key));
+
+    /*
+      Actions added to a module that already exists. Inserting only new
+      modules meant a new action (EDIT_INVOICE, RAISE_DEBIT_NOTE…) never
+      reached a database seeded before it — the route would 403 for everyone
+      but admins. Add-only: an action is never removed or renamed here.
+    */
+    const actionsByKey = new Map(existing.map((m) => [m.key, new Set(m.actions || [])]));
+    let actionsAdded = 0;
+    for (const def of MODULE_DEFINITIONS) {
+      const have = actionsByKey.get(def.key);
+      if (!have) continue;
+      const add = def.actions.filter((a) => !have.has(a));
+      if (!add.length) continue;
+      await StockModuleModel.updateOne({ key: def.key }, { $addToSet: { actions: { $each: add } } });
+      actionsAdded += add.length;
+      console.info(`Module ${def.key}: added action(s) ${add.join(", ")}`);
+    }
+
     const missing = MODULE_DEFINITIONS.filter((m) => !existingKeys.has(m.key));
-    if (missing.length === 0) return { seeded: false, count: 0 };
+    if (missing.length === 0) return { seeded: actionsAdded > 0, count: 0, actionsAdded };
 
     await StockModuleModel.insertMany(missing);
     console.info(`Seeded ${missing.length} module(s): ${missing.map((m) => m.key).join(", ")}`);

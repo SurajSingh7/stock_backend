@@ -214,9 +214,15 @@ router.patch("/invoices/:id/reject", authenticate, requirePermission("invoices",
 // everyone. Each write carries its own action because each is a different
 // decision: moving a due date is not the same as claiming money back.
 router.get("/invoice-list", authenticate, requirePermission("invoice-list", "READ"), StockInvoicePaymentController.getList);
-// Read-only on adjustments: the Invoice List shows WHY payable differs from
-// the invoice, but raising and changing them is the account team's job.
+// Read-only on misc charges (accounts' own). Debit notes are raised HERE and
+// then reviewed on Payments and decided on Payment Approval.
 router.get("/invoice-list/:id/adjustments", authenticate, requirePermission("invoice-list", "READ"), StockInvoicePaymentController.getAdjustments);
+router.get("/invoice-list/:id/debit-notes", authenticate, requirePermission("invoice-list", "READ"), StockInvoicePaymentController.getDebitNotes);
+router.get("/invoice-list/:id/debit-note-items", authenticate, requirePermission("invoice-list", "RAISE_DEBIT_NOTE"), StockInvoicePaymentController.getDebitNoteItemsForRaise);
+router.post("/invoice-list/:id/debit-notes", authenticate, requirePermission("invoice-list", "RAISE_DEBIT_NOTE"), StockInvoicePaymentController.raiseDebitNote);
+// :id below is the DEBIT NOTE.
+router.patch("/invoice-list/debit-notes/:id/resubmit", authenticate, requirePermission("invoice-list", "RAISE_DEBIT_NOTE"), StockInvoicePaymentController.resubmitDebitNote);
+router.patch("/invoice-list/debit-notes/:id/withdraw", authenticate, requirePermission("invoice-list", "RAISE_DEBIT_NOTE"), StockInvoicePaymentController.withdrawDebitNote);
 router.patch("/invoice-list/:id/schedule", authenticate, requirePermission("invoice-list", "SCHEDULE_PAYMENT"), StockInvoicePaymentController.schedulePayment);
 
 // ─── Payments · account team ─────────────────────────────────────────────────
@@ -227,6 +233,13 @@ router.patch("/invoice-list/:id/schedule", authenticate, requirePermission("invo
 router.get("/payments", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getPaymentsList);
 router.get("/payments/:id/adjustments", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getAdjustmentsForAccounts);
 router.get("/payments/:id/debit-note-items", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getDebitNoteItems);
+router.get("/payments/:id/debit-notes", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getDebitNotesForAccounts);
+router.get("/payments-debit-notes", authenticate, requirePermission("payments", "READ"), StockInvoicePaymentController.getReviewQueue);
+router.patch("/payments/debit-notes/:id/review", authenticate, requirePermission("payments", "REVIEW_DEBIT_NOTE"), StockInvoicePaymentController.reviewDebitNote);
+// TDS is accounts' alone; same weight as a misc charge, same action.
+router.patch("/payments/:id/tds", authenticate, requirePermission("payments", "MANAGE_ADJUSTMENT"), StockInvoicePaymentController.updateTds);
+// Misc = the invoice's extra charges, edited in place by accounts.
+router.patch("/payments/:id/misc", authenticate, requirePermission("payments", "MANAGE_ADJUSTMENT"), StockInvoicePaymentController.updateMisc);
 // Raised by accounts and in force at once — there is nobody left to ask.
 router.post("/payments/:id/adjustments", authenticate, requirePermission("payments", "MANAGE_ADJUSTMENT"), StockInvoicePaymentController.createAdjustment);
 // :id below is the ADJUSTMENT, not the invoice. Editing reverses the old one
@@ -256,6 +269,9 @@ router.get("/payment-approval", authenticate, requirePermission("payment-approva
 // this team agrees to a number, it never changes one.
 router.get("/payment-approval/:id/adjustments", authenticate, requirePermission("payment-approval", "READ"), StockInvoicePaymentController.getAdjustmentsForApproval);
 router.patch("/payment-approval/:id/decide", authenticate, requirePermission("payment-approval", "APPROVE"), StockInvoicePaymentController.decideApproval);
+router.get("/payment-approval/:id/debit-notes", authenticate, requirePermission("payment-approval", "READ"), StockInvoicePaymentController.getDebitNotesForApproval);
+router.get("/payment-approval-debit-notes", authenticate, requirePermission("payment-approval", "READ"), StockInvoicePaymentController.getApprovalQueue);
+router.patch("/payment-approval/debit-notes/:id/decide", authenticate, requirePermission("payment-approval", "APPROVE_DEBIT_NOTE"), StockInvoicePaymentController.decideDebitNote);
 
 // ─── Vendor Ledger ───────────────────────────────────────────────────────────
 // Read-only by design: every figure here already happened on an invoice, a

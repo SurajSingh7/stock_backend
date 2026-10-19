@@ -8,6 +8,7 @@ import StockAuditLogService from "./stock.audit.log.service.js";
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 import { paginate } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
+import { countsInPayable } from "../helpers/adjustment.helper.js";
 import {
   INVOICE_STATUS,
   DUE_FILTER,
@@ -17,6 +18,9 @@ import {
   PAYMENT_STATE_OVERRIDE_ARRAY,
   ADJUSTMENT_TYPE,
   ADJUSTMENT_DIRECTION,
+  DEBIT_NOTE_STATUS,
+  DEBIT_NOTE_LIVE_STATUSES,
+  DEBIT_NOTE_RELEASED_STATUSES,
   ITEM_STATUS,
   ITEM_APPROVAL_STATUS,
   TRACKING_METHODS,
@@ -157,7 +161,12 @@ export default class StockInvoicePaymentService {
     const daysToDue = dayDiff(dueDate, new Date());
 
     const totals = StockInvoiceService._computeInvoiceTotals(invoice, po);
-    const adjustmentTotal = netAdjustment(adjustments);
+    // A debit note still in review or approval is a claim, not money yet.
+    const counted = (adjustments || []).filter(countsInPayable);
+    const debitNoteLive = (adjustments || []).some(
+      (a) => a.type === ADJUSTMENT_TYPE.DEBIT_NOTE && DEBIT_NOTE_LIVE_STATUSES.includes(a.status)
+    );
+    const adjustmentTotal = netAdjustment(counted);
     // TDS is held back from the bill itself, before any adjustment.
     const payable = round2(totals.netTotal + adjustmentTotal);
     const paidTotal = round2((invoice.payments || []).reduce((s, p) => s + (p.amount || 0), 0));
@@ -231,13 +240,17 @@ export default class StockInvoicePaymentService {
       // without a second request.
       breakup: {
         basicAmount: totals.basicAmount,
-        extraChargesTotal: totals.extraChargesTotal,
+        // Misc = the invoice's own charges + any separate misc charge.
+        extraChargesTotal: totals.miscTotal,
         cgstAmount: totals.cgstAmount,
         sgstAmount: totals.sgstAmount,
         igstAmount: totals.igstAmount,
         gstAmount: totals.gstAmount,
-        miscTotal: round2((adjustments || []).filter((a) => a.direction !== ADJUSTMENT_DIRECTION.DEDUCT).reduce((t, a) => t + (a.amount || 0), 0)),
-        debitTotal: round2((adjustments || []).filter((a) => a.direction === ADJUSTMENT_DIRECTION.DEDUCT).reduce((t, a) => t + (a.amount || 0), 0)),
+        miscTotal: round2(
+          (totals.miscTotal || 0) +
+            counted.filter((a) => a.direction !== ADJUSTMENT_DIRECTION.DEDUCT).reduce((t, a) => t + (a.amount || 0), 0)
+        ),
+        debitTotal: round2(counted.filter((a) => a.direction === ADJUSTMENT_DIRECTION.DEDUCT).reduce((t, a) => t + (a.amount || 0), 0)),
       },
       // Negative when debit notes outweigh misc charges, which is the usual
       // case. Its own number because three teams need to see WHY payable
@@ -278,9 +291,58 @@ export default class StockInvoicePaymentService {
         every one of these is also enforced on the write path.
       */
       canEditAdjustments: !inApprovalFlow,
-      canSendForApproval: !inApprovalFlow && daysLeft <= 0 && payable > 0 && invoice.status === INVOICE_STATUS.APPROVED,
+      // A debit note still moving (review / approval) means the amount is not
+      // settled yet — nobody may ask to pay it until it is.
+      debitNoteLive,
+      canSendForApproval:
+        !inApprovalFlow && !debitNoteLive && daysLeft <= 0 && payable > 0 && invoice.status === INVOICE_STATUS.APPROVED,
+      /*
+        Why a payment request cannot be made yet, so the screen can say so
+        instead of the button silently not being there. First reason wins.
+      */
+      paymentLockReason: inApprovalFlow
+        ? null
+        : invoice.status !== INVOICE_STATUS.APPROVED
+          ? "ITEMS_PENDING"
+          : debitNoteLive
+            ? "DN_IN_PROGRESS"
+            : daysLeft > 0
+              ? "NOT_DUE"
+              : payable <= 0
+                ? "NOTHING_PAYABLE"
+                : null,
+      // A new debit note: none already moving, and payment not yet approved.
+      canRaiseDebitNote: !debitNoteLive && approvalStatus !== PAYMENT_APPROVAL_STATUS.APPROVED,
       canEnterPayment:
         approvalStatus === PAYMENT_APPROVAL_STATUS.APPROVED && !paymentClosed && balance > 0,
+    };
+  }
+
+  /*
+    What the Debit Note column shows for one invoice: the LATEST note and its
+    status (with its last note, for the ⓘ), how many there have been, and how
+    much is already approved.
+  */
+  static _debitNoteSummary(adjustments) {
+    const dns = (adjustments || [])
+      .filter((a) => a.type === ADJUSTMENT_TYPE.DEBIT_NOTE)
+      .sort((a, b) => (b.dnNumber || 0) - (a.dnNumber || 0) || new Date(b.createdOn || 0) - new Date(a.createdOn || 0));
+    if (!dns.length) return null;
+    const latest = dns[0];
+    const last = (latest.history || [])[latest.history?.length - 1] || null;
+    return {
+      latest: {
+        _id: latest._id,
+        dnNumber: latest.dnNumber,
+        // No status = predates the approval chain = approved.
+        status: latest.status || DEBIT_NOTE_STATUS.APPROVED,
+        amount: latest.amount || 0,
+        lastNote: last?.note || "",
+        lastByName: last?.byName || "",
+        lastAt: last?.at || latest.createdOn || null,
+      },
+      count: dns.length,
+      approvedTotal: round2(dns.filter(countsInPayable).reduce((t, a) => t + (a.amount || 0), 0)),
     };
   }
 
@@ -330,7 +392,7 @@ export default class StockInvoicePaymentService {
       invoiceId: { $in: invoices.map((i) => i._id) },
       isActive: true,
     })
-      .select("invoiceId type direction amount")
+      .select("invoiceId type direction amount status dnNumber history reason createdOn")
       .lean();
     const adjByInvoice = new Map();
     adjustments.forEach((adj) => {
@@ -354,6 +416,10 @@ export default class StockInvoicePaymentService {
         paymentApproval: inv.paymentApproval || null,
         payments: inv.payments || [],
         invoiceFile: inv.invoiceFile || "",
+        // Misc as entered (with its In bill / Note flag), for the edit form.
+        extraCharges: inv.extraCharges || [],
+        miscEdits: inv.miscEdits || [],
+        debitNote: StockInvoicePaymentService._debitNoteSummary(adjByInvoice.get(String(inv._id)) || []),
         // Carried for the sort below: it breaks ties between invoices that
         // share an invoice date.
         createdAt: inv.createdAt || null,
@@ -387,6 +453,8 @@ export default class StockInvoicePaymentService {
           : true;
     const passApproval = (r) =>
       !approvalStatus ? true
+        // Not sent, and nothing stopping it being sent right now.
+        : approvalStatus === "READY" ? !!r.canSendForApproval
         : approvalStatus === "NONE" ? !r.approvalStatus
           : r.approvalStatus === approvalStatus;
     const passState = (r) => !paymentState || r.paymentState === paymentState;
@@ -395,6 +463,7 @@ export default class StockInvoicePaymentService {
     const forApproval = searched.filter((r) => passPayable(r) && passState(r));
     const forState = searched.filter((r) => passPayable(r) && passApproval(r));
     const forAll = searched.filter(passPayable);
+    const forPayable = searched.filter((r) => passApproval(r) && passState(r));
 
     const countIn = (list, fn) => list.filter(fn).length;
     const counts = {
@@ -410,8 +479,13 @@ export default class StockInvoicePaymentService {
       UNPAID: countIn(forState, (r) => r.paymentState === PAYMENT_STATE.UNPAID),
       PARTIAL: countIn(forState, (r) => r.paymentState === PAYMENT_STATE.PARTIAL),
       PAID: countIn(forState, (r) => r.paymentState === PAYMENT_STATE.PAID),
+      // The Payable Now / Later / All group, with the other two in force.
+      PAYABLE_NOW: countIn(forPayable, (r) => r.payableNow),
+      PAYABLE_LATER: countIn(forPayable, (r) => !r.payableNow),
+      PAYABLE_ALL: forPayable.length,
       // Not facets — plain informational counts over what is on screen.
-      READY: countIn(forAll, (r) => r.canSendForApproval),
+      // Ready to send now — a slice of NONE, counted like the other chips.
+      READY: countIn(forApproval, (r) => r.canSendForApproval),
       // How many have been moved off their contractual date, either way. The
       // number a ledger reader asks for as soon as ageing looks worse than
       // they expected.
@@ -617,6 +691,8 @@ export default class StockInvoicePaymentService {
       invoiceId: invoice._id,
       type: ADJUSTMENT_TYPE.DEBIT_NOTE,
       isActive: true,
+      // A rejected or withdrawn note gave its units back.
+      status: { $nin: DEBIT_NOTE_RELEASED_STATUSES },
     })
       .select("lines")
       .lean();
@@ -777,8 +853,16 @@ export default class StockInvoicePaymentService {
     );
     StockInvoicePaymentService._assertAdjustable(invoice);
 
-    const isDebitNote = type === ADJUSTMENT_TYPE.DEBIT_NOTE;
-    const direction = isDebitNote ? ADJUSTMENT_DIRECTION.DEDUCT : ADJUSTMENT_DIRECTION.ADD;
+    // Debit notes have their own chain now — raised from the Invoice List.
+    if (type === ADJUSTMENT_TYPE.DEBIT_NOTE) {
+      throw new Error("Debit notes are raised from the Invoice List and go through review and approval");
+    }
+    // Misc lives on the invoice itself now (its extra charges).
+    if (type === ADJUSTMENT_TYPE.MISC) {
+      throw new Error("Misc is the invoice's extra charges — edit it with Misc on the Payments screen");
+    }
+    const isDebitNote = false;
+    const direction = ADJUSTMENT_DIRECTION.ADD;
 
     const { rows: extraRows, total: extrasAmount } = StockInvoicePaymentService._resolveExtras(extras);
     const resolvedLines = isDebitNote
@@ -865,9 +949,12 @@ export default class StockInvoicePaymentService {
     );
     StockInvoicePaymentService._assertAdjustable(invoice);
 
+    if (adjustment.type === ADJUSTMENT_TYPE.DEBIT_NOTE) {
+      throw new Error("A debit note is changed by whoever raised it, from the Invoice List");
+    }
     const before = adjustment.toObject();
     const fromAmount = adjustment.amount;
-    const isDebitNote = adjustment.type === ADJUSTMENT_TYPE.DEBIT_NOTE;
+    const isDebitNote = false;
 
     // 1 ── UNDO. Refuses if the stock has moved on since, because putting a
     //      scrapped unit back on the shelf would be a lie.
@@ -945,11 +1032,10 @@ export default class StockInvoicePaymentService {
     );
     StockInvoicePaymentService._assertAdjustable(invoice);
 
-    const before = adjustment.toObject();
-
     if (adjustment.type === ADJUSTMENT_TYPE.DEBIT_NOTE) {
-      await StockInvoicePaymentService._reverseDebitNoteFromStock(adjustment, session);
+      throw new Error("A debit note is withdrawn by whoever raised it, from the Invoice List");
     }
+    const before = adjustment.toObject();
 
     // Soft, like everything else here: what was debited and then withdrawn is
     // a question somebody will ask.
@@ -1118,6 +1204,403 @@ export default class StockInvoicePaymentService {
   }
 
   /* -------------------------------------------------------------------- */
+  /* Debit note chain                                                      */
+  /*   raised (Invoice List) → reviewed (Payments) → decided (Approvals)    */
+  /* -------------------------------------------------------------------- */
+
+  // One step of a debit note's life, appended to its history.
+  static _dnStep(adjustment, actor, action, note = "", fromAmount = null, toAmount = null) {
+    adjustment.history.push({
+      at: new Date(),
+      by: actor?.id || actor?._id || null,
+      byName: actor?.name || "",
+      action,
+      note: String(note || "").trim(),
+      fromAmount,
+      toAmount,
+    });
+  }
+
+  // The debit note still moving on this invoice, if any. Only one at a time.
+  static async _liveDebitNote(invoiceId, session) {
+    return StockInvoiceAdjustmentModel.findOne({
+      invoiceId,
+      type: ADJUSTMENT_TYPE.DEBIT_NOTE,
+      isActive: true,
+      status: { $in: DEBIT_NOTE_LIVE_STATUSES },
+    }).session(session ?? null);
+  }
+
+  static async _loadDebitNote(dnId, session) {
+    const dn = await StockInvoiceAdjustmentModel.findOne({
+      _id: dnId,
+      type: ADJUSTMENT_TYPE.DEBIT_NOTE,
+      isActive: true,
+    }).session(session ?? null);
+    if (!dn) throw new Error("Debit note not found");
+    return dn;
+  }
+
+  /*
+    Picked units/quantities and free rows → priced lines and totals. The client
+    sends what was PICKED; every amount is worked out here.
+  */
+  static async _priceDebitNote(invoiceId, payload, dataAccess, moduleKey, excludeId) {
+    const { rows: extraRows, total: extrasAmount } = StockInvoicePaymentService._resolveExtras(payload?.extras);
+    const lines = await StockInvoicePaymentService._resolveDebitLines(
+      invoiceId, payload?.lines || [], dataAccess, moduleKey, excludeId
+    );
+    const itemsBasicAmount = round2(lines.reduce((s, l) => s + l.basicAmount, 0));
+    const itemsGstAmount = round2(lines.reduce((s, l) => s + l.gstAmount, 0));
+    const itemsAmount = round2(itemsBasicAmount + itemsGstAmount);
+    const amount = round2(itemsAmount + extrasAmount);
+    if (amount <= 0) throw new Error("A debit note needs at least one item or one amount row");
+    return { lines, extras: extraRows, itemsBasicAmount, itemsGstAmount, itemsAmount, extrasAmount, amount };
+  }
+
+  /*
+    A waiting payment request is pulled back when a new debit note lands, so
+    nobody approves a number that is about to move. Status goes back to "not
+    requested", with the reason kept for the Payments screen.
+  */
+  static async _pullBackPaymentRequest(invoice, note, actor, session) {
+    if (invoice.paymentApprovalStatus !== PAYMENT_APPROVAL_STATUS.PENDING) return;
+    const before = invoice.toObject();
+    invoice.paymentApprovalStatus = null;
+    invoice.paymentApproval = {
+      ...(invoice.paymentApproval?.toObject?.() || invoice.paymentApproval || {}),
+      pulledBackAt: new Date(),
+      pulledBackNote: note,
+    };
+    await invoice.save({ session });
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: "PULL_BACK_PAYMENT_APPROVAL",
+      actor, before, after: invoice.toObject(), reason: note,
+    });
+  }
+
+  // Raised by the stock side from the Invoice List → Review Pending.
+  static async raiseDebitNote(invoiceId, payload, actor, session, dataAccess, moduleKey) {
+    const invoice = await StockInvoicePaymentService._loadScopedInvoice(invoiceId, dataAccess, moduleKey, session);
+    if (invoice.paymentApprovalStatus === PAYMENT_APPROVAL_STATUS.APPROVED) {
+      throw new Error("This invoice is already approved for payment — a debit note can no longer be raised");
+    }
+    const live = await StockInvoicePaymentService._liveDebitNote(invoice._id, session);
+    if (live) {
+      throw new Error(`DN-${live.dnNumber} on this invoice is still in progress — one debit note at a time`);
+    }
+
+    const priced = await StockInvoicePaymentService._priceDebitNote(invoiceId, payload, dataAccess, moduleKey, null);
+    await StockInvoicePaymentService._assertWithinPayable(invoice, priced.amount, session, null);
+
+    const last = await StockInvoiceAdjustmentModel.findOne({ invoiceId: invoice._id, type: ADJUSTMENT_TYPE.DEBIT_NOTE })
+      .sort({ dnNumber: -1 })
+      .select("dnNumber")
+      .session(session)
+      .lean();
+    const dnNumber = (last?.dnNumber || 0) + 1;
+
+    const now = new Date();
+    const [dn] = await StockInvoiceAdjustmentModel.create(
+      [
+        {
+          invoiceId: invoice._id,
+          invoiceNumber: invoice.invoiceNumber,
+          vendorId: invoice.vendorId,
+          vendorName: invoice.vendorName,
+          branchId: invoice.branchId,
+          type: ADJUSTMENT_TYPE.DEBIT_NOTE,
+          direction: ADJUSTMENT_DIRECTION.DEDUCT,
+          ...priced,
+          reason: String(payload?.reason || "").trim(),
+          status: DEBIT_NOTE_STATUS.REVIEW_PENDING,
+          dnNumber,
+          createdByName: actor?.name || "",
+          createdOn: now,
+        },
+      ],
+      { session }
+    );
+    StockInvoicePaymentService._dnStep(dn, actor, "RAISED", payload?.reason, null, priced.amount);
+    await dn.save({ session });
+
+    // The units are held now (out of stock), so nobody can move them while the
+    // note is decided; a rejection or withdrawal puts them back.
+    await StockInvoicePaymentService._applyDebitNoteToStock(dn, session);
+    await StockInvoicePaymentService._pullBackPaymentRequest(
+      invoice, `DN-${dnNumber} was raised while payment approval was pending`, actor, session
+    );
+
+    log.info(`DN-${dnNumber} (${priced.amount}) raised on invoice ${invoice.invoiceNumber}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ADJUSTMENT_ENTITY_TYPE, entityId: dn._id, action: "RAISE_DEBIT_NOTE",
+      actor, before: null, after: dn.toObject(), reason: String(payload?.reason || "").trim(),
+    });
+    return dn;
+  }
+
+  // Review Rejected → edited by the raiser → Review Pending again.
+  static async resubmitDebitNote(dnId, payload, actor, session, dataAccess, moduleKey) {
+    const dn = await StockInvoicePaymentService._loadDebitNote(dnId, session);
+    if (dn.status !== DEBIT_NOTE_STATUS.REVIEW_REJECTED) {
+      throw new Error("Only a debit note sent back in review can be edited and resubmitted");
+    }
+    const invoice = await StockInvoicePaymentService._loadScopedInvoice(dn.invoiceId, dataAccess, moduleKey, session);
+    const before = dn.toObject();
+    const fromAmount = dn.amount;
+
+    // Undo the old hold, then price and hold again — the same path a new note
+    // takes, so an edit can never leave stock half-moved.
+    await StockInvoicePaymentService._reverseDebitNoteFromStock(dn, session);
+    const priced = await StockInvoicePaymentService._priceDebitNote(dn.invoiceId, payload, dataAccess, moduleKey, dn._id);
+    await StockInvoicePaymentService._assertWithinPayable(invoice, priced.amount, session, dn._id);
+
+    Object.assign(dn, priced);
+    if (payload?.reason !== undefined) dn.reason = String(payload.reason || "").trim();
+    dn.status = DEBIT_NOTE_STATUS.REVIEW_PENDING;
+    StockInvoicePaymentService._dnStep(dn, actor, "RESUBMITTED", payload?.editNote, fromAmount, priced.amount);
+    await dn.save({ session });
+    await StockInvoicePaymentService._applyDebitNoteToStock(dn, session);
+
+    log.info(`DN-${dn.dnNumber} resubmitted on invoice ${invoice.invoiceNumber}: ${fromAmount} -> ${priced.amount}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ADJUSTMENT_ENTITY_TYPE, entityId: dn._id, action: "RESUBMIT_DEBIT_NOTE",
+      actor, before, after: dn.toObject(), reason: String(payload?.editNote || "").trim(),
+    });
+    return dn;
+  }
+
+  // The raiser drops it — only while it is still with review.
+  static async withdrawDebitNote(dnId, payload, actor, session, dataAccess, moduleKey) {
+    const dn = await StockInvoicePaymentService._loadDebitNote(dnId, session);
+    if (![DEBIT_NOTE_STATUS.REVIEW_PENDING, DEBIT_NOTE_STATUS.REVIEW_REJECTED].includes(dn.status)) {
+      throw new Error("A debit note can be withdrawn only while it is in review");
+    }
+    await StockInvoicePaymentService._loadScopedInvoice(dn.invoiceId, dataAccess, moduleKey, session);
+    const before = dn.toObject();
+    await StockInvoicePaymentService._reverseDebitNoteFromStock(dn, session);
+    dn.status = DEBIT_NOTE_STATUS.WITHDRAWN;
+    StockInvoicePaymentService._dnStep(dn, actor, "WITHDRAWN", payload?.reason);
+    await dn.save({ session });
+
+    await StockAuditLogService.recordAudit({
+      entityType: ADJUSTMENT_ENTITY_TYPE, entityId: dn._id, action: "WITHDRAW_DEBIT_NOTE",
+      actor, before, after: dn.toObject(), reason: String(payload?.reason || "").trim(),
+    });
+    return dn;
+  }
+
+  // Review (Payments): send on for approval, or reject back to the raiser.
+  static async reviewDebitNote(dnId, payload, actor, session, dataAccess, moduleKey) {
+    const { decision, reason } = payload || {};
+    const dn = await StockInvoicePaymentService._loadDebitNote(dnId, session);
+    if (dn.status !== DEBIT_NOTE_STATUS.REVIEW_PENDING) {
+      throw new Error("This debit note is not waiting on review");
+    }
+    await StockInvoicePaymentService._loadScopedInvoice(dn.invoiceId, dataAccess, moduleKey, session);
+    const sending = decision === "SEND";
+    if (!sending && !String(reason || "").trim()) throw new Error("A reason is required to reject in review");
+
+    const before = dn.toObject();
+    dn.status = sending ? DEBIT_NOTE_STATUS.APPROVAL_PENDING : DEBIT_NOTE_STATUS.REVIEW_REJECTED;
+    StockInvoicePaymentService._dnStep(dn, actor, sending ? "SENT_FOR_APPROVAL" : "REVIEW_REJECTED", reason);
+    await dn.save({ session });
+
+    await StockAuditLogService.recordAudit({
+      entityType: ADJUSTMENT_ENTITY_TYPE, entityId: dn._id,
+      action: sending ? "SEND_DEBIT_NOTE_FOR_APPROVAL" : "REJECT_DEBIT_NOTE_REVIEW",
+      actor, before, after: dn.toObject(), reason: String(reason || "").trim(),
+    });
+    return dn;
+  }
+
+  /*
+    Approval: Approved (now counts in Net Payable, units become faulty for
+    good) or Approval Rejected (final — units go back to stock, nothing more
+    happens; a new debit note is raised if one is still wanted).
+  */
+  static async decideDebitNote(dnId, payload, actor, session, dataAccess, moduleKey) {
+    const { decision, reason } = payload || {};
+    const dn = await StockInvoicePaymentService._loadDebitNote(dnId, session);
+    if (dn.status !== DEBIT_NOTE_STATUS.APPROVAL_PENDING) {
+      throw new Error("This debit note is not waiting on approval");
+    }
+    const invoice = await StockInvoicePaymentService._loadScopedInvoice(dn.invoiceId, dataAccess, moduleKey, session);
+    const approving = decision === DEBIT_NOTE_STATUS.APPROVED;
+    if (!approving && !String(reason || "").trim()) throw new Error("A reason is required to reject a debit note");
+
+    const before = dn.toObject();
+    if (approving) {
+      // Other money may have moved since it was raised — never let it push the
+      // payable below zero.
+      await StockInvoicePaymentService._assertWithinPayable(invoice, dn.amount, session, dn._id);
+      dn.status = DEBIT_NOTE_STATUS.APPROVED;
+    } else {
+      await StockInvoicePaymentService._reverseDebitNoteFromStock(dn, session);
+      dn.status = DEBIT_NOTE_STATUS.APPROVAL_REJECTED;
+    }
+    StockInvoicePaymentService._dnStep(dn, actor, approving ? "APPROVED" : "APPROVAL_REJECTED", reason);
+    await dn.save({ session });
+
+    log.info(`DN-${dn.dnNumber} on ${invoice.invoiceNumber}: ${dn.status}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ADJUSTMENT_ENTITY_TYPE, entityId: dn._id,
+      action: approving ? "APPROVE_DEBIT_NOTE" : "REJECT_DEBIT_NOTE",
+      actor, before, after: dn.toObject(), reason: String(reason || "").trim(),
+    });
+    return dn;
+  }
+
+  // Every debit note on one invoice, newest first, with full history.
+  static async listDebitNotes(invoiceId, dataAccess, moduleKey) {
+    await StockInvoicePaymentService._loadScopedInvoice(invoiceId, dataAccess, moduleKey);
+    const rows = await StockInvoiceAdjustmentModel.find({
+      invoiceId, type: ADJUSTMENT_TYPE.DEBIT_NOTE, isActive: true,
+    })
+      .sort({ dnNumber: -1, createdAt: -1 })
+      .lean();
+    return rows.map((r) => ({ ...r, status: r.status || DEBIT_NOTE_STATUS.APPROVED }));
+  }
+
+  /*
+    The review queue (Payments) and the approval queue (Approvals): debit notes
+    at the given statuses, on invoices the caller's module may see. Counts per
+    status come back too, for the tabs.
+  */
+  static async getDebitNoteQueue(query = {}, dataAccess, moduleKey, statuses) {
+    const { skip, limit, page } = paginate(query);
+    const { search, status } = query;
+    const wanted = status && statuses.includes(status) ? [status] : statuses;
+
+    const invoices = await StockInvoiceModel.find(
+      applyDataScope(
+        { isActive: true, $or: [{ status: INVOICE_STATUS.APPROVED }, { inLedger: true }] },
+        dataAccess,
+        moduleKey
+      )
+    )
+      .select("invoiceNumber invoiceDate vendorName poId branchId paymentApprovalStatus")
+      .lean();
+    const invById = new Map(invoices.map((i) => [String(i._id), i]));
+
+    const all = await StockInvoiceAdjustmentModel.find({
+      invoiceId: { $in: invoices.map((i) => i._id) },
+      type: ADJUSTMENT_TYPE.DEBIT_NOTE,
+      isActive: true,
+      status: { $in: statuses },
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    const poIds = [...new Set(invoices.map((i) => String(i.poId || "")).filter(Boolean))];
+    const pos = await StockPurchaseOrderModel.find({ _id: { $in: poIds } }).select("poNumber").lean();
+    const poNo = new Map(pos.map((p) => [String(p._id), p.poNumber]));
+
+    const text = String(search || "").trim().toLowerCase();
+    const matched = all.filter((d) => {
+      if (!text) return true;
+      const inv = invById.get(String(d.invoiceId)) || {};
+      return [inv.invoiceNumber, inv.vendorName, poNo.get(String(inv.poId))]
+        .some((v) => String(v || "").toLowerCase().includes(text));
+    });
+
+    const counts = Object.fromEntries(statuses.map((s) => [s, 0]));
+    matched.forEach((d) => { counts[d.status] = (counts[d.status] || 0) + 1; });
+
+    const rows = matched
+      .filter((d) => wanted.includes(d.status))
+      .map((d) => {
+        const inv = invById.get(String(d.invoiceId)) || {};
+        return {
+          ...d,
+          invoiceNumber: inv.invoiceNumber || d.invoiceNumber,
+          invoiceDate: inv.invoiceDate || null,
+          vendorName: inv.vendorName || d.vendorName,
+          poNumber: poNo.get(String(inv.poId)) || "",
+        };
+      });
+
+    return { data: { rows: rows.slice(skip, skip + limit), counts }, total: rows.length, page, limit };
+  }
+
+  /*
+    Accounts change an invoice's Misc (its extra charges) — prefilled with what
+    was entered with the invoice. No approval, every change recorded, frozen
+    once payment has been asked for.
+  */
+  static async updateMisc(invoiceId, payload, actor, session, dataAccess, moduleKey) {
+    const reason = String(payload?.reason || "").trim();
+    if (!reason) throw new Error("A reason is required to change misc");
+    const charges = (payload?.charges || [])
+      .map((c) => ({
+        note: String(c?.note || "").trim(),
+        amount: round2(Number(c?.amount) || 0),
+        includeInBilling: c?.includeInBilling !== false,
+      }))
+      .filter((c) => c.amount > 0);
+    if (charges.some((c) => !Number.isFinite(c.amount) || c.amount < 0)) throw new Error("Misc amounts must be positive numbers");
+
+    const invoice = await StockInvoicePaymentService._loadScopedInvoice(invoiceId, dataAccess, moduleKey, session);
+    StockInvoicePaymentService._assertAdjustable(invoice);
+    const before = invoice.toObject();
+
+    const billed = (list) => round2((list || []).filter((c) => c.includeInBilling !== false).reduce((t, c) => t + (c.amount || 0), 0));
+    const fromTotal = billed(invoice.extraCharges);
+    const toTotal = billed(charges);
+
+    invoice.extraCharges = charges;
+    invoice.amount = StockInvoiceService._computeAmount(invoice.lines, invoice.extraCharges);
+    invoice.miscEdits.push({ fromTotal, toTotal, reason, by: actor?.id || actor?._id || null, byName: actor?.name || "", at: new Date() });
+    await invoice.save({ session });
+
+    log.info(`Misc on ${invoice.invoiceNumber}: ${fromTotal} -> ${toTotal}`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: "UPDATE_MISC",
+      actor, before, after: invoice.toObject(), reason,
+    });
+    return invoice;
+  }
+
+  /*
+    Accounts change an invoice's TDS rate by hand — a lower-deduction
+    certificate, a wrong slab. No approval, but every change is recorded, and
+    it is frozen once payment has been asked for, like misc charges.
+  */
+  static async updateTds(invoiceId, payload, actor, session, dataAccess, moduleKey) {
+    const rate = Number(payload?.rate);
+    const reason = String(payload?.reason || "").trim();
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) throw new Error("TDS rate must be between 0 and 100");
+    if (!reason) throw new Error("A reason is required to change TDS");
+
+    const invoice = await StockInvoicePaymentService._loadScopedInvoice(invoiceId, dataAccess, moduleKey, session);
+    StockInvoicePaymentService._assertAdjustable(invoice);
+    const before = invoice.toObject();
+
+    const current = invoice.tds?.toObject?.() || invoice.tds || null;
+    const fromRate = current?.rate || 0;
+    if (fromRate === rate) throw new Error("TDS is already " + rate + "%");
+
+    invoice.tds = {
+      rate,
+      entityAlias: current?.entityAlias || invoice.entityAlias || "",
+      note: current?.note || "",
+      appliedAt: current?.appliedAt || new Date(),
+      edits: [
+        ...(current?.edits || []),
+        { fromRate, toRate: rate, reason, by: actor?.id || actor?._id || null, byName: actor?.name || "", at: new Date() },
+      ],
+    };
+    await invoice.save({ session });
+
+    log.info(`TDS on ${invoice.invoiceNumber}: ${fromRate}% -> ${rate}%`);
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: invoice._id, action: "UPDATE_TDS",
+      actor, before, after: invoice.toObject(), reason,
+    });
+    return invoice;
+  }
+
+  /* -------------------------------------------------------------------- */
   /* Payment approval chain                                                */
   /* -------------------------------------------------------------------- */
 
@@ -1147,6 +1630,9 @@ export default class StockInvoicePaymentService {
     }
 
     const derived = await StockInvoicePaymentService._payableNow(invoice, session);
+    if (derived.debitNoteLive) {
+      throw new Error("A debit note on this invoice is still in review or approval — settle it before asking for payment");
+    }
     if (derived.daysLeft > 0) {
       throw new Error(
         "This invoice is not due yet — payment approval can be requested from " +
@@ -1157,10 +1643,21 @@ export default class StockInvoicePaymentService {
       throw new Error("There is nothing left payable on this invoice");
     }
 
+    // A resend after a rejection must say what was done about it.
+    const note = String(payload?.reason || "").trim();
+    const wasRejected = s === PAYMENT_APPROVAL_STATUS.REJECTED;
+    if (wasRejected && !note) {
+      throw new Error("Write a note for the approver — what was fixed since it was sent back");
+    }
+    const prev = invoice.paymentApproval?.toObject?.() || invoice.paymentApproval || {};
+
     const before = invoice.toObject();
 
     invoice.paymentApprovalStatus = PAYMENT_APPROVAL_STATUS.PENDING;
     invoice.paymentApproval = {
+      sentNote: note,
+      previousRejectedReason: wasRejected ? prev.rejectedReason || "" : "",
+      previousRejectedByName: wasRejected ? prev.reviewedByName || "" : "",
       sentBy: actor?.id || actor?._id || null,
       sentByName: actor?.name || "",
       sentAt: new Date(),

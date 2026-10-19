@@ -9,6 +9,9 @@ import {
   validateCreateAdjustment,
   validateUpdateAdjustment,
   validatePaymentApprovalDecision,
+  validateDebitNote,
+  validateDebitNoteReview,
+  validateDebitNoteDecision,
   validateRecordPayment,
 } from "../validators/stock.validator.js";
 
@@ -34,9 +37,9 @@ const log = getLogger(import.meta.url);
   team's view of the same invoice can legitimately differ. Each handler names
   its own key rather than letting the service guess.
 
-  Adjustments are created, edited and withdrawn by ACCOUNTS only. The Invoice
-  List reads them and nothing more — the stock team's request-and-review round
-  trip has been removed, not merely hidden.
+  Misc charges and TDS belong to ACCOUNTS (Payments). Debit notes have their
+  own chain: raised on the Invoice List, reviewed on Payments, decided on
+  Payment Approval — each step through its own module and action.
 */
 const MODULE = {
   INVOICE_LIST: "invoice-list",
@@ -102,20 +105,64 @@ export default class StockInvoicePaymentController {
     ?adjustmentId is passed when EDITING one — its own claims must not count as
     "already taken", or every unit it already holds would come back blocked.
   */
-  static async getDebitNoteItems(req, res) {
-    try {
-      const data = await StockInvoicePaymentService.getDebitNoteItems(
-        req.params.id,
-        req.dataAccess,
-        MODULE.PAYMENTS,
-        req.query.adjustmentId || null
-      );
-      successResponseHandler(res, data, "Debitable items fetched successfully");
-    } catch (error) {
-      log.error("Error fetching debitable items", error);
-      errorResponseHandler(res, error);
-    }
+  static debitNoteItems(moduleKey) {
+    return async (req, res) => {
+      try {
+        const data = await StockInvoicePaymentService.getDebitNoteItems(
+          req.params.id,
+          req.dataAccess,
+          moduleKey,
+          req.query.adjustmentId || null
+        );
+        successResponseHandler(res, data, "Debitable items fetched successfully");
+      } catch (error) {
+        log.error("Error fetching debitable items", error);
+        errorResponseHandler(res, error);
+      }
+    };
   }
+
+  static getDebitNoteItems = StockInvoicePaymentController.debitNoteItems(MODULE.PAYMENTS);
+  static getDebitNoteItemsForRaise = StockInvoicePaymentController.debitNoteItems(MODULE.INVOICE_LIST);
+
+  // Every debit note on an invoice, with its history — any of the three screens.
+  static listDebitNotes(moduleKey) {
+    return async (req, res) => {
+      try {
+        const data = await StockInvoicePaymentService.listDebitNotes(req.params.id, req.dataAccess, moduleKey);
+        successResponseHandler(res, data, "Debit notes fetched successfully");
+      } catch (error) {
+        log.error("Error fetching debit notes", error);
+        errorResponseHandler(res, error);
+      }
+    };
+  }
+
+  static getDebitNotes = StockInvoicePaymentController.listDebitNotes(MODULE.INVOICE_LIST);
+  static getDebitNotesForAccounts = StockInvoicePaymentController.listDebitNotes(MODULE.PAYMENTS);
+  static getDebitNotesForApproval = StockInvoicePaymentController.listDebitNotes(MODULE.PAYMENT_APPROVAL);
+
+  // Review queue (Payments) and approval queue (Approvals).
+  static debitNoteQueue(moduleKey, statuses) {
+    return async (req, res) => {
+      try {
+        const { data, total, page, limit } = await StockInvoicePaymentService.getDebitNoteQueue(
+          req.query, req.dataAccess, moduleKey, statuses
+        );
+        successResponseHandler(res, paginateReturn(data, total, page, limit), "Debit notes fetched successfully");
+      } catch (error) {
+        log.error("Error fetching debit note queue", error);
+        errorResponseHandler(res, error);
+      }
+    };
+  }
+
+  static getReviewQueue = StockInvoicePaymentController.debitNoteQueue(MODULE.PAYMENTS, [
+    "REVIEW_PENDING", "REVIEW_REJECTED", "APPROVAL_PENDING", "APPROVED", "APPROVAL_REJECTED",
+  ]);
+  static getApprovalQueue = StockInvoicePaymentController.debitNoteQueue(MODULE.PAYMENT_APPROVAL, [
+    "APPROVAL_PENDING", "APPROVED", "APPROVAL_REJECTED",
+  ]);
 
   static listAdjustments(moduleKey) {
     return async (req, res) => {
@@ -178,6 +225,73 @@ export default class StockInvoicePaymentController {
         req.params.id, req.body, req.user, session, req.dataAccess, MODULE.PAYMENTS
       ),
     "Adjustment withdrawn"
+  );
+
+  /* ── Debit note chain ──────────────────────────────────────────────── */
+
+  static raiseDebitNote = StockInvoicePaymentController.txn(
+    (req, session) => {
+      validateDebitNote(req.body);
+      return StockInvoicePaymentService.raiseDebitNote(
+        req.params.id, req.body, req.user, session, req.dataAccess, MODULE.INVOICE_LIST
+      );
+    },
+    "Debit note raised"
+  );
+
+  // :id is the DEBIT NOTE.
+  static resubmitDebitNote = StockInvoicePaymentController.txn(
+    (req, session) => {
+      validateDebitNote(req.body);
+      return StockInvoicePaymentService.resubmitDebitNote(
+        req.params.id, req.body, req.user, session, req.dataAccess, MODULE.INVOICE_LIST
+      );
+    },
+    "Debit note resubmitted"
+  );
+
+  static withdrawDebitNote = StockInvoicePaymentController.txn(
+    (req, session) =>
+      StockInvoicePaymentService.withdrawDebitNote(
+        req.params.id, req.body, req.user, session, req.dataAccess, MODULE.INVOICE_LIST
+      ),
+    "Debit note withdrawn"
+  );
+
+  static reviewDebitNote = StockInvoicePaymentController.txn(
+    (req, session) => {
+      validateDebitNoteReview(req.body);
+      return StockInvoicePaymentService.reviewDebitNote(
+        req.params.id, req.body, req.user, session, req.dataAccess, MODULE.PAYMENTS
+      );
+    },
+    "Debit note reviewed"
+  );
+
+  static decideDebitNote = StockInvoicePaymentController.txn(
+    (req, session) => {
+      validateDebitNoteDecision(req.body);
+      return StockInvoicePaymentService.decideDebitNote(
+        req.params.id, req.body, req.user, session, req.dataAccess, MODULE.PAYMENT_APPROVAL
+      );
+    },
+    "Debit note decision saved"
+  );
+
+  static updateMisc = StockInvoicePaymentController.txn(
+    (req, session) =>
+      StockInvoicePaymentService.updateMisc(
+        req.params.id, req.body, req.user, session, req.dataAccess, MODULE.PAYMENTS
+      ),
+    "Misc updated"
+  );
+
+  static updateTds = StockInvoicePaymentController.txn(
+    (req, session) =>
+      StockInvoicePaymentService.updateTds(
+        req.params.id, req.body, req.user, session, req.dataAccess, MODULE.PAYMENTS
+      ),
+    "TDS updated"
   );
 
   static sendForApproval = StockInvoicePaymentController.txn(

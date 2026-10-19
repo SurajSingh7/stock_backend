@@ -151,7 +151,26 @@ const invoiceSchema = new Schema(
     // Free-text remarks from whoever received the goods.
     notes: { type: String, trim: true, default: "" },
 
+    // "Misc (Extra Charges)" — entered with the invoice, editable later by
+    // accounts on Payments (see miscEdits). Outside Billing: Billing + Misc.
     extraCharges: { type: [extraChargeSchema], default: [] },
+    // Every change accounts make to Misc after the invoice was added.
+    miscEdits: {
+      type: [
+        new Schema(
+          {
+            fromTotal: { type: Number, default: 0 },
+            toTotal: { type: Number, default: 0 },
+            reason: { type: String, trim: true, default: "" },
+            by: { type: Schema.Types.ObjectId, default: null },
+            byName: { type: String, trim: true, default: "" },
+            at: { type: Date, default: null },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
     lines: { type: [invoiceLineSchema], default: [] },
 
     // Server-computed: sum(receivedQuantity*unitPrice) + sum(billed extraCharges.amount)
@@ -198,6 +217,27 @@ const invoiceSchema = new Schema(
           entityAlias: { type: String, trim: true, default: "" },
           note: { type: String, trim: true, default: "" },
           appliedAt: { type: Date, default: null },
+          /*
+            Set when accounts change the rate by hand (a lower-deduction
+            certificate, a wrong slab). Each change is one row: from, to, who,
+            why. No approval — accounts own TDS — but never silent.
+          */
+          edits: {
+            type: [
+              new Schema(
+                {
+                  fromRate: { type: Number, default: 0 },
+                  toRate: { type: Number, default: 0 },
+                  reason: { type: String, trim: true, default: "" },
+                  by: { type: Schema.Types.ObjectId, default: null },
+                  byName: { type: String, trim: true, default: "" },
+                  at: { type: Date, default: null },
+                },
+                { _id: false }
+              ),
+            ],
+            default: [],
+          },
         },
         { _id: false }
       ),
@@ -367,6 +407,19 @@ const invoiceSchema = new Schema(
           reviewedByName: { type: String, trim: true, default: "" },
           reviewedAt: { type: Date, default: null },
           rejectedReason: { type: String, trim: true, default: "" },
+          /*
+            A request still waiting when a new debit note was raised is pulled
+            back (status → null) so nobody approves a number that has moved.
+            Kept so the Payments screen can say why it is back.
+          */
+          // What accounts wrote when sending — required on a resend after a
+          // rejection, so the approver sees what was fixed.
+          sentNote: { type: String, trim: true, default: "" },
+          // The rejection this request answers (empty on a first send).
+          previousRejectedReason: { type: String, trim: true, default: "" },
+          previousRejectedByName: { type: String, trim: true, default: "" },
+          pulledBackAt: { type: Date, default: null },
+          pulledBackNote: { type: String, trim: true, default: "" },
         },
         { _id: false }
       ),

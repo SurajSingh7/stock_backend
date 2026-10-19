@@ -320,7 +320,7 @@ export default class StockInvoiceService {
   }
 
 
-  // Basic/CGST/SGST/IGST/extraCharges/grandTotal for one invoice — shared by
+  // Basic/CGST/SGST/IGST/misc/grandTotal for one invoice — shared by
   // getBoard (list rows) and getInvoiceById (Review page's Invoice Details).
   // `po` may be null (invoice without a linked PO); taxType then defaults to
   // CGST_SGST so the split still renders something sane.
@@ -342,27 +342,39 @@ export default class StockInvoiceService {
       }
     });
     const gstAmount = round2(cgstAmount + sgstAmount + igstAmount);
-    // extraChargesTotal is the BILLED charges only — every report and ledger
-    // that reads it is summing what the vendor is owed. Note-only charges are
-    // reported on their own so a screen can still show them.
-    const extraChargesTotal = StockInvoiceService._sumCharges(inv.extraCharges, true);
+    /*
+      Misc — the invoice's extra charges (freight, handling…). Only the BILLED
+      ones count; note-only charges are reported on their own so a screen can
+      still show them. Misc sits OUTSIDE Billing:
+
+        Billing     = Basic + GST                       (the goods and their tax)
+        Net Payable = Billing + Misc − TDS (− debit notes)
+
+      extraChargesTotal is the same figure under its old name, kept so nothing
+      that still reads it breaks.
+    */
+    const miscTotal = StockInvoiceService._sumCharges(inv.extraCharges, true);
     const nonBilledChargesTotal = StockInvoiceService._sumCharges(inv.extraCharges, false);
 
-    const grandTotal = round2(StockInvoiceService._computeAmount(inv.lines || [], inv.extraCharges, qtyOf) + gstAmount);
-    // TDS: on the BASIC only — not GST, not extra charges — at the rate the
-    // invoice snapshotted when it entered the ledger (0 when it has none).
+    const grandTotal = round2(basicAmount + gstAmount);
+    // TDS: on the BASIC only — not GST, not misc — at the rate the invoice
+    // snapshotted when it entered the ledger (0 when it has none).
     const tdsRate = inv.tds?.rate || 0;
     const tdsAmount = round2((basicAmount * tdsRate) / 100);
 
     return {
       taxType, basicAmount: round2(basicAmount),
       cgstAmount: round2(cgstAmount), sgstAmount: round2(sgstAmount), igstAmount: round2(igstAmount),
-      gstAmount, extraChargesTotal, nonBilledChargesTotal,
-      // grandTotal stays the bill as the vendor wrote it; netTotal is what is
-      // owed once TDS is held back.
+      gstAmount,
+      miscTotal, extraChargesTotal: miscTotal, nonBilledChargesTotal,
+      // Billing: Basic + GST.
       grandTotal,
+      // What the vendor's invoice says in total (Billing + Misc) — the figure
+      // the "amount on invoice" is checked against.
+      invoiceTotal: round2(grandTotal + miscTotal),
       tdsRate, tdsAmount,
-      netTotal: round2(grandTotal - tdsAmount),
+      // Owed on the invoice itself, before any debit note.
+      netTotal: round2(grandTotal + miscTotal - tdsAmount),
     };
   }
 

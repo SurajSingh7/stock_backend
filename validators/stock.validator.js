@@ -607,6 +607,29 @@ export const validateUpdateAdjustment = (body) => {
   A rejection needs a reason; an approval does not. Rejecting means "something
   on this is wrong", and the person who has to fix it cannot act on silence.
 */
+// A debit note: a reason, and at least one picked item or amount row.
+export const validateDebitNote = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!body.reason || !String(body.reason).trim()) throw new Error("A reason is required");
+  assertAdjustmentRows(body);
+};
+
+export const validateDebitNoteReview = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!["SEND", "REJECT"].includes(body.decision)) throw new Error("decision must be SEND or REJECT");
+  if (body.decision === "REJECT" && !String(body.reason || "").trim()) {
+    throw new Error("A reason is required to reject in review");
+  }
+};
+
+export const validateDebitNoteDecision = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!["APPROVED", "REJECTED"].includes(body.decision)) throw new Error("decision must be APPROVED or REJECTED");
+  if (body.decision === "REJECTED" && !String(body.reason || "").trim()) {
+    throw new Error("A reason is required to reject a debit note");
+  }
+};
+
 export const validatePaymentApprovalDecision = (body) => {
   if (!body || typeof body !== "object") throw new Error("Request body is required");
   if (!["APPROVED", "REJECTED"].includes(body.decision)) {

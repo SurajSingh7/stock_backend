@@ -3,6 +3,7 @@ import StockVendorLedgerService from "./stock.vendor.ledger.service.js";
 import StockInvoiceService from "./stock.invoice.service.js";
 import { paginate } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
+import { PAYABLE_ADJUSTMENT_FILTER } from "../helpers/adjustment.helper.js";
 import {
   ADJUSTMENT_TYPE,
   ADJUSTMENT_DIRECTION,
@@ -241,7 +242,8 @@ export default class StockReportService {
     const invoiceIds = invoices.map((i) => i._id);
     if (!invoiceIds.length) return [];
 
-    const filter = { invoiceId: { $in: invoiceIds } };
+    // Debit notes appear here once approved — before that nothing moved.
+    const filter = { invoiceId: { $in: invoiceIds }, ...PAYABLE_ADJUSTMENT_FILTER };
     if (!includeWithdrawn) filter.isActive = true;
     const adjustments = await StockInvoiceAdjustmentModel.find(filter).lean();
 
@@ -654,6 +656,8 @@ export default class StockReportService {
           igstAmount: totals.igstAmount,
           gstAmount: totals.gstAmount,
           grandTotal: totals.grandTotal,
+          miscTotal: totals.miscTotal,
+          invoiceTotal: totals.invoiceTotal,
           tdsRate: totals.tdsRate,
           tdsAmount: totals.tdsAmount,
         },
@@ -745,7 +749,8 @@ export default class StockReportService {
     };
     rows.forEach((r) => {
       totals.basic = round2(totals.basic + r.totals.basicAmount);
-      totals.extraCharges = round2(totals.extraCharges + r.totals.extraChargesTotal);
+      // Misc lives in its own total below (r.miscTotal); kept at 0 here so an
+      // old screen reading it cannot count misc twice.
       totals.gst = round2(totals.gst + r.totals.gstAmount);
       totals.billing = round2(totals.billing + r.totals.grandTotal);
       totals.tds = round2(totals.tds + r.totals.tdsAmount);

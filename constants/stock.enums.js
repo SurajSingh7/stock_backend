@@ -397,6 +397,40 @@ export const ADJUSTMENT_DIRECTION = {
 };
 export const ADJUSTMENT_DIRECTION_ARRAY = Object.values(ADJUSTMENT_DIRECTION);
 
+/*
+  A debit note's own chain. Raised from the Invoice List, reviewed on Payments,
+  decided on Approvals. Named for the STEP, never the team doing it, so moving
+  review to another team is a permission change and nothing else.
+
+    REVIEW_PENDING ─┬─ review reject ─▶ REVIEW_REJECTED ─ edit & resubmit ─▶ REVIEW_PENDING
+                    └─ send ─▶ APPROVAL_PENDING ─┬─▶ APPROVED           (final, counts)
+                                                 └─▶ APPROVAL_REJECTED  (final, nothing more)
+    WITHDRAWN (final) — by the raiser, only from REVIEW_PENDING / REVIEW_REJECTED.
+
+  Misc charges carry no status: they are accounts' own and in force at once.
+  A debit note with NO status predates this chain and is treated as APPROVED.
+*/
+export const DEBIT_NOTE_STATUS = {
+  REVIEW_PENDING: "REVIEW_PENDING",
+  REVIEW_REJECTED: "REVIEW_REJECTED",
+  APPROVAL_PENDING: "APPROVAL_PENDING",
+  APPROVED: "APPROVED",
+  APPROVAL_REJECTED: "APPROVAL_REJECTED",
+  WITHDRAWN: "WITHDRAWN",
+};
+export const DEBIT_NOTE_STATUS_ARRAY = Object.values(DEBIT_NOTE_STATUS);
+// Still moving — blocks a second debit note and a payment request.
+export const DEBIT_NOTE_LIVE_STATUSES = [
+  DEBIT_NOTE_STATUS.REVIEW_PENDING,
+  DEBIT_NOTE_STATUS.REVIEW_REJECTED,
+  DEBIT_NOTE_STATUS.APPROVAL_PENDING,
+];
+// Stock already released: these no longer hold any unit.
+export const DEBIT_NOTE_RELEASED_STATUSES = [
+  DEBIT_NOTE_STATUS.APPROVAL_REJECTED,
+  DEBIT_NOTE_STATUS.WITHDRAWN,
+];
+
 // How a payment actually left. An enum, not free text, because "NEFT" typed
 // six different ways cannot be reported on.
 export const PAYMENT_MODE = {
