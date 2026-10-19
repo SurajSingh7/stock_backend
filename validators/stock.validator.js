@@ -207,6 +207,12 @@ export const validateUpdateItemStatus = (body) => {
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 export const validateCreateVendor = (body) => {
+  // TDS % of basic — optional, 0 when left out.
+  if (body?.tdsRate !== undefined && body?.tdsRate !== null && body?.tdsRate !== "") {
+    const t = Number(body.tdsRate);
+    if (!Number.isFinite(t) || t < 0 || t > 100) throw new Error("tdsRate must be between 0 and 100");
+  }
+
   const { name, paymentTerms, contacts, address, bankAccounts, gst, panNumber } = body || {};
 
   if (!name || !String(name).trim()) throw new Error("name is required");
@@ -281,6 +287,12 @@ export const validateCreateVendor = (body) => {
 };
 
 export const validateUpdateVendor = (body) => {
+  // TDS % of basic — optional, 0 when left out.
+  if (body?.tdsRate !== undefined && body?.tdsRate !== null && body?.tdsRate !== "") {
+    const t = Number(body.tdsRate);
+    if (!Number.isFinite(t) || t < 0 || t > 100) throw new Error("tdsRate must be between 0 and 100");
+  }
+
   if (Object.prototype.hasOwnProperty.call(body || {}, "vendorCode")) {
     throw new Error("vendorCode cannot be updated once set");
   }
@@ -788,18 +800,6 @@ export const validateUpdateGstRate = (body) => {
   if (rate !== undefined) assertGstRateValue(rate);
   if (order !== undefined && order !== null && order !== "" && !Number.isFinite(Number(order)))
     throw new Error("order must be a number");
-};
-
-export const validateCreateTdsRate = (body) => {
-  const { entityAlias, rate } = body || {};
-  if (!entityAlias || !String(entityAlias).trim()) throw new Error("entity is required");
-  assertGstRateValue(rate);
-};
-
-export const validateUpdateTdsRate = (body) => {
-  const { entityAlias, rate } = body || {};
-  if (entityAlias !== undefined && !String(entityAlias).trim()) throw new Error("entity is required");
-  if (rate !== undefined) assertGstRateValue(rate);
 };
 
 // ─── Inventory Transfer Request Validators ───────────────────────────────────

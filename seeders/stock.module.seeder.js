@@ -42,6 +42,7 @@ const MODULE_DEFINITIONS = [
   // before this module did (layouts/navbar/NavCategories.js, moduleKey
   // "invoice-list"), which is why nobody could see it.
   { key: "invoice-list", name: "Invoice List", actions: withMenu(["READ", "SCHEDULE_PAYMENT", "RAISE_DEBIT_NOTE"]) },
+  { key: "faulty-items", name: "Faulty Items", actions: withMenu(["READ"]) },
   // The account team's screen. Three separate write actions on purpose: the
   // person who clears a debit note need not be the one who asks for payment
   // approval, nor the one who records the money leaving.
@@ -73,7 +74,6 @@ const MODULE_DEFINITIONS = [
   { key: "account-summary", name: "Vendor Outstanding Overview", actions: withMenu(["READ"]) },
   { key: "branches", name: "Branches", actions: withMenu(STANDARD_ACTIONS) },
   { key: "gst-rates", name: "GST Rates", actions: withMenu(STANDARD_ACTIONS) },
-  { key: "tds-rates", name: "TDS Rates", actions: withMenu(STANDARD_ACTIONS) },
   { key: "transfer-requests", name: "Transfer Requests", actions: withMenu(["CREATE", "READ", "PROCESS", "REJECT"]) },
   { key: "notifications", name: "Notifications", actions: withMenu(STANDARD_ACTIONS) },
 ];

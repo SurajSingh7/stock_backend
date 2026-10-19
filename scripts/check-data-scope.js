@@ -51,6 +51,7 @@ const MODEL_FILE = {
   "purchase-orders": "stock.purchase.order.model.js",
   invoices: "stock.invoice.model.js",
   "invoice-list": "stock.invoice.model.js", // same documents, payment-side module
+  "faulty-items": "stock.invoice.model.js",
   payments: "stock.invoice.model.js",
   "payment-approval": "stock.invoice.model.js",
   "vendor-ledger": "stock.invoice.model.js",
@@ -111,6 +112,7 @@ const SERVICE_FILE = {
   "purchase-orders": "stock.purchase.order.service.js",
   invoices: "stock.invoice.service.js",
   "invoice-list": "stock.invoice.payment.service.js",
+  "faulty-items": "stock.faulty.item.service.js",
   payments: "stock.invoice.payment.service.js",
   "payment-approval": "stock.invoice.payment.service.js",
   "vendor-ledger": "stock.vendor.ledger.service.js",
@@ -224,6 +226,7 @@ const OWN_MODEL = {
   "purchase-orders": "StockPurchaseOrderModel",
   invoices: "StockInvoiceModel",
   "invoice-list": "StockInvoiceModel",
+  "faulty-items": "StockInvoiceModel",
   payments: "StockInvoiceModel",
   "payment-approval": "StockInvoiceModel",
   "vendor-ledger": "StockInvoiceModel",
@@ -244,6 +247,7 @@ const UNSCOPED_BY_DESIGN = {
   vendors: {
     assertVendorNotDuplicate: "a duplicate name or GST must be caught across every branch",
     generateNextVendorCode: "sequence spans all branches",
+    _resolveParent: "validates the main vendor picked on the form (the picker itself is scoped); one level only, checked across branches",
   },
   "transfer-requests": { generateRequestNumber: "sequence spans all branches" },
   quotations: { generateQuotationNumber: "sequence spans all users" },
@@ -253,6 +257,7 @@ const UNSCOPED_BY_DESIGN = {
     getById: "internal lookup, not routed",
     recalculateStatus: "internal recalculation",
     getByQuotationAndVendor: "internal lookup, not routed",
+    getPendingByCategory: "a warning must see open orders in every branch",
   },
   invoices: {
     _invoicedQtyByLine: "PO cap must sum every invoice",

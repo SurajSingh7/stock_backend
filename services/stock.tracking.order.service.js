@@ -783,6 +783,134 @@ export default class StockTrackingOrderService {
   /* the receiving flow (PO_APPROVED/IN_PROGRESS/PARTIAL/FULLY_CLOSED).      */
   /* ---------------------------------------------------------------------- */
 
+/*
+    What is already on order and not yet received, per leaf category — the
+    warning shown while a quotation is made or approved, so nobody orders again
+    what is still on its way.
+
+    "Open" = every status before an end state: ENTITY_PENDING / PO_PENDING (the
+    decision to buy is made, no PO yet), PO_GENERATED / PO_APPROVED,
+    IN_PROGRESS, PARTIAL. FULLY_CLOSED, SHORT_CLOSED, REJECTED and NOT_REQUIRED
+    are done. With a PO, lines come from the PO and "received" from approved
+    (and partly approved) invoices; without one, from the quotation's approved
+    selections for that vendor, less any line marked Not Required.
+
+    Every branch on purpose: stock on its way to another branch is still worth
+    knowing about before buying more. A warning only — it never blocks.
+  */
+  static async getPendingByCategory(categoryIds = [], { excludeQuotationId = null } = {}) {
+    const wanted = new Set((categoryIds || []).map(String).filter(Boolean));
+    if (!wanted.size) return [];
+
+    const OPEN = [
+      TRACKING_STATUS.ENTITY_PENDING,
+      TRACKING_STATUS.PO_PENDING,
+      TRACKING_STATUS.PO_GENERATED,
+      TRACKING_STATUS.PO_APPROVED,
+      TRACKING_STATUS.IN_PROGRESS,
+      TRACKING_STATUS.PARTIAL,
+    ];
+    const filter = { isActive: true, status: { $in: OPEN } };
+    if (excludeQuotationId) filter.sourceQuotationId = { $ne: excludeQuotationId };
+    const orders = await StockTrackingOrderModel.find(filter)
+      .select("sourceQuotationId vendorId status poId excludedItems buyerEntity")
+      .lean();
+    if (!orders.length) return [];
+
+    const poIds = orders.map((o) => o.poId).filter(Boolean);
+    const pos = await StockPurchaseOrderModel.find({ _id: { $in: poIds }, isActive: true })
+      .select("poNumber items buyerEntity vendorName")
+      .lean();
+    const poById = new Map(pos.map((p) => [String(p._id), p]));
+
+    const quotationIds = [...new Set(orders.filter((o) => !o.poId).map((o) => String(o.sourceQuotationId)))];
+    const quotations = await StockQuotationModel.find({ _id: { $in: quotationIds } })
+      .select("quotationNumber categoryApprovals")
+      .lean();
+    const quotationById = new Map(quotations.map((q) => [String(q._id), q]));
+    const allQuotationNos = new Map(
+      (await StockQuotationModel.find({ _id: { $in: orders.map((o) => o.sourceQuotationId) } }).select("quotationNumber").lean())
+        .map((q) => [String(q._id), q.quotationNumber])
+    );
+
+    const vendorIds = [...new Set(orders.map((o) => String(o.vendorId)))];
+    const vendors = await StockVendorModel.find({ _id: { $in: vendorIds } }).select("name").lean();
+    const vendorName = new Map(vendors.map((v) => [String(v._id), v.name]));
+
+    // Received per order and quotation line, from invoices that put stock in.
+    const invoices = await StockInvoiceModel.find({
+      trackingOrderId: { $in: orders.filter((o) => o.poId).map((o) => o._id) },
+      status: { $in: [INVOICE_STATUS.APPROVED, INVOICE_STATUS.IN_PROGRESS] },
+      isActive: true,
+    })
+      .select("trackingOrderId lines.quotationItemId lines.receivedQuantity")
+      .lean();
+    const received = new Map(); // "<orderId>:<quotationItemId>" -> qty
+    invoices.forEach((inv) =>
+      (inv.lines || []).forEach((l) => {
+        const k = String(inv.trackingOrderId) + ":" + String(l.quotationItemId);
+        received.set(k, (received.get(k) || 0) + (l.receivedQuantity || 0));
+      })
+    );
+
+    const byCategory = new Map(); // categoryId -> { categoryId, categoryName, lines[] }
+    const add = (categoryId, categoryName, line) => {
+      const key = String(categoryId);
+      if (!byCategory.has(key)) byCategory.set(key, { categoryId: key, categoryName: categoryName || "", lines: [] });
+      const bucket = byCategory.get(key);
+      if (!bucket.categoryName && categoryName) bucket.categoryName = categoryName;
+      bucket.lines.push(line);
+    };
+
+    for (const o of orders) {
+      const entity = o.buyerEntity?.alias
+        ? [o.buyerEntity.alias, o.buyerEntity.state].filter(Boolean).join(" · ")
+        : "";
+      const base = {
+        trackingOrderId: o._id,
+        quotationNumber: allQuotationNos.get(String(o.sourceQuotationId)) || "",
+        vendorName: vendorName.get(String(o.vendorId)) || "",
+        entity,
+        status: o.status,
+      };
+      const po = o.poId ? poById.get(String(o.poId)) : null;
+      if (po) {
+        for (const it of po.items || []) {
+          if (!wanted.has(String(it.categoryId))) continue;
+          const got = received.get(String(o._id) + ":" + String(it.quotationItemId)) || 0;
+          const pending = (it.quantity || 0) - got;
+          if (pending <= 0) continue;
+          add(it.categoryId, it.categoryName, {
+            ...base, poNumber: po.poNumber || "", productName: it.productName || "",
+            ordered: it.quantity || 0, received: got, pending,
+          });
+        }
+        continue;
+      }
+      // No PO yet: what the approval picked for this vendor, minus Not Required.
+      const q = quotationById.get(String(o.sourceQuotationId));
+      const dropped = new Set((o.excludedItems || []).map((x) => String(x.quotationItemId)));
+      for (const ca of q?.categoryApprovals || []) {
+        if (ca.status !== CATEGORY_APPROVAL_STATUS.APPROVED) continue;
+        if (!wanted.has(String(ca.categoryId))) continue;
+        for (const sel of ca.selections || []) {
+          if (String(sel.vendorId) !== String(o.vendorId)) continue;
+          if (sel.itemId && dropped.has(String(sel.itemId))) continue;
+          if (!(sel.quantity > 0)) continue;
+          add(ca.categoryId, ca.categoryName, {
+            ...base, poNumber: "", productName: sel.productName || "",
+            ordered: sel.quantity, received: 0, pending: sel.quantity,
+          });
+        }
+      }
+    }
+
+    return [...byCategory.values()].map((c) => ({
+      ...c,
+      totalPending: c.lines.reduce((t, l) => t + l.pending, 0),
+    }));
+  }
+
   static async recalculateStatus(trackingOrderId, session) {
     const tracking = await StockTrackingOrderModel.findOne({
       _id: trackingOrderId,

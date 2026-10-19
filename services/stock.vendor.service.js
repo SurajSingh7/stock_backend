@@ -93,6 +93,33 @@ export default class StockVendorService {
     return `${PREFIX}${String(nextNum).padStart(PAD, "0")}`;
   }
 
+  /*
+    The main-vendor rule, checked on create and edit:
+      - the main vendor exists, is active, and is itself a main vendor
+        (one level only);
+      - a vendor is never its own main;
+      - a vendor that already has child firms cannot become someone's child.
+    Returns the id to store (null = this vendor is a main vendor).
+  */
+  static async _resolveParent(parentVendorId, selfId, session) {
+    if (!parentVendorId) return null;
+    if (!mongoose.Types.ObjectId.isValid(parentVendorId)) throw new Error("Main vendor is not valid");
+    if (selfId && String(parentVendorId) === String(selfId)) throw new Error("A vendor cannot be its own main vendor");
+    const parent = await StockVendorModel.findOne({ _id: parentVendorId, isActive: true })
+      .select("name parentVendorId")
+      .session(session ?? null)
+      .lean();
+    if (!parent) throw new Error("Main vendor not found");
+    if (parent.parentVendorId) {
+      throw new Error(`${parent.name} is itself under another main vendor — pick that main vendor instead`);
+    }
+    if (selfId) {
+      const hasChildren = await StockVendorModel.exists({ parentVendorId: selfId, isActive: true }).session(session ?? null);
+      if (hasChildren) throw new Error("This vendor has its own child vendors, so it cannot be put under another vendor");
+    }
+    return parent._id;
+  }
+
   static async createVendor(body, actor, session) {
     try {
       await StockVendorService.assertVendorNotDuplicate({
@@ -123,6 +150,8 @@ export default class StockVendorService {
         gst: body.gst || {},
         panNumber: body.panNumber || "",
         paymentTerms: body.paymentTerms,
+        tdsRate: Number(body.tdsRate) || 0,
+        parentVendorId: await StockVendorService._resolveParent(body.parentVendorId, null, session),
         notes: body.notes || "",
         contacts: body.contacts || [],
         address: body.address || {},
@@ -158,7 +187,7 @@ export default class StockVendorService {
 
  static async getAllVendors(query, dataAccess) {
     try {
-      const { search, showInactive, categoryId, productId } = query;
+      const { search, showInactive, categoryId, productId, group, parentId } = query;
       const { skip, limit, page } = paginate(query);
 
       const filter = {};
@@ -194,10 +223,48 @@ export default class StockVendorService {
         filter["assignedProducts.products.productId"] = new mongoose.Types.ObjectId(productId);
       }
 
+      /*
+        Vendor groups.
+          parentId=X      → the child vendors of main vendor X (row expand)
+          group=top       → main and stand-alone vendors only (children sit
+                            under their main); ignored while searching, so a
+                            child firm can still be found by its own name
+          group=groups    → only main vendors that have child vendors
+          group=mains     → every main vendor, for the "Main Vendor" picker
+      */
+      if (parentId) {
+        if (!mongoose.Types.ObjectId.isValid(parentId)) return paginateReturn([], 0, page, limit);
+        filter.parentVendorId = new mongoose.Types.ObjectId(parentId);
+      } else if (group === "mains" || (group === "top" && !search)) {
+        filter.parentVendorId = null;
+      } else if (group === "groups") {
+        const parents = await StockVendorModel.distinct("parentVendorId", { isActive: true, parentVendorId: { $ne: null } });
+        filter._id = { $in: parents };
+      }
+
       const [data, total] = await Promise.all([
         StockVendorModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
         StockVendorModel.countDocuments(filter),
       ]);
+
+      // Each row says how many child vendors it has, and a child row names its main.
+      const ids = data.map((v) => v._id);
+      const childCounts = ids.length
+        ? await StockVendorModel.aggregate([
+            { $match: { parentVendorId: { $in: ids }, isActive: true } },
+            { $group: { _id: "$parentVendorId", n: { $sum: 1 } } },
+          ])
+        : [];
+      const countBy = new Map(childCounts.map((c) => [String(c._id), c.n]));
+      const parentIds = [...new Set(data.map((v) => v.parentVendorId).filter(Boolean).map(String))];
+      const parents = parentIds.length
+        ? await StockVendorModel.find({ _id: { $in: parentIds } }).select("name").lean()
+        : [];
+      const parentName = new Map(parents.map((p) => [String(p._id), p.name]));
+      data.forEach((v) => {
+        v.childCount = countBy.get(String(v._id)) || 0;
+        v.parentVendorName = v.parentVendorId ? parentName.get(String(v.parentVendorId)) || "" : "";
+      });
 
       return paginateReturn(data, total, page, limit);
     } catch (error) {
@@ -229,6 +296,39 @@ export default class StockVendorService {
     } catch (error) {
       throw error;
     }
+  }
+
+  /*
+    The whole group a vendor belongs to: its main vendor and every child firm,
+    with how to reach each — so when one firm is a problem, the others are one
+    click away. Limited to what the caller may see.
+  */
+  static async getVendorGroup(id, dataAccess) {
+    const vendor = await StockVendorModel.findOne({ _id: id }).select("parentVendorId").lean();
+    if (!vendor) throw new Error("Vendor not found");
+    const mainId = vendor.parentVendorId || vendor._id;
+    const filter = applyDataScope(
+      { isActive: true, $or: [{ _id: mainId }, { parentVendorId: mainId }] },
+      dataAccess,
+      SCOPE_MODULE_KEY
+    );
+    const rows = await StockVendorModel.find(filter)
+      .select("name vendorCode parentVendorId contacts gst.gstNumber paymentTerms tdsRate")
+      .lean();
+    const shape = (v) => {
+      const c = (v.contacts || []).find((x) => x.label === "PRIMARY") || (v.contacts || [])[0] || {};
+      return {
+        _id: v._id, name: v.name, vendorCode: v.vendorCode || "", gstNumber: v.gst?.gstNumber || "",
+        contactName: c.name || "", phone: c.phone || "", email: c.email || "",
+        paymentTerms: v.paymentTerms || "", tdsRate: v.tdsRate || 0,
+        isCurrent: String(v._id) === String(id),
+      };
+    };
+    const main = rows.find((v) => String(v._id) === String(mainId)) || null;
+    return {
+      main: main ? shape(main) : null,
+      children: rows.filter((v) => String(v._id) !== String(mainId)).map(shape).sort((a, b) => a.name.localeCompare(b.name)),
+    };
   }
 
   static async updateVendor(id, body, actor, session, dataAccess) {
@@ -267,12 +367,17 @@ export default class StockVendorService {
         "gst",
         "panNumber",
         "paymentTerms",
+        "tdsRate",
+        "parentVendorId",
         "notes",
         "contacts",
         "address",
         "assignedProducts",
         "bankAccounts",
       ];
+      if (Object.prototype.hasOwnProperty.call(body, "parentVendorId")) {
+        body = { ...body, parentVendorId: await StockVendorService._resolveParent(body.parentVendorId, vendor._id, session) };
+      }
       updatableFields.forEach((field) => {
         if (Object.prototype.hasOwnProperty.call(body, field)) {
           vendor[field] = body[field];
@@ -314,6 +419,13 @@ export default class StockVendorService {
       // if (referenced) {
       //   throw new Error("Cannot delete — this vendor is referenced by active inventory items");
       // }
+
+      // A main vendor with live child firms would leave them pointing at
+      // nothing — move or remove the children first.
+      const children = await StockVendorModel.countDocuments({ parentVendorId: vendor._id, isActive: true }).session(session);
+      if (children) {
+        throw new Error(`This is the main vendor of ${children} other vendor${children > 1 ? "s" : ""} — move them under another main vendor first`);
+      }
 
       vendor.isActive = false;
       vendor.deletedAt = new Date();

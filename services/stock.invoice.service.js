@@ -11,7 +11,7 @@ import StockAuditLogService from "./stock.audit.log.service.js";
 import StockBranchService from "./stock.branch.service.js";
 import StockCategoryModel from "../models/stock.category.model.js";
 import StockCategoryService from "./stock.category.service.js";
-import StockTdsRateService from "./stock.tds.rate.service.js";
+import StockVendorModel from "../models/stock.vendor.model.js";
 
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 
@@ -379,17 +379,23 @@ export default class StockInvoiceService {
   }
 
   /*
-    Snapshot the buyer entity's TDS rate onto the invoice — once, the first
-    time it enters the ledger. Never re-read: a later change in Master > TDS
-    Rates must not move an invoice already approved. No rate set → 0%.
+    Snapshot the VENDOR's TDS % onto the invoice — once, the first time it
+    enters the ledger. Never re-read: changing the vendor's rate later must not
+    move an invoice already approved. No rate on the vendor → 0%.
   */
   static async _applyTds(invoice, session) {
     if (invoice.tds?.appliedAt) return;
-    const row = await StockTdsRateService.getActiveRateFor(invoice.entityAlias, session);
+    let vendorId = invoice.vendorId;
+    if (!vendorId && invoice.poId) {
+      const po = await StockPurchaseOrderModel.findOne({ _id: invoice.poId }).select("vendorId").session(session ?? null).lean();
+      vendorId = po?.vendorId || null;
+    }
+    const vendor = vendorId
+      ? await StockVendorModel.findOne({ _id: vendorId }).select("tdsRate").session(session ?? null).lean()
+      : null;
     invoice.tds = {
-      rate: row?.rate || 0,
-      entityAlias: invoice.entityAlias || "",
-      note: row?.note || "",
+      rate: vendor?.tdsRate || 0,
+      note: vendor?.tdsRate ? "From the vendor's TDS %" : "",
       appliedAt: new Date(),
     };
   }

@@ -126,6 +126,20 @@ const stockVendorSchema = new Schema(
     panNumber: { type: String, trim: true, uppercase: true, default: "" },
 
     paymentTerms: { type: String, required: true, trim: true },
+    /*
+      TDS held back from this vendor, as % of an invoice's BASIC. Copied onto
+      each invoice when it is approved (invoice.tds), so changing it here never
+      moves an invoice already approved. 0 = no TDS.
+    */
+    tdsRate: { type: Number, default: 0, min: 0, max: 100 },
+
+    /*
+      Vendor group: the MAIN vendor this firm belongs to (same owner, another
+      firm). Null = this vendor is itself a main vendor (or stands alone).
+      One level only — a child cannot have children of its own — so "who is
+      the main one" is always a single hop.
+    */
+    parentVendorId: { type: Schema.Types.ObjectId, ref: "vendors", default: null },
     notes: { type: String, trim: true, default: "" },
 
     // Which branch this vendor BELONGS to — Chandigarh's vendors are not
@@ -166,6 +180,7 @@ stockVendorSchema.index({ "gst.gstNumber": 1 }, { sparse: true });
 // cannot express that — it would also block a soft-deleted vendor's PAN from
 // ever being used again. The service holds the rule; this just makes it fast.
 stockVendorSchema.index({ panNumber: 1 }, { sparse: true });
+stockVendorSchema.index({ parentVendorId: 1, isActive: 1 });
 stockVendorSchema.index({ isActive: 1 });
 stockVendorSchema.index({ branchId: 1 });
 

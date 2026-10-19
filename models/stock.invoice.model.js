@@ -205,8 +205,7 @@ const invoiceSchema = new Schema(
 
     /*
       TDS, snapshotted the moment the invoice first enters the ledger (approval,
-      or with partial submit its first approved entry) from Master > TDS Rates
-      for entityAlias. Only the RATE is stored; the amount is rate × basic,
+      or with partial submit its first approved entry) from the VENDOR's TDS %. Only the RATE is stored; the amount is rate × basic,
       worked out on read, so an admin correcting a price moves it too. Null on
       invoices approved before TDS existed — those carry no TDS.
     */

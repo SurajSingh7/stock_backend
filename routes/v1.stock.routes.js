@@ -12,7 +12,7 @@ import StockTrackingOrderController from "../controllers/stock.tracking.order.co
 import StockNotificationController from "../controllers/stock.notification.controller.js";
 import StockBranchController from "../controllers/stock.branch.controller.js";
 import StockGstRateController from "../controllers/stock.gst.rate.controller.js";
-import StockTdsRateController from "../controllers/stock.tds.rate.controller.js";
+import StockFaultyItemController from "../controllers/stock.faulty.item.controller.js";
 import StockInvoiceController from "../controllers/stock.invoice.controller.js";
 import { uploadInvoiceFile, uploadInvoiceForReading } from "../helpers/stock.invoice.upload.helper.js";
 import StockTransferRequestController from "../controllers/stock.transfer.request.controller.js";
@@ -102,6 +102,7 @@ router.patch("/product-definitions/:id/restore", authenticate, requirePermission
 // ─── Vendor ──────────────────────────────────────────────────────────
 router.post("/vendors", authenticate, requirePermission("vendors", "CREATE"), StockVendorController.createVendor);
 router.get("/vendors", authenticate, requirePermission("vendors", "READ"), StockVendorController.getAllVendors);
+router.get("/vendors/:id/group", authenticate, requirePermission("vendors", "READ"), StockVendorController.getVendorGroup);
 router.get("/vendors/:id", authenticate, requirePermission("vendors", "READ"), StockVendorController.getVendorById);
 router.put("/vendors/:id", authenticate, requirePermission("vendors", "UPDATE"), StockVendorController.updateVendor);
 router.delete("/vendors/:id", authenticate, requirePermission("vendors", "DELETE"), StockVendorController.softDeleteVendor);
@@ -134,6 +135,8 @@ router.patch("/inventory-items/:id/restore", authenticate, requirePermission("in
 router.post("/quotations", authenticate, requirePermission("quotations", "CREATE"), StockQuotationController.createQuotation);
 router.get("/quotations", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getAllQuotations);
 router.get("/quotations/status-summary", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getStatusSummary);
+// Warning on make/approve: this category already has orders still to arrive.
+router.get("/quotations/pending-orders", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getPendingOrders);
 router.get("/quotations/vendors-for-category/:catId", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getVendorsForCategory);
 router.get("/quotations/:id", authenticate, requirePermission("quotations", "READ"), StockQuotationController.getQuotationById);
 router.patch("/quotations/:id/review", authenticate, requirePermission("quotations", "REVIEW"), StockQuotationController.reviewQuotation);
@@ -214,6 +217,11 @@ router.patch("/invoices/:id/reject", authenticate, requirePermission("invoices",
 // everyone. Each write carries its own action because each is a different
 // decision: moving a due date is not the same as claiming money back.
 router.get("/invoice-list", authenticate, requirePermission("invoice-list", "READ"), StockInvoicePaymentController.getList);
+
+// ─── Faulty Items · every unit a debit note claimed (read-only) ──────────────
+router.get("/faulty-items", authenticate, requirePermission("faulty-items", "READ"), StockFaultyItemController.getList);
+router.get("/faulty-items/by-vendor", authenticate, requirePermission("faulty-items", "READ"), StockFaultyItemController.getVendorSummary);
+router.get("/faulty-items/:debitNoteId/lines/:lineIndex/units", authenticate, requirePermission("faulty-items", "READ"), StockFaultyItemController.getUnits);
 // Read-only on misc charges (accounts' own). Debit notes are raised HERE and
 // then reviewed on Payments and decided on Payment Approval.
 router.get("/invoice-list/:id/adjustments", authenticate, requirePermission("invoice-list", "READ"), StockInvoicePaymentController.getAdjustments);
@@ -346,14 +354,6 @@ router.get("/gst-rates/:id", authenticate, requirePermission("gst-rates", "READ"
 router.put("/gst-rates/:id", authenticate, requirePermission("gst-rates", "UPDATE"), StockGstRateController.updateGstRate);
 router.delete("/gst-rates/:id", authenticate, requirePermission("gst-rates", "DELETE"), StockGstRateController.softDeleteGstRate);
 router.patch("/gst-rates/:id/restore", authenticate, requirePermission("gst-rates", "RESTORE"), StockGstRateController.restoreGstRate);
-
-// ─── TDS Rates (one per buyer entity) ───────────────────────────────────────
-router.post("/tds-rates", authenticate, requirePermission("tds-rates", "CREATE"), StockTdsRateController.createTdsRate);
-router.get("/tds-rates", authenticate, requirePermission("tds-rates", "READ"), StockTdsRateController.getAllTdsRates);
-router.get("/tds-rates/:id", authenticate, requirePermission("tds-rates", "READ"), StockTdsRateController.getTdsRateById);
-router.put("/tds-rates/:id", authenticate, requirePermission("tds-rates", "UPDATE"), StockTdsRateController.updateTdsRate);
-router.delete("/tds-rates/:id", authenticate, requirePermission("tds-rates", "DELETE"), StockTdsRateController.softDeleteTdsRate);
-router.patch("/tds-rates/:id/restore", authenticate, requirePermission("tds-rates", "RESTORE"), StockTdsRateController.restoreTdsRate);
 
 // ─── Inventory Transfer Requests ──────────────────────────────────────────────
 router.post("/transfer-requests", authenticate, requirePermission("transfer-requests", "CREATE"), StockTransferRequestController.createTransferRequest);

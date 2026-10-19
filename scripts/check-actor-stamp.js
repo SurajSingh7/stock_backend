@@ -21,13 +21,13 @@ const MODEL_FILE = {
   notifications: "stock.notification.model.js",
   branches: "stock.branch.model.js",
   "gst-rates": "stock.gst.rate.model.js",
-  "tds-rates": "stock.tds.rate.model.js",
   "inventory-items": "stock.inventory.item.model.js",
   "transfer-requests": "stock.transfer.request.model.js",
   quotations: "stock.quotation.model.js",
   "tracking-orders": "stock.tracking.order.model.js",
   "purchase-orders": "stock.purchase.order.model.js",
   invoices: "stock.invoice.model.js",
+  "faulty-items": "stock.invoice.model.js",
 };
 
 const ACTOR_FIELDS = ["userId", "employeeCode", "name", "email", "phone", "roleName", "branchId"];

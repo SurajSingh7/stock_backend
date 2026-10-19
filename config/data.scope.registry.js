@@ -36,8 +36,6 @@ export const DATA_SCOPE_REGISTRY = {
   // The GST slab ladder — the same rows for the whole company. No branch,
   // entity or ownership dimension exists to scope them on.
   "gst-rates": {},
-  // One TDS rate per buyer company — company-wide, nothing to scope on.
-  "tds-rates": {},
 
   // ── Branch-scoped ────────────────────────────────────────────────────────
   // A branch record IS a branch, so it scopes on its own _id. The unscoped
@@ -67,6 +65,10 @@ export const DATA_SCOPE_REGISTRY = {
   // while their scope on receiving stays narrow, or the other way round.
   // Same dimensions, so the same knobs are available.
   "invoice-list": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+  // Faulty Items reads the same invoices (and their debit notes), so it is
+  // scoped exactly like the Invoice List — but as its own module, so it can be
+  // given to someone who does not get the Invoice List.
+  "faulty-items": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
   // The same invoices again, once per team that looks at them. Separate keys
   // are the point: accounts normally hold every branch here while the stock
   // team holds one, and the approval team sits somewhere between. Same

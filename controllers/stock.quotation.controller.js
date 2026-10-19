@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 
 import StockQuotationService from "../services/stock.quotation.service.js";
+import StockTrackingOrderService from "../services/stock.tracking.order.service.js";
 import {
   successResponseHandler,
   errorResponseHandler,
@@ -67,6 +68,20 @@ export default class StockQuotationController {
       const quotation = await StockQuotationService.getQuotationById(req.params.id, req.dataAccess);
       successResponseHandler(res, quotation, "Quotation fetched");
     } catch (error) {
+      errorResponseHandler(res, error);
+    }
+  }
+
+  // ?categoryIds=a,b&excludeQuotationId=… → open orders still to arrive, per category.
+  static async getPendingOrders(req, res) {
+    try {
+      const ids = String(req.query.categoryIds || "").split(",").map((s) => s.trim()).filter(Boolean);
+      const data = await StockTrackingOrderService.getPendingByCategory(ids, {
+        excludeQuotationId: req.query.excludeQuotationId || null,
+      });
+      successResponseHandler(res, data, "Pending orders fetched successfully");
+    } catch (error) {
+      log.error("Error fetching pending orders", error);
       errorResponseHandler(res, error);
     }
   }

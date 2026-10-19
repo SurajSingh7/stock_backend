@@ -48,6 +48,16 @@ export default class StockVendorController {
     }
   }
 
+  static async getVendorGroup(req, res) {
+    try {
+      const data = await StockVendorService.getVendorGroup(req.params.id, req.dataAccess);
+      successResponseHandler(res, data, "Vendor group fetched successfully");
+    } catch (error) {
+      log.error("Error fetching vendor group", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
   static async updateVendor(req, res) {
     const session = await mongoose.startSession();
     try {
