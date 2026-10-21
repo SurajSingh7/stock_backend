@@ -4,64 +4,16 @@ import { getLogger } from "../helpers/logger.helper.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import StockInventoryItemService from "../services/stock.inventory.item.service.js";
 import {
-  validateCreateInventoryItem,
-  validateBulkCreateInventoryItems,
   validateUpdateItemStatus,
 } from "../validators/stock.validator.js";
 
 const log = getLogger(import.meta.url);
 
 export default class StockInventoryItemController {
-  static async createInventoryItem(req, res) {
-    const session = await mongoose.startSession();
-    try {
-      session.startTransaction();
-      validateCreateInventoryItem(req.body);
-      const receivedBy = req.user?._id ?? req.userId ?? null;
-      const data = await StockInventoryItemService.createInventoryItem(
-        { ...req.body, receivedBy },
-        req.user,
-        session
-      );
-      await session.commitTransaction();
-      log.info("Stock inventory item created");
-      successResponseHandler(res, data, "Inventory item created successfully");
-    } catch (error) {
-      await session.abortTransaction();
-      log.error("Error creating inventory item", error);
-      errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
-    }
-  }
-
-  static async bulkCreateInventoryItems(req, res) {
-    const session = await mongoose.startSession();
-    try {
-      session.startTransaction();
-      validateBulkCreateInventoryItems(req.body);
-      const receivedBy = req.user?._id ?? req.userId ?? null;
-      const data = await StockInventoryItemService.bulkCreateInventoryItems(
-        { ...req.body, receivedBy },
-        req.user,
-        session
-      );
-      await session.commitTransaction();
-      log.info(`Stock inventory bulk created: ${data.created} items`);
-      successResponseHandler(res, data, `${data.created} inventory items created successfully`);
-    } catch (error) {
-      await session.abortTransaction();
-      log.error("Error bulk creating inventory items", error);
-      errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
-    }
-  }
-
   static async getAllInventoryItems(req, res) {
     try {
       const { skip, limit, page } = paginate(req.query);
-      const { productDefinitionId, categoryId, branchId, status, approvalStatus, search, showInactive } =
+      const { productDefinitionId, categoryId, branchId, status, approvalStatus, search, showInactive, sourceType, condition } =
         req.query;
       const { data, total } = await StockInventoryItemService.getAllInventoryItems(
         {
@@ -74,6 +26,8 @@ export default class StockInventoryItemController {
           approvalStatus,
           search,
           showInactive: showInactive === "true",
+          sourceType,
+          condition,
         },
         req.dataAccess
       );
@@ -91,7 +45,7 @@ export default class StockInventoryItemController {
   static async getInventoryCards(req, res) {
     try {
       const { skip, limit, page } = paginate(req.query);
-      const { search, categoryId, productDefinitionId, branchId } = req.query;
+      const { search, categoryId, productDefinitionId, branchId, status, sourceType, condition } = req.query;
       const { data, total } = await StockInventoryItemService.getInventoryCards(
         {
           skip,
@@ -100,6 +54,9 @@ export default class StockInventoryItemController {
           categoryId,
           productDefinitionId,
           branchId,
+          status,
+          sourceType,
+          condition,
         },
         req.dataAccess
       );
@@ -110,6 +67,16 @@ export default class StockInventoryItemController {
       );
     } catch (error) {
       log.error("Error fetching inventory cards", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
+  static async getItemTimeline(req, res) {
+    try {
+      const data = await StockInventoryItemService.getItemTimeline(req.params.id, req.dataAccess);
+      successResponseHandler(res, data, "Item timeline fetched successfully");
+    } catch (error) {
+      log.error("Error fetching item timeline", error);
       errorResponseHandler(res, error);
     }
   }
@@ -143,8 +110,8 @@ export default class StockInventoryItemController {
 
   static async getReceivingHistory(req, res) {
     try {
-      const { branchId } = req.query;
-      const data = await StockInventoryItemService.getReceivingHistory(req.params.defId, { branchId }, req.dataAccess);
+      const { branchId, status } = req.query;
+      const data = await StockInventoryItemService.getReceivingHistory(req.params.defId, { branchId, status }, req.dataAccess);
       successResponseHandler(res, data, "Receiving history fetched successfully");
     } catch (error) {
       log.error("Error fetching receiving history", error);

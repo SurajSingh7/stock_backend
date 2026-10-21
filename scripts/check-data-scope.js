@@ -46,6 +46,8 @@ const MODEL_FILE = {
   vendors: "stock.vendor.model.js",
   "inventory-items": "stock.inventory.item.model.js",
   "transfer-requests": "stock.transfer.request.model.js",
+  "opening-stock": "stock.opening.stock.model.js",
+  "item-requests": "stock.item.request.model.js",
   quotations: "stock.quotation.model.js",
   "tracking-orders": "stock.tracking.order.model.js",
   "purchase-orders": "stock.purchase.order.model.js",
@@ -107,6 +109,8 @@ const SERVICE_FILE = {
   vendors: "stock.vendor.service.js",
   "inventory-items": "stock.inventory.item.service.js",
   "transfer-requests": "stock.transfer.request.service.js",
+  "opening-stock": "stock.opening.stock.service.js",
+  "item-requests": "stock.item.request.service.js",
   quotations: "stock.quotation.service.js",
   "tracking-orders": "stock.tracking.order.service.js",
   "purchase-orders": "stock.purchase.order.service.js",
@@ -221,6 +225,8 @@ const OWN_MODEL = {
   vendors: "StockVendorModel",
   "inventory-items": "StockInventoryItemModel",
   "transfer-requests": "StockTransferRequestModel",
+  "opening-stock": "StockOpeningStockModel",
+  "item-requests": "StockItemRequestModel",
   quotations: "StockQuotationModel",
   "tracking-orders": "StockTrackingOrderModel",
   "purchase-orders": "StockPurchaseOrderModel",
@@ -258,6 +264,14 @@ const UNSCOPED_BY_DESIGN = {
     recalculateStatus: "internal recalculation",
     getByQuotationAndVendor: "internal lookup, not routed",
     getPendingByCategory: "a warning must see open orders in every branch",
+  },
+  // The requester side is scoped by CHANNEL (each caller sees only its own
+  // requests), not by branch — the NOC website is not an HRMS user and has no
+  // branch scope to apply.
+  "item-requests": {
+    resendRequest: "requester side, scoped by channel",
+    getForRequester: "requester side, scoped by channel",
+    listForRequester: "requester side, scoped by channel",
   },
   invoices: {
     _invoicedQtyByLine: "PO cap must sum every invoice",

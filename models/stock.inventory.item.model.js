@@ -1,6 +1,72 @@
 import mongoose from "mongoose";
-import { ITEM_STATUS_ARRAY, ITEM_APPROVAL_STATUS_ARRAY, ITEM_APPROVAL_STATUS } from "../constants/stock.enums.js";
+import {
+  ITEM_STATUS_ARRAY,
+  ITEM_APPROVAL_STATUS_ARRAY,
+  ITEM_APPROVAL_STATUS,
+  ITEM_SOURCE_ARRAY,
+  ITEM_CONDITION_ARRAY,
+  ITEM_CONDITION,
+} from "../constants/stock.enums.js";
 import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
+
+// Where the unit first entered the system — written once, never changed (see
+// ITEM_SOURCE). `refNumber` is a snapshot so lists never need a join to show
+// "INV-221" or "OS-2026-0004".
+const sourceSchema = new mongoose.Schema(
+  {
+    type: { type: String, enum: ITEM_SOURCE_ARRAY, default: null },
+    refId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    refNumber: { type: String, trim: true, default: "" },
+  },
+  { _id: false }
+);
+
+/*
+  This unit's own warranty. Product and vendor only hold a default number of
+  months; the unit needs a date, because "is it still under warranty" is asked
+  of a unit, years after it arrived.
+
+  endDate null = unknown (old stock nobody has paperwork for). startDate and
+  months are kept when known, so a corrected purchase date can be recomputed.
+*/
+const warrantySchema = new mongoose.Schema(
+  {
+    startDate: { type: Date, default: null },
+    months: { type: Number, default: null, min: 0 },
+    endDate: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
+// What is known about the unit from BEFORE this system — free text, because
+// the people named may have left and will not be in HRMS. Shown as a single
+// "pre-system" note at the top of the unit's timeline.
+const legacySchema = new mongoose.Schema(
+  {
+    lastUsedBy: { type: String, trim: true, default: "" },
+    remarks: { type: String, trim: true, default: "" },
+  },
+  { _id: false }
+);
+
+/*
+  Who has an ASSIGNED unit — the subscriber it was issued to, and the request
+  it went out on. A snapshot (order id, username, service type) so stock
+  screens never need the subscriber registry or the external website to say
+  "ORD-101 · amit123 · Fiber". Cleared when the unit comes back (return phase).
+*/
+const assignedToSchema = new mongoose.Schema(
+  {
+    subscriberId: { type: mongoose.Schema.Types.ObjectId, ref: "subscribers", default: null },
+    orderId: { type: String, trim: true, default: "" },
+    username: { type: String, trim: true, default: "" },
+    serviceType: { type: String, trim: true, default: "" },
+    requestId: { type: mongoose.Schema.Types.ObjectId, ref: "item_requests", default: null },
+    requestNumber: { type: String, trim: true, default: "" },
+    assignedAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
 
 const stockInventoryItemSchema = new mongoose.Schema(
   {
@@ -42,11 +108,10 @@ const stockInventoryItemSchema = new mongoose.Schema(
       enum: ITEM_STATUS_ARRAY,
       default: "AVAILABLE",
     },
-    // Independent of `status` above. Defaults APPROVED so every existing/
-    // direct-create caller (createInventoryItem/bulkCreateInventoryItems used
-    // outside the invoice flow) behaves exactly as before; the invoice-
-    // receiving flow is the only caller that explicitly passes PENDING, and
-    // only APPROVED items count toward "available quantity".
+    // Independent of `status` above. Defaults APPROVED, which is what opening
+    // stock and transfer-created batches want; the invoice-receiving flow is
+    // the only caller that explicitly passes PENDING, and only APPROVED items
+    // count toward "available quantity".
     approvalStatus: {
       type: String,
       enum: ITEM_APPROVAL_STATUS_ARRAY,
@@ -58,10 +123,34 @@ const stockInventoryItemSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    source: { type: sourceSchema, default: () => ({}) },
+    condition: {
+      type: String,
+      enum: ITEM_CONDITION_ARRAY,
+      default: ITEM_CONDITION.NEW,
+    },
+    warranty: { type: warrantySchema, default: () => ({}) },
+    // Per unit (per meter/piece for a batch). Null = not known — old stock may
+    // have no paperwork. Optional for now; may become required later.
+    purchaseCost: { type: Number, default: null, min: 0 },
+    purchaseDate: { type: Date, default: null },
+    legacy: { type: legacySchema, default: () => ({}) },
+    // Who has a RESERVED unit, as written on the opening stock line. Free text
+    // until assignment (phase 2) turns it into a real HRMS user.
+    heldByNote: { type: String, trim: true, default: "" },
+    assignedTo: { type: assignedToSchema, default: null },
     fieldValues: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    /*
+      Normalised "code:VALUE" keys of this unit's unique fields (serial, MAC…)
+      — see StockItemIdentityService. Individual-tracked units only. Absent
+      (never []) when there are none: the unique index below only covers rows
+      where the field exists, and an empty array would index as a value and
+      collide with every other empty one.
+    */
+    identifiers: { type: [String], default: undefined },
     quantity: {
       type: Number,
       default: null,
@@ -99,6 +188,15 @@ stockInventoryItemSchema.index({ invoiceId: 1 });
 stockInventoryItemSchema.index({ invoiceEntryId: 1 }, { sparse: true });
 stockInventoryItemSchema.index({ "fieldValues.imei": 1 }, { sparse: true });
 stockInventoryItemSchema.index({ "fieldValues.serial_no": 1 }, { sparse: true });
+// The serial/MAC guarantee — one live unit per value, enforced by the database.
+stockInventoryItemSchema.index(
+  { identifiers: 1 },
+  { unique: true, partialFilterExpression: { identifiers: { $exists: true } } }
+);
+stockInventoryItemSchema.index({ "source.type": 1 });
+stockInventoryItemSchema.index({ "assignedTo.subscriberId": 1 }, { sparse: true });
+stockInventoryItemSchema.index({ "assignedTo.requestId": 1 }, { sparse: true });
+stockInventoryItemSchema.index({ "source.refId": 1 });
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.
 // who created / last touched this — see the plugin for why it is a hook

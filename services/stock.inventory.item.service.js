@@ -4,7 +4,6 @@ import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
 import StockCategoryModel from "../models/stock.category.model.js";
-import StockInvoiceModel from "../models/stock.invoice.model.js";
 import StockCategoryService from "./stock.category.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import { applyDataScope, isWithinDataScope, resolveDimensionAllowList } from "../helpers/data.scope.helper.js";
@@ -16,7 +15,12 @@ import {
   ITEM_STATUS_ARRAY,
   ITEM_STATUS,
   ITEM_APPROVAL_STATUS,
+  ITEM_SOURCE_ARRAY,
+  ITEM_CONDITION_ARRAY,
 } from "../constants/stock.enums.js";
+import StockItemIdentityService from "./stock.item.identity.service.js";
+import { AppError } from "../helpers/response.helper.js";
+import StockItemMovementService from "./stock.item.movement.service.js";
 
 const ENTITY_TYPE = "inventory-items";
 
@@ -28,6 +32,40 @@ const assertDataScope = (item, dataAccess) => {
     throw new Error("Inventory item not found");
   }
 };
+
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Free-text search over the fields a person would type in: every unique field
+// (serial, MAC…) plus whatever the lists show as columns.
+const searchClause = async (search) => {
+  const fields = await StockFieldDefinitionModel.find({
+    isActive: true,
+    $or: [{ isUnique: true }, { isFilterable: true }, { showList: true }],
+  })
+    .select("code")
+    .lean();
+  const codes = new Set(fields.map((f) => f.code));
+  codes.add("imei");
+  codes.add("serial_no");
+  const rx = { $regex: escapeRegex(search), $options: "i" };
+  return [...codes].map((code) => ({ [`fieldValues.${code}`]: rx }));
+};
+
+// Filters every list shares: where the unit came from and what state it is in.
+const applyOriginFilters = (filter, { sourceType, condition }) => {
+  if (sourceType && ITEM_SOURCE_ARRAY.includes(sourceType)) filter["source.type"] = sourceType;
+  if (condition && ITEM_CONDITION_ARRAY.includes(condition)) filter.condition = condition;
+};
+
+// The statuses Item Inventory lists as tabs: what can be handed out, what is
+// on the books but still with someone (opening stock not yet assigned), and
+// what has been issued to a subscriber.
+const LISTABLE_CARD_STATUSES = [ITEM_STATUS.AVAILABLE, ITEM_STATUS.RESERVED, ITEM_STATUS.ASSIGNED];
+
+// Statuses only their own flow may set or clear — each carries data that flow
+// keeps in step (assignedTo, a debit note's draws, the opening-stock note).
+// Changing one by hand would leave that data saying something untrue.
+const FLOW_OWNED_STATUSES = [ITEM_STATUS.ASSIGNED, ITEM_STATUS.RESERVED, ITEM_STATUS.DEBITED];
 
 export default class StockInventoryItemService {
   // ─── Validate fieldValues against productDefinition ──────────────────────────
@@ -45,95 +83,20 @@ export default class StockInventoryItemService {
     }
   }
 
-  // ─── Create single item ───────────────────────────────────────────────────────
-
-  static async createInventoryItem(body, actor, session) {
-    try {
-      const { productDefinitionId, fieldValues, quantity, receivedAt, receivedBy, branchId, vendorId } = body;
-
-      const def = await StockProductDefinitionModel.findOne({
-        _id: productDefinitionId,
-        isActive: true,
-      }).lean();
-      if (!def) throw new Error("Product definition not found");
-
-      if (def.trackingMethod === TRACKING_METHODS.QUANTITY && !quantity)
-        throw new Error("quantity is required for quantity-tracked products");
-
-      await StockInventoryItemService._validateFieldValues(def, fieldValues || {});
-
-      const item = new StockInventoryItemModel({
-        productDefinitionId,
-        vendorId: vendorId ?? null,
-        branchId: branchId ?? null,
-        fieldValues: fieldValues || {},
-        quantity: def.trackingMethod === TRACKING_METHODS.QUANTITY ? quantity : null,
-        receivedAt,
-        receivedBy: receivedBy ?? null,
-      });
-
-      await item.save({ session });
-      await StockAuditLogService.recordAudit({
-        entityType: ENTITY_TYPE, entityId: item._id, action: "CREATE", actor, before: null, after: item.toObject(),
-      });
-      return item;
-    } catch (error) {
-      throw error;
-    }
-  }
-
-  // ─── Bulk create (individual mode) ───────────────────────────────────────────
-
-  static async bulkCreateInventoryItems(body, actor, session) {
-    try {
-      const { productDefinitionId, items, receivedAt, receivedBy, branchId, vendorId } = body;
-
-      const def = await StockProductDefinitionModel.findOne({
-        _id: productDefinitionId,
-        isActive: true,
-      }).lean();
-      if (!def) throw new Error("Product definition not found");
-
-      if (def.trackingMethod !== TRACKING_METHODS.INDIVIDUAL)
-        throw new Error("Bulk create is only for individual-tracked products");
-
-      const docs = [];
-      const errors = [];
-
-      for (let i = 0; i < items.length; i++) {
-        try {
-          await StockInventoryItemService._validateFieldValues(def, items[i].fieldValues || {});
-          docs.push({
-            productDefinitionId,
-            vendorId: vendorId ?? null,
-            branchId: branchId ?? null,
-            fieldValues: items[i].fieldValues || {},
-            quantity: null,
-            receivedAt,
-            receivedBy: receivedBy ?? null,
-          });
-        } catch (err) {
-          errors.push({ index: i, error: err.message });
-        }
-      }
-
-      let created = 0;
-      if (docs.length > 0) {
-        const result = await StockInventoryItemModel.insertMany(docs, { session });
-        created = result.length;
-        await Promise.all(
-          result.map((doc) =>
-            StockAuditLogService.recordAudit({
-              entityType: ENTITY_TYPE, entityId: doc._id, action: "BULK_CREATE", actor, before: null, after: doc.toObject(),
-            })
-          )
-        );
-      }
-
-      return { created, errors };
-    } catch (error) {
-      throw error;
-    }
+  // Recomputes a unit's serial/MAC keys from its current field values and
+  // checks them against every other live unit. Caller saves.
+  static async _rekey(item, session) {
+    if (item.quantity !== null && item.quantity !== undefined) return;
+    const def = await StockProductDefinitionModel.findById(item.productDefinitionId).session(session).lean();
+    const uniqueFields = await StockItemIdentityService.uniqueFieldsFor(def, session);
+    StockItemIdentityService.assertHasIdentifier(item.fieldValues, uniqueFields);
+    const keys = StockItemIdentityService.identifiersOf(item.fieldValues, uniqueFields);
+    await StockItemIdentityService.assertIdentifiersFree(keys, {
+      session,
+      excludeItemIds: [item._id],
+      labelByCode: new Map(uniqueFields.map((f) => [f.code, f.label])),
+    });
+    item.identifiers = keys.length ? keys : undefined;
   }
 
   // ─── List items ───────────────────────────────────────────────────────────────
@@ -148,6 +111,8 @@ export default class StockInventoryItemService {
     approvalStatus,
     search,
     showInactive,
+    sourceType,
+    condition,
   }, dataAccess) {
     try {
       const filter = showInactive ? {} : { isActive: true };
@@ -155,6 +120,7 @@ export default class StockInventoryItemService {
       if (branchId) filter.branchId = branchId;
       if (status) filter.status = status;
       if (approvalStatus) filter.approvalStatus = approvalStatus;
+      applyOriginFilters(filter, { sourceType, condition });
       applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
 
       if (categoryId) {
@@ -164,23 +130,7 @@ export default class StockInventoryItemService {
           : { $in: defIds };
       }
 
-      if (search) {
-        // Generalized beyond the original hardcoded imei/serial_no: any field
-        // definition marked isFilterable or showList is searchable, since
-        // that's exactly the set of columns the Item Inventory list renders.
-        const searchableFields = await StockFieldDefinitionModel.find({
-          isActive: true,
-          $or: [{ isFilterable: true }, { showList: true }],
-        })
-          .select("code")
-          .lean();
-        const codes = new Set(searchableFields.map((f) => f.code));
-        codes.add("imei");
-        codes.add("serial_no");
-        filter.$or = [...codes].map((code) => ({
-          [`fieldValues.${code}`]: { $regex: search, $options: "i" },
-        }));
-      }
+      if (search) filter.$or = await searchClause(search);
 
       const [data, total] = await Promise.all([
         StockInventoryItemModel.find(filter)
@@ -234,10 +184,18 @@ export default class StockInventoryItemService {
   /* across pages.                                                           */
   /* ---------------------------------------------------------------------- */
 
-  static async getInventoryCards({ skip, limit, search, categoryId, productDefinitionId, branchId }, dataAccess) {
-    const filter = { isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED };
+  static async getInventoryCards(
+    { skip, limit, search, categoryId, productDefinitionId, branchId, status, sourceType, condition },
+    dataAccess
+  ) {
+    const filter = {
+      isActive: true,
+      status: LISTABLE_CARD_STATUSES.includes(status) ? status : ITEM_STATUS.AVAILABLE,
+      approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
+    };
     if (branchId) filter.branchId = branchId;
     if (productDefinitionId) filter.productDefinitionId = productDefinitionId;
+    applyOriginFilters(filter, { sourceType, condition });
     applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
 
     if (categoryId) {
@@ -245,18 +203,7 @@ export default class StockInventoryItemService {
       filter.productDefinitionId = filter.productDefinitionId ? filter.productDefinitionId : { $in: defIds };
     }
 
-    if (search) {
-      const searchableFields = await StockFieldDefinitionModel.find({
-        isActive: true,
-        $or: [{ isFilterable: true }, { showList: true }],
-      })
-        .select("code")
-        .lean();
-      const codes = new Set(searchableFields.map((f) => f.code));
-      codes.add("imei");
-      codes.add("serial_no");
-      filter.$or = [...codes].map((code) => ({ [`fieldValues.${code}`]: { $regex: search, $options: "i" } }));
-    }
+    if (search) filter.$or = await searchClause(search);
 
     const items = await StockInventoryItemModel.find(filter)
       .populate({
@@ -303,6 +250,14 @@ export default class StockInventoryItemService {
           fieldValues: item.fieldValues,
           status: item.status,
           approvalStatus: item.approvalStatus,
+          source: item.source,
+          condition: item.condition,
+          warranty: item.warranty,
+          purchaseCost: item.purchaseCost,
+          purchaseDate: item.purchaseDate,
+          legacy: item.legacy,
+          heldByNote: item.heldByNote,
+          assignedTo: item.assignedTo,
           receivedAt: item.receivedAt,
           createdAt: item.createdAt,
           sortAt: item.createdAt || item.receivedAt,
@@ -458,52 +413,98 @@ export default class StockInventoryItemService {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Receiving history — one row per invoice that contributed approved stock */
-  /* for this product. Powers Feature 3's History screen.                    */
+  /* Receiving history — one row per receipt (invoice or opening stock entry) */
+  /* that still has available stock of this product here. Powers the batch  */
+  /* breakdown on a Group card.                                             */
   /* ---------------------------------------------------------------------- */
 
-  static async getReceivingHistory(productDefinitionId, { branchId } = {}, dataAccess) {
+  static async getReceivingHistory(productDefinitionId, { branchId, status } = {}, dataAccess) {
     const match = {
       productDefinitionId: new mongoose.Types.ObjectId(productDefinitionId),
       isActive: true,
-      status: ITEM_STATUS.AVAILABLE,
+      // Same two statuses Item Inventory lists — a Reserved card breaks down
+      // into its reserved batches, not the available ones.
+      status: LISTABLE_CARD_STATUSES.includes(status) ? status : ITEM_STATUS.AVAILABLE,
       approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
-      invoiceId: { $ne: null },
+      // Individual units (quantity null) count as one each; a batch emptied by
+      // a transfer is left with 0 and has nothing to show.
+      $or: [{ quantity: null }, { quantity: { $gt: 0 } }],
     };
     if (branchId) match.branchId = new mongoose.Types.ObjectId(branchId);
     // Aggregation $match does not auto-cast, so the helper is handed an
     // already-cast filter — see toObjectIds() inside it.
     applyDataScope(match, dataAccess, SCOPE_MODULE_KEY);
 
+    // Grouped by the receipt, not by batch document: a transfer splits one
+    // receipt's stock into several documents, and paid/FOC halves of one
+    // invoice line are two — all of them are still one lot from one receipt.
     const grouped = await StockInventoryItemModel.aggregate([
       { $match: match },
       {
         $group: {
-          _id: "$invoiceId",
+          _id: "$source.refId",
+          sourceType: { $first: "$source.type" },
+          refNumber: { $first: "$source.refNumber" },
+          receivedAt: { $min: "$receivedAt" },
           qty: { $sum: { $ifNull: ["$quantity", 1] } },
-          // Every doc from one invoice line shares the batch's values — paid
-          // and FOC are separate docs but one physical lot — so $first is the
-          // batch's values, not an arbitrary pick.
+          // One receipt line shares the lot's values, so $first is the lot's
+          // values rather than an arbitrary pick.
           fieldValues: { $first: "$fieldValues" },
+          condition: { $first: "$condition" },
+          warrantyEndDate: { $first: "$warranty.endDate" },
         },
       },
+      { $sort: { receivedAt: -1 } },
     ]);
 
-    const invoiceIds = grouped.map((g) => g._id);
-    const invoices = await StockInvoiceModel.find({ _id: { $in: invoiceIds } })
-      .select("invoiceNumber invoiceDate")
-      .lean();
-    const invoiceMap = new Map(invoices.map((inv) => [String(inv._id), inv]));
+    return grouped.map((g) => ({
+      refId: g._id,
+      sourceType: g.sourceType || null,
+      refNumber: g.refNumber || "",
+      receivedAt: g.receivedAt || null,
+      quantity: g.qty,
+      fieldValues: g.fieldValues || {},
+      condition: g.condition || null,
+      warrantyEndDate: g.warrantyEndDate || null,
+    }));
+  }
 
-    return grouped
-      .map((g) => ({
-        invoiceId: g._id,
-        invoiceNumber: invoiceMap.get(String(g._id))?.invoiceNumber || "",
-        invoiceDate: invoiceMap.get(String(g._id))?.invoiceDate || null,
-        quantity: g.qty,
-        fieldValues: g.fieldValues || {},
-      }))
-      .sort((a, b) => new Date(b.invoiceDate || 0) - new Date(a.invoiceDate || 0));
+  /* ---------------------------------------------------------------------- */
+  /* One unit's story: what it is, where it came from, and every movement   */
+  /* since. The pre-system note (old stock) comes back separately so the    */
+  /* screen can show it above the real history.                             */
+  /* ---------------------------------------------------------------------- */
+
+  static async getItemTimeline(id, dataAccess) {
+    const item = await StockInventoryItemModel.findOne({ _id: id })
+      .populate({ path: "productDefinitionId", select: "name trackingMethod unit" })
+      .populate({ path: "branchId", select: "name" })
+      .populate({ path: "vendorId", select: "name" })
+      .lean();
+    if (!item || !isWithinDataScope(item, dataAccess, SCOPE_MODULE_KEY)) throw new Error("Inventory item not found");
+
+    const movements = await StockItemMovementService.timelineOf(item._id);
+    return {
+      item: {
+        _id: item._id,
+        product: item.productDefinitionId,
+        branch: item.branchId,
+        vendor: item.vendorId,
+        status: item.status,
+        condition: item.condition,
+        source: item.source,
+        warranty: item.warranty,
+        purchaseCost: item.purchaseCost,
+        purchaseDate: item.purchaseDate,
+        heldByNote: item.heldByNote,
+        assignedTo: item.assignedTo,
+        fieldValues: item.fieldValues,
+        quantity: item.quantity,
+        receivedAt: item.receivedAt,
+      },
+      preSystem: item.legacy?.lastUsedBy || item.legacy?.remarks ? item.legacy : null,
+      movements,
+    };
   }
 
   // ─── Get single item ──────────────────────────────────────────────────────────
@@ -543,29 +544,31 @@ export default class StockInventoryItemService {
       if (!def) throw new Error("Product definition not found");
 
       if (def.trackingMethod === TRACKING_METHODS.INDIVIDUAL) {
-        const statuses = ["AVAILABLE", "ALLOCATED", "IN_REPAIR", "SCRAPPED", "IN_TRANSIT"];
-        const counts = await Promise.all(
-          statuses.map((s) =>
-            StockInventoryItemModel.countDocuments(
-              // Fresh object per status — applyDataScope pushes into $and,
-              // so a shared filter would accumulate clauses across the loop.
-              applyDataScope(
-                { productDefinitionId: defId, isActive: true, status: s },
-                dataAccess,
-                SCOPE_MODULE_KEY
-              )
-            )
-          )
-        );
-        const total = counts.reduce((a, b) => a + b, 0);
+        // Counted per status in one pass, over EVERY status in ITEM_STATUS —
+        // the hardcoded list this replaces silently dropped debited units from
+        // the total, and would have dropped RESERVED ones too.
+        const rows = await StockInventoryItemModel.aggregate([
+          {
+            $match: applyDataScope(
+              { productDefinitionId: def._id, isActive: true },
+              dataAccess,
+              SCOPE_MODULE_KEY
+            ),
+          },
+          { $group: { _id: "$status", n: { $sum: 1 } } },
+        ]);
+        const byStatus = Object.fromEntries(ITEM_STATUS_ARRAY.map((s) => [s, 0]));
+        rows.forEach((r) => (byStatus[r._id] = r.n));
         return {
           trackingMethod: "individual",
-          total,
-          available: counts[0],
-          allocated: counts[1],
-          inRepair: counts[2],
-          scrapped: counts[3],
-          inTransit: counts[4],
+          total: Object.values(byStatus).reduce((a, b) => a + b, 0),
+          available: byStatus.AVAILABLE,
+          assigned: byStatus.ASSIGNED,
+          inRepair: byStatus.IN_REPAIR,
+          scrapped: byStatus.SCRAPPED,
+          inTransit: byStatus.IN_TRANSIT,
+          debited: byStatus.DEBITED,
+          reserved: byStatus.RESERVED,
         };
       } else {
         // quantity mode — aggregate
@@ -592,10 +595,12 @@ export default class StockInventoryItemService {
           trackingMethod: "quantity",
           totalQuantity: Object.values(byStatus).reduce((a, b) => a + b, 0),
           availableQty: byStatus["AVAILABLE"] ?? 0,
-          allocatedQty: byStatus["ALLOCATED"] ?? 0,
+          assignedQty: byStatus["ASSIGNED"] ?? 0,
           inRepairQty: byStatus["IN_REPAIR"] ?? 0,
           scrappedQty: byStatus["SCRAPPED"] ?? 0,
           inTransitQty: byStatus["IN_TRANSIT"] ?? 0,
+          debitedQty: byStatus["DEBITED"] ?? 0,
+          reservedQty: byStatus["RESERVED"] ?? 0,
         };
       }
     } catch (error) {
@@ -617,6 +622,12 @@ export default class StockInventoryItemService {
 
       if (body.fieldValues !== undefined) item.fieldValues = body.fieldValues;
       if (body.quantity !== undefined) item.quantity = body.quantity;
+
+      // Editing a serial is editing what the unit is known by — same two rules
+      // as when it arrived (at least one, and nobody else's).
+      if (body.fieldValues !== undefined && item.approvalStatus !== ITEM_APPROVAL_STATUS.REJECTED) {
+        await StockInventoryItemService._rekey(item, session);
+      }
 
       await item.save({ session });
       await StockAuditLogService.recordAudit({
@@ -641,6 +652,10 @@ export default class StockInventoryItemService {
       }).session(session);
       if (!item) throw new Error("Inventory item not found");
       assertDataScope(item, dataAccess);
+      if (FLOW_OWNED_STATUSES.includes(status) || FLOW_OWNED_STATUSES.includes(item.status)) {
+        const change = item.status === status ? status : `${item.status} → ${status}`;
+        throw new AppError(`Invalid: ${change} can only be changed through its own flow (issue, opening stock, debit note)`, 400);
+      }
       const before = item.toObject();
 
       item.status = status;
@@ -669,6 +684,8 @@ export default class StockInventoryItemService {
       item.isActive = false;
       item.deletedAt = new Date();
       item.deletedBy = actorSnapshot(actor);
+      // A deleted unit no longer holds its serial — see restore for the way back.
+      item.identifiers = undefined;
       await item.save({ session });
       await StockAuditLogService.recordAudit({
         entityType: ENTITY_TYPE, entityId: item._id, action: "DELETE", actor, before, after: item.toObject(),
@@ -692,6 +709,11 @@ export default class StockInventoryItemService {
       item.isActive = true;
       item.deletedAt = null;
       item.deletedBy = null;
+      // The serial may have been re-entered on another unit since the delete —
+      // in that case the restore is refused and names that unit.
+      if (item.approvalStatus !== ITEM_APPROVAL_STATUS.REJECTED) {
+        await StockInventoryItemService._rekey(item, session);
+      }
       await item.save({ session });
       await StockAuditLogService.recordAudit({
         entityType: ENTITY_TYPE, entityId: item._id, action: "RESTORE", actor, before, after: item.toObject(),

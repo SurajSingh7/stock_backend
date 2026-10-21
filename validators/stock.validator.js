@@ -31,6 +31,20 @@ const validateApplicableTrackingMethods = (applicableTrackingMethods) => {
   });
 };
 
+// Only free-typed values can identify one unit — a dropdown or a colour is
+// shared by design.
+const UNIQUE_CAPABLE_INPUT_TYPES = ["text", "number"];
+
+// Optional and additive: a body without isUnique behaves exactly as before.
+// The input type it is checked against is the one being saved, or — on an
+// update that leaves inputType alone — the service re-checks the stored one.
+const validateIsUnique = (isUnique, inputType) => {
+  if (isUnique === undefined) return;
+  if (typeof isUnique !== "boolean") throw new Error("isUnique must be true or false");
+  if (isUnique && inputType !== undefined && !UNIQUE_CAPABLE_INPUT_TYPES.includes(inputType))
+    throw new Error(`Invalid: a unique field must be of type ${UNIQUE_CAPABLE_INPUT_TYPES.join(" or ")}`);
+};
+
 export const validateCreateFieldDefinition = (body) => {
   const { code, label, inputType, applicableTrackingMethods } = body;
   if (!code) throw new Error("code is required");
@@ -41,6 +55,7 @@ export const validateCreateFieldDefinition = (body) => {
   if (!INPUT_TYPES_ARRAY.includes(inputType))
     throw new Error(`inputType must be one of: ${INPUT_TYPES_ARRAY.join(", ")}`);
   validateApplicableTrackingMethods(applicableTrackingMethods);
+  validateIsUnique(body.isUnique, inputType);
 };
 
 export const validateUpdateFieldDefinition = (body) => {
@@ -50,7 +65,10 @@ export const validateUpdateFieldDefinition = (body) => {
   if (inputType !== undefined && !INPUT_TYPES_ARRAY.includes(inputType))
     throw new Error(`inputType must be one of: ${INPUT_TYPES_ARRAY.join(", ")}`);
   validateApplicableTrackingMethods(applicableTrackingMethods);
+  validateIsUnique(body.isUnique, inputType);
 };
+
+export { UNIQUE_CAPABLE_INPUT_TYPES };
 
 // ─── Category Validators ──────────────────────────────────────────────────────
 
@@ -177,20 +195,8 @@ export const validateUpdateProductDefinition = (body) => {
 };
 
 // ─── Inventory Item Validators ────────────────────────────────────────────────
-
-export const validateCreateInventoryItem = (body) => {
-  const { productDefinitionId, receivedAt } = body;
-  if (!productDefinitionId) throw new Error("productDefinitionId is required");
-  if (!receivedAt) throw new Error("receivedAt is required");
-};
-
-export const validateBulkCreateInventoryItems = (body) => {
-  const { productDefinitionId, items, receivedAt } = body;
-  if (!productDefinitionId) throw new Error("productDefinitionId is required");
-  if (!receivedAt) throw new Error("receivedAt is required");
-  if (!Array.isArray(items) || items.length === 0)
-    throw new Error("items must be a non-empty array");
-};
+// There is no direct "create item" any more: stock enters only through an
+// invoice or an Opening Stock Entry, each of which stamps the unit's origin.
 
 export const validateUpdateItemStatus = (body) => {
   const { status } = body;
@@ -1010,4 +1016,35 @@ export const validateSendMail = (body) => {
       });
     }
   }
+};
+// ─── Opening Stock Entry Validators ──────────────────────────────────────────
+// Shape only. Everything that needs the database — the product exists and
+// which fields it carries, the vendor exists, the branch is in the caller's
+// scope, serials are free — is resolved in StockOpeningStockService, which
+// also tells MALFORMED (refused) apart from INCOMPLETE (saved, flagged).
+
+export const OPENING_STOCK_MAX_LINES = 5000;
+
+const validateOpeningStockLines = (lines) => {
+  if (lines === undefined) return;
+  if (!Array.isArray(lines)) throw new Error("lines must be an array");
+  if (lines.length > OPENING_STOCK_MAX_LINES)
+    throw new Error(`Invalid: at most ${OPENING_STOCK_MAX_LINES} lines per entry — split it into more entries`);
+  lines.forEach((l, i) => {
+    if (!l || typeof l !== "object") throw new Error(`Line ${i + 1} is invalid`);
+    assertObjectId(l.productDefinitionId, `Line ${i + 1}: product`);
+    if (l.vendorId) assertObjectId(l.vendorId, `Line ${i + 1}: vendor`);
+    if (l.fieldValues !== undefined && (typeof l.fieldValues !== "object" || Array.isArray(l.fieldValues)))
+      throw new Error(`Line ${i + 1}: fieldValues must be an object`);
+  });
+};
+
+export const validateCreateOpeningStock = (body) => {
+  assertObjectId(body?.branchId, "Branch");
+  validateOpeningStockLines(body.lines);
+};
+
+export const validateUpdateOpeningStock = (body) => {
+  if (body?.branchId !== undefined) assertObjectId(body.branchId, "Branch");
+  validateOpeningStockLines(body?.lines);
 };

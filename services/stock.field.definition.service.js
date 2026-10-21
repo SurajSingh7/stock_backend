@@ -3,6 +3,8 @@ import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import { TRACKING_METHODS_ARRAY } from "../constants/stock.enums.js";
+import { UNIQUE_CAPABLE_INPUT_TYPES } from "../validators/stock.validator.js";
+import StockItemIdentityService from "./stock.item.identity.service.js";
 
 const ENTITY_TYPE = "field-definitions";
 
@@ -53,6 +55,8 @@ export default class StockFieldDefinitionService {
         isRequired: isRequired ?? false,
         isFilterable: isFilterable ?? false,
         showList: showList ?? false,
+        // A brand-new field carries no values yet, so there is nothing to re-key.
+        isUnique: body.isUnique ?? false,
         order: Number.isFinite(Number(order)) ? Number(order) : 0,
         applicableTrackingMethods:
           Array.isArray(applicableTrackingMethods) && applicableTrackingMethods.length > 0
@@ -126,11 +130,22 @@ export default class StockFieldDefinitionService {
 
       const allowed = [
         "label", "inputType", "optionsSource", "isRequired", "isFilterable", "showList", "order",
-        "applicableTrackingMethods",
+        "applicableTrackingMethods", "isUnique",
       ];
       allowed.forEach((key) => {
         if (body[key] !== undefined) field[key] = body[key];
       });
+
+      // The validator only sees the input type when the body changes it; this
+      // catches ticking isUnique on a field whose stored type cannot carry it.
+      if (field.isUnique && !UNIQUE_CAPABLE_INPUT_TYPES.includes(field.inputType))
+        throw new Error(`Invalid: a unique field must be of type ${UNIQUE_CAPABLE_INPUT_TYPES.join(" or ")}`);
+
+      // Toggling uniqueness re-keys every unit that carries this field, in the
+      // same transaction — so the flag can never claim more than the data holds.
+      if (!!before.isUnique !== !!field.isUnique) {
+        await StockItemIdentityService.rebuildForField(field.code, !!field.isUnique, session);
+      }
 
       await field.save({ session });
       await StockAuditLogService.recordAudit({

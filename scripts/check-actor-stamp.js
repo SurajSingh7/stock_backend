@@ -23,6 +23,8 @@ const MODEL_FILE = {
   "gst-rates": "stock.gst.rate.model.js",
   "inventory-items": "stock.inventory.item.model.js",
   "transfer-requests": "stock.transfer.request.model.js",
+  "opening-stock": "stock.opening.stock.model.js",
+  "item-requests": "stock.item.request.model.js",
   quotations: "stock.quotation.model.js",
   "tracking-orders": "stock.tracking.order.model.js",
   "purchase-orders": "stock.purchase.order.model.js",

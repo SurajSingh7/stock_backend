@@ -43,6 +43,13 @@ export const DATA_SCOPE_REGISTRY = {
   // is a separate service method, not a hole in this rule.
   branches: { branch: "_id" },
   "inventory-items": { branch: "branchId" },
+  // An entry belongs to the branch whose stock it counts in.
+  "opening-stock": { branch: "branchId" },
+  // A request belongs to the branch it asks stock from — only that branch's
+  // store can issue it.
+  "item-requests": { branch: "branchId" },
+  // 🧪 TEST ONLY — the simulator's pretend subscribers belong to no branch.
+  "test-simulator": {},
   "transfer-requests": { branch: ["requestingBranchId", "sourceBranchId"] },
 
   // ── Ownership-scoped ─────────────────────────────────────────────────────

@@ -27,6 +27,23 @@ export const assertWarrantyMonths = (v, label = "warrantyMonths") => {
 };
 
 /*
+ * A unit's warranty end date: start + whole calendar months, in UTC (dates
+ * arrive as "YYYY-MM-DD", i.e. UTC midnight). Clamped to the month's last day,
+ * so 31 Jan + 1 month is 28/29 Feb rather than rolling over into March.
+ * Null when either half is missing — an unknown warranty, not a zero one.
+ */
+export const addMonthsUtc = (date, months) => {
+  const d = new Date(date);
+  const target = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months, 1));
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(d.getUTCDate(), lastDay));
+  return target;
+};
+
+export const warrantyEndDate = (startDate, months) =>
+  startDate && Number.isInteger(months) && months > 0 ? addMonthsUtc(startDate, months) : null;
+
+/*
  * TEMPORARY — remove once every deployed frontend sends `warrantyMonths`.
  *
  * Until then an older client still sends `warrantyYears`; convert it in place

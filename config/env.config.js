@@ -27,3 +27,8 @@ export const internalApiKey = process.env.INTERNAL_API_KEY;
 // or null. A hardcoded fallback would silently hand every branchless user one
 // specific branch's data — and would break outright the moment that
 // branch is deleted, which is exactly what happened while it existed.
+
+// Guards /api/v1/external — the NOC / broadband website raising Item Requests
+// server-to-server. Its own key, not INTERNAL_API_KEY: that one is trusted by
+// HRMS for other things, and this caller should be revocable on its own.
+export const externalApiKey = process.env.EXTERNAL_API_KEY;

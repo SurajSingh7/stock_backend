@@ -7,6 +7,7 @@ import path from "path";
 
 import stockRoutes from "./routes/v1.stock.routes.js";
 import internalRoutes from "./routes/internal.routes.js";
+import externalRoutes from "./routes/external.routes.js";
 import { seedModules } from "./seeders/stock.module.seeder.js";
 import { multerErrorHandler } from "./helpers/stock.upload.helper.js";
 
@@ -54,6 +55,9 @@ app.use("/api/v1/stock", stockRoutes);
 
 // Service-to-service only — never hit from a browser (see verifyInternalServiceKey).
 app.use("/internal", internalRoutes);
+
+// The NOC / broadband website — server-to-server, API key (see verifyExternalApiKey).
+app.use("/api/v1/external", externalRoutes);
 
 // Multer errors (file too large / wrong type) bypass the controller's
 // try/catch entirely — must be mounted here to turn them into a clean 400

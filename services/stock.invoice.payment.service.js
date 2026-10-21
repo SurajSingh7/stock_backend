@@ -643,9 +643,9 @@ export default class StockInvoicePaymentService {
     in, that are STILL here to be written off.
 
     Only APPROVED items still AVAILABLE in the invoice's own branch qualify. A
-    unit already transferred out, allocated, scrapped or previously debited
-    cannot be marked FAULTY by this invoice — money and stock would stop
-    agreeing, which is the whole reason FAULTY exists. Blocked units are still
+    unit already transferred out, assigned, scrapped or previously debited
+    cannot be marked DEBITED by this invoice — money and stock would stop
+    agreeing, which is the whole reason DEBITED exists. Blocked units are still
     RETURNED, each with a reason, so the screen can grey them out and say why
     instead of silently omitting stock the user can see elsewhere.
 
@@ -733,13 +733,13 @@ export default class StockInvoicePaymentService {
       );
 
       // Why a unit cannot be picked, in the order the reasons matter. A unit
-      // this very note already holds is FAULTY but still selectable — it is
+      // this very note already holds is DEBITED but still selectable — it is
       // being re-decided, not claimed afresh.
       const blockReason = (it) => {
         if (mineUnits.has(String(it._id))) return null;
         if (it.approvalStatus !== ITEM_APPROVAL_STATUS.APPROVED) return "not approved yet";
         if (String(it.branchId) !== String(invoice.branchId)) return "moved to another branch";
-        if (it.status === ITEM_STATUS.FAULTY) return "already debited";
+        if (it.status === ITEM_STATUS.DEBITED) return "already debited";
         if (it.status !== ITEM_STATUS.AVAILABLE) return String(it.status).toLowerCase().replace(/_/g, " ");
         if (claimedUnits.has(String(it._id))) return "on another debit note";
         return null;
@@ -1086,12 +1086,12 @@ export default class StockInvoicePaymentService {
   /*
     The stock half of a debit note.
 
-    Individual units named on the note become FAULTY. A group line has no
+    Individual units named on the note become DEBITED. A group line has no
     per-unit identity, so the quantity comes off its batch documents instead,
     oldest first — and exactly which batch gave how much is RECORDED on the
     line, because undoing later has to put it back where it came from.
 
-    A batch reduced to nothing is kept and marked FAULTY rather than deleted:
+    A batch reduced to nothing is kept and marked DEBITED rather than deleted:
     deleting it would erase the fact that those units were ever received.
   */
   static async _applyDebitNoteToStock(adjustment, session) {
@@ -1099,7 +1099,7 @@ export default class StockInvoicePaymentService {
       if ((line.inventoryItemIds || []).length) {
         await StockInventoryItemModel.updateMany(
           { _id: { $in: line.inventoryItemIds } },
-          { $set: { status: ITEM_STATUS.FAULTY } },
+          { $set: { status: ITEM_STATUS.DEBITED } },
           { session }
         );
         continue;
@@ -1124,7 +1124,7 @@ export default class StockInvoicePaymentService {
         if (take <= 0) continue;
         batch.quantity = round2((batch.quantity || 0) - take);
         const zeroedOut = batch.quantity === 0;
-        if (zeroedOut) batch.status = ITEM_STATUS.FAULTY;
+        if (zeroedOut) batch.status = ITEM_STATUS.DEBITED;
         await batch.save({ session });
         draws.push({ inventoryItemId: batch._id, quantity: take, zeroedOut });
         remaining = round2(remaining - take);
@@ -1151,7 +1151,7 @@ export default class StockInvoicePaymentService {
     The mirror of _applyDebitNoteToStock, and the reason an edit does not need
     to work out a diff.
 
-    It refuses rather than guesses. A unit this note marked FAULTY that is now
+    It refuses rather than guesses. A unit this note marked DEBITED that is now
     SCRAPPED was thrown away by somebody: putting it back as AVAILABLE would
     invent stock that does not exist. Better to stop and say so than to leave a
     warehouse count that can never be reconciled.
@@ -1161,7 +1161,7 @@ export default class StockInvoicePaymentService {
       const unitIds = line.inventoryItemIds || [];
       if (unitIds.length) {
         const units = await StockInventoryItemModel.find({ _id: { $in: unitIds } }).session(session);
-        const moved = units.filter((u) => u.status !== ITEM_STATUS.FAULTY);
+        const moved = units.filter((u) => u.status !== ITEM_STATUS.DEBITED);
         if (moved.length) {
           throw new Error(
             line.productName + ": " + moved.length + " debited unit" +
@@ -1187,8 +1187,8 @@ export default class StockInvoicePaymentService {
         }
         batch.quantity = round2((batch.quantity || 0) + (draw.quantity || 0));
         // Only a batch THIS note emptied goes back to available; one that was
-        // already faulty for another reason stays as it is.
-        if (draw.zeroedOut && batch.status === ITEM_STATUS.FAULTY) {
+        // already debited by another note stays as it is.
+        if (draw.zeroedOut && batch.status === ITEM_STATUS.DEBITED) {
           batch.status = ITEM_STATUS.AVAILABLE;
         }
         await batch.save({ session });

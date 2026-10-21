@@ -13,10 +13,18 @@ import {
   TRANSFER_REQUEST_STATUS,
   ITEM_STATUS,
   ITEM_APPROVAL_STATUS,
+  ITEM_MOVEMENT_TYPE,
+  ITEM_MOVEMENT_REF,
 } from "../constants/stock.enums.js";
+import StockItemMovementService from "./stock.item.movement.service.js";
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const ENTITY_TYPE = "transfer-requests";
+const transferRef = (request) => ({
+  type: ITEM_MOVEMENT_REF.TRANSFER_REQUEST,
+  refId: request._id,
+  refNumber: request.requestNumber,
+});
 
 // Guard for every mutation. A transfer is in scope if EITHER of its two
 // branches is — the registry declares both fields, the helper ORs them.
@@ -237,9 +245,17 @@ export default class StockTransferRequestService {
   /* Stock movement helpers                                                  */
   /* ---------------------------------------------------------------------- */
 
-  // Quantity-tracked: consume FIFO across the source's available batches,
-  // create one new AVAILABLE batch at the destination.
-  static async _moveQuantityStock(productDefinitionId, sourceBranchId, destinationBranchId, qty, user, session) {
+  /*
+    Quantity-tracked: consume FIFO across the source's available batches, and
+    for every batch drawn from, open a matching batch at the destination.
+
+    One destination batch PER SOURCE BATCH, not one merged batch: each source
+    batch carries its own origin, vendor, cost and warranty, and 30 m of
+    cable from invoice A plus 20 m from opening stock are not one 50 m lot
+    with a single history. Merging them is what used to make transferred
+    stock vanish from the batch breakdown — it had no invoice to group under.
+  */
+  static async _moveQuantityStock(productDefinitionId, sourceBranchId, destinationBranchId, qty, request, session) {
     const batches = await StockInventoryItemModel.find({
       productDefinitionId,
       branchId: sourceBranchId,
@@ -255,6 +271,7 @@ export default class StockTransferRequestService {
     if (availableTotal < qty)
       throw new Error(`Not enough available stock at the source branch (have ${availableTotal}, need ${qty})`);
 
+    const movements = [];
     let remaining = qty;
     for (const batch of batches) {
       if (remaining <= 0) break;
@@ -262,26 +279,55 @@ export default class StockTransferRequestService {
       batch.quantity -= take;
       remaining -= take;
       await batch.save({ session });
-    }
+      const src = batch.toObject();
 
-    await StockInventoryItemModel.create(
-      [
-        {
-          productDefinitionId,
-          branchId: destinationBranchId,
-          status: ITEM_STATUS.AVAILABLE,
-          approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
-          quantity: qty,
-          receivedAt: new Date(),
-          receivedBy: user?.id || null,
-        },
-      ],
-      { session }
-    );
+      // Everything that describes the stock travels with it; only where it
+      // sits and how much changes. receivedAt is kept so FIFO still means
+      // "oldest in the company", not "most recently moved".
+      const [moved] = await StockInventoryItemModel.create(
+        [
+          {
+            productDefinitionId,
+            vendorId: src.vendorId,
+            branchId: destinationBranchId,
+            invoiceId: src.invoiceId,
+            status: ITEM_STATUS.AVAILABLE,
+            approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
+            isFoc: src.isFoc,
+            quantity: take,
+            fieldValues: src.fieldValues,
+            source: src.source,
+            condition: src.condition,
+            warranty: src.warranty,
+            purchaseCost: src.purchaseCost,
+            purchaseDate: src.purchaseDate,
+            legacy: src.legacy,
+            receivedAt: src.receivedAt,
+            receivedBy: src.receivedBy,
+          },
+        ],
+        { session }
+      );
+
+      const base = {
+        productDefinitionId,
+        type: ITEM_MOVEMENT_TYPE.TRANSFERRED,
+        quantity: take,
+        fromBranchId: sourceBranchId,
+        toBranchId: destinationBranchId,
+        status: ITEM_STATUS.AVAILABLE,
+        ref: transferRef(request),
+      };
+      movements.push(
+        { ...base, inventoryItemId: batch._id, relatedItemId: moved._id },
+        { ...base, inventoryItemId: moved._id, relatedItemId: batch._id }
+      );
+    }
+    await StockItemMovementService.record(movements, session);
   }
 
   // Individual-tracked: flip branchId on the exact units the source chose.
-  static async _moveIndividualStock(inventoryItemIds, productDefinitionId, sourceBranchId, destinationBranchId, session) {
+  static async _moveIndividualStock(inventoryItemIds, productDefinitionId, sourceBranchId, destinationBranchId, request, session) {
     const items = await StockInventoryItemModel.find({
       _id: { $in: inventoryItemIds },
       isActive: true,
@@ -303,6 +349,18 @@ export default class StockTransferRequestService {
       { _id: { $in: inventoryItemIds } },
       { $set: { branchId: destinationBranchId } },
       { session }
+    );
+    await StockItemMovementService.record(
+      items.map((item) => ({
+        inventoryItemId: item._id,
+        productDefinitionId,
+        type: ITEM_MOVEMENT_TYPE.TRANSFERRED,
+        fromBranchId: sourceBranchId,
+        toBranchId: destinationBranchId,
+        status: item.status,
+        ref: transferRef(request),
+      })),
+      session
     );
   }
 
@@ -341,6 +399,7 @@ export default class StockTransferRequestService {
             line.productDefinitionId,
             request.sourceBranchId,
             request.requestingBranchId,
+            request,
             session
           );
           line.transferredInventoryItemIds = ids;
@@ -350,7 +409,7 @@ export default class StockTransferRequestService {
             request.sourceBranchId,
             request.requestingBranchId,
             transferQty,
-            user,
+            request,
             session
           );
         }

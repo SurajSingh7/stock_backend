@@ -43,6 +43,15 @@ const stockFieldDefinitionSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // A value that names exactly one physical unit (serial no, MAC, IMEI).
+    // Two live individual-tracked units can never share it, and every such
+    // unit must carry at least one of its product's unique fields — see
+    // StockItemIdentityService. Optional with a false default, so every
+    // existing field reads as not unique until an admin ticks it.
+    isUnique: {
+      type: Boolean,
+      default: false,
+    },
     // Which tracking method(s) this field is offered for on the Product
     // Definition "Applicable Fields" picker (see
     // stock.product.definition.service.js). Defaults to both.

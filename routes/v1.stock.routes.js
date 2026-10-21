@@ -16,6 +16,10 @@ import StockFaultyItemController from "../controllers/stock.faulty.item.controll
 import StockInvoiceController from "../controllers/stock.invoice.controller.js";
 import { uploadInvoiceFile, uploadInvoiceForReading } from "../helpers/stock.invoice.upload.helper.js";
 import StockTransferRequestController from "../controllers/stock.transfer.request.controller.js";
+import StockOpeningStockController from "../controllers/stock.opening.stock.controller.js";
+import StockItemRequestController from "../controllers/stock.item.request.controller.js";
+import StockTestSimulatorController from "../controllers/stock.test.simulator.controller.js";
+import { uploadOpeningStockSheet } from "../helpers/stock.opening.stock.excel.helper.js";
 import StockAccessControlController from "../controllers/stock.access.control.controller.js";
 import StockAuditLogController from "../controllers/stock.audit.log.controller.js";
 import { authenticate, requireAdmin } from "../middlewares/stock.auth.middleware.js";
@@ -118,13 +122,14 @@ router.delete("/terms-conditions/:id", authenticate, requirePermission("terms-co
 router.patch("/terms-conditions/:id/restore", authenticate, requirePermission("terms-conditions", "RESTORE"), StockTermsConditionController.restoreTermsCondition);
 
 // ─── Inventory Items ──────────────────────────────────────────────────────────
-router.post("/inventory-items/bulk", authenticate, requirePermission("inventory-items", "BULK_CREATE"), StockInventoryItemController.bulkCreateInventoryItems);
-router.post("/inventory-items", authenticate, requirePermission("inventory-items", "CREATE"), StockInventoryItemController.createInventoryItem);
+// No POST: stock enters only through an invoice or an Opening Stock Entry, each
+// of which stamps where the unit came from (see /opening-stock below).
 router.get("/inventory-items", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getAllInventoryItems);
 router.get("/inventory-items/cards", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getInventoryCards);
 router.get("/inventory-items/product-summary", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getProductInventorySummary);
 router.get("/inventory-items/history/:defId", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getReceivingHistory);
 router.get("/inventory-items/summary/:defId", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getStockSummary);
+router.get("/inventory-items/:id/timeline", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getItemTimeline);
 router.get("/inventory-items/:id", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getInventoryItemById);
 router.put("/inventory-items/:id", authenticate, requirePermission("inventory-items", "UPDATE"), StockInventoryItemController.updateInventoryItem);
 router.patch("/inventory-items/:id/status", authenticate, requirePermission("inventory-items", "UPDATE_STATUS"), StockInventoryItemController.updateItemStatus);
@@ -329,7 +334,7 @@ router.get("/vendor-ledger/:vendorId/month", authenticate, requirePermission("ve
 router.get(
   "/scoped-branches",
   authenticate,
-  requirePermissionForQueryModule(["invoices", "inventory-items"], "READ"),
+  requirePermissionForQueryModule(["invoices", "inventory-items", "item-requests"], "READ"),
   StockBranchController.getScopedBranches
 );
 
@@ -354,6 +359,47 @@ router.get("/gst-rates/:id", authenticate, requirePermission("gst-rates", "READ"
 router.put("/gst-rates/:id", authenticate, requirePermission("gst-rates", "UPDATE"), StockGstRateController.updateGstRate);
 router.delete("/gst-rates/:id", authenticate, requirePermission("gst-rates", "DELETE"), StockGstRateController.softDeleteGstRate);
 router.patch("/gst-rates/:id/restore", authenticate, requirePermission("gst-rates", "RESTORE"), StockGstRateController.restoreGstRate);
+
+// ─── Opening Stock ─────────────────────────────────────────────────────────────
+// Stock that was on hand before this system. Static paths before /:id.
+router.get("/opening-stock/form-options", authenticate, requirePermission("opening-stock", "READ"), StockOpeningStockController.getFormOptions);
+router.get("/opening-stock/products", authenticate, requirePermission("opening-stock", "READ"), StockOpeningStockController.searchProducts);
+router.get("/opening-stock/template/:productId", authenticate, requirePermission("opening-stock", "CREATE"), StockOpeningStockController.downloadTemplate);
+router.post(
+  "/opening-stock/parse/:productId",
+  authenticate,
+  requirePermission("opening-stock", "CREATE"),
+  uploadOpeningStockSheet.single("file"),
+  StockOpeningStockController.parseUpload
+);
+router.get("/opening-stock", authenticate, requirePermission("opening-stock", "READ"), StockOpeningStockController.list);
+router.post("/opening-stock", authenticate, requirePermission("opening-stock", "CREATE"), StockOpeningStockController.create);
+router.get("/opening-stock/:id", authenticate, requirePermission("opening-stock", "READ"), StockOpeningStockController.getById);
+router.put("/opening-stock/:id", authenticate, requirePermission("opening-stock", "UPDATE"), StockOpeningStockController.update);
+router.delete("/opening-stock/:id", authenticate, requirePermission("opening-stock", "DELETE"), StockOpeningStockController.remove);
+router.patch("/opening-stock/:id/post", authenticate, requirePermission("opening-stock", "POST"), StockOpeningStockController.post);
+
+// ─── Item Requests (store side) ────────────────────────────────────────────────
+// Raised by the NOC / broadband website (routes/external.routes.js) or the test
+// simulator below; issued, short-closed or rejected here. Static paths first.
+router.get("/item-requests/status-counts", authenticate, requirePermission("item-requests", "READ"), StockItemRequestController.statusCounts);
+router.get("/item-requests/subscribers", authenticate, requirePermission("item-requests", "READ"), StockItemRequestController.subscribersWithItems);
+router.get("/item-requests/subscribers/:subscriberId", authenticate, requirePermission("item-requests", "READ"), StockItemRequestController.subscriberItems);
+router.get("/item-requests", authenticate, requirePermission("item-requests", "READ"), StockItemRequestController.list);
+router.get("/item-requests/:id", authenticate, requirePermission("item-requests", "READ"), StockItemRequestController.getById);
+router.get("/item-requests/:id/units", authenticate, requirePermission("item-requests", "ISSUE"), StockItemRequestController.availableUnits);
+router.patch("/item-requests/:id/issue", authenticate, requirePermission("item-requests", "ISSUE"), StockItemRequestController.issue);
+router.patch("/item-requests/:id/short-close", authenticate, requirePermission("item-requests", "SHORT_CLOSE"), StockItemRequestController.shortClose);
+router.patch("/item-requests/:id/reject", authenticate, requirePermission("item-requests", "REJECT"), StockItemRequestController.reject);
+
+// ─── 🧪 Request Simulator (TEST ONLY — remove when the real website is live) ───
+// Plays the requesting website; see services/stock.test.simulator.service.js.
+router.get("/test-simulator/meta", authenticate, requirePermission("test-simulator", "READ"), StockTestSimulatorController.meta);
+router.get("/test-simulator/subscribers", authenticate, requirePermission("test-simulator", "READ"), StockTestSimulatorController.listSubscribers);
+router.post("/test-simulator/subscribers", authenticate, requirePermission("test-simulator", "CREATE"), StockTestSimulatorController.createSubscriber);
+router.post("/test-simulator/subscribers/:subscriberId/requests", authenticate, requirePermission("test-simulator", "REQUEST"), StockTestSimulatorController.sendRequest);
+router.get("/test-simulator/requests/:requestId", authenticate, requirePermission("test-simulator", "READ"), StockTestSimulatorController.getRequest);
+router.put("/test-simulator/requests/:requestId", authenticate, requirePermission("test-simulator", "REQUEST"), StockTestSimulatorController.resendRequest);
 
 // ─── Inventory Transfer Requests ──────────────────────────────────────────────
 router.post("/transfer-requests", authenticate, requirePermission("transfer-requests", "CREATE"), StockTransferRequestController.createTransferRequest);

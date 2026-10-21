@@ -12,6 +12,10 @@ import StockBranchService from "./stock.branch.service.js";
 import StockCategoryModel from "../models/stock.category.model.js";
 import StockCategoryService from "./stock.category.service.js";
 import StockVendorModel from "../models/stock.vendor.model.js";
+import StockQuotationModel from "../models/stock.quotation.model.js";
+import StockItemIdentityService from "./stock.item.identity.service.js";
+import StockItemMovementService from "./stock.item.movement.service.js";
+import { warrantyEndDate } from "../helpers/stock.warranty.helper.js";
 
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 
@@ -36,6 +40,9 @@ import {
   ITEM_APPROVAL_STATUS,
   TRACKING_STATUS,
   TRACKING_METHODS,
+  ITEM_SOURCE,
+  ITEM_CONDITION,
+  ITEM_MOVEMENT_REF,
 } from "../constants/stock.enums.js";
 
 const log = getLogger(import.meta.url);
@@ -169,22 +176,73 @@ export default class StockInvoiceService {
   // generated Serial/MAC entry for individual-tracked products, one
   // aggregated doc for quantity-tracked products. Mutates each line in place
   // to record the created ids.
+  /*
+    What every unit on this invoice is stamped with besides its fields: where
+    it came from, what it cost, and its own warranty.
+
+    Warranty months come from the quotation line the PO was raised on — the
+    warranty the vendor actually quoted, vendor override included — falling
+    back to the product's default for a line that has none. The clock starts on
+    the invoice date.
+  */
+  static async _purchaseStamp(invoice, session) {
+    const tracking = await StockTrackingOrderModel.findOne({ _id: invoice.trackingOrderId })
+      .select("sourceQuotationId")
+      .session(session)
+      .lean();
+    const quotation = tracking?.sourceQuotationId
+      ? await StockQuotationModel.findOne({ _id: tracking.sourceQuotationId }).select("items._id items.warrantyMonths").session(session).lean()
+      : null;
+    const quotedMonths = new Map((quotation?.items || []).map((i) => [String(i._id), i.warrantyMonths ?? null]));
+    const unitPriceByKey = new Map(invoice.lines.map((l) => [String(l.quotationItemId), l.unitPrice || 0]));
+
+    return (line, productDef, isFoc) => {
+      const months = quotedMonths.get(String(line.quotationItemId)) ?? productDef.warrantyMonths ?? null;
+      return {
+        source: { type: ITEM_SOURCE.PURCHASE, refId: invoice._id, refNumber: invoice.invoiceNumber },
+        condition: ITEM_CONDITION.NEW,
+        purchaseDate: invoice.invoiceDate,
+        purchaseCost: isFoc ? 0 : unitPriceByKey.get(String(line.quotationItemId)) ?? 0,
+        warranty: { startDate: invoice.invoiceDate, months, endDate: warrantyEndDate(invoice.invoiceDate, months) },
+      };
+    };
+  }
+
   static async _createPendingInventoryItems(invoice, vendorId, branchId, receivedBy, session, entry = null) {
-    for (const line of entry ? entry.lines : invoice.lines) {
-      const productDef = await StockProductDefinitionModel.findOne({
-        _id: line.productDefinitionId,
-        isActive: true,
-      })
+    const stamp = await StockInvoiceService._purchaseStamp(invoice, session);
+    const lines = entry ? entry.lines : invoice.lines;
+
+    // Serial/MAC rules across the whole submission before anything is written,
+    // so a clash names the row instead of failing halfway through the invoice.
+    const keyedRows = [];
+    const resolvedLines = [];
+    for (const line of lines) {
+      const productDef = await StockProductDefinitionModel.findOne({ _id: line.productDefinitionId, isActive: true })
         .session(session)
         .lean();
       if (!productDef) throw new Error(`${line.productName}: product definition not found`);
+      const uniqueFields = await StockItemIdentityService.uniqueFieldsFor(productDef, session);
+      resolvedLines.push({ productDef, uniqueFields });
+      if (productDef.trackingMethod !== TRACKING_METHODS.INDIVIDUAL) continue;
+      (line.rows || []).forEach((row, i) => {
+        const where = `${line.productName} row ${i + 1}`;
+        StockItemIdentityService.assertHasIdentifier(row.fieldValues, uniqueFields, `${where}: `);
+        keyedRows.push({ where, keys: StockItemIdentityService.identifiersOf(row.fieldValues, uniqueFields) });
+      });
+    }
+    const labelByCode = await StockItemIdentityService.labelByCode(session);
+    StockItemIdentityService.assertNoDuplicatesWithin(keyedRows, labelByCode);
+    await StockItemIdentityService.assertIdentifiersFree(keyedRows.flatMap((r) => r.keys), { session, labelByCode });
 
+    for (const [lineIndex, line] of [...lines].entries()) {
+      const { productDef, uniqueFields } = resolvedLines[lineIndex];
       const createdIds = [];
 
       if (productDef.trackingMethod === TRACKING_METHODS.INDIVIDUAL) {
         const docs = [];
         for (const row of line.rows) {
           await StockInventoryItemService._validateFieldValues(productDef, row.fieldValues || {});
+          const keys = StockItemIdentityService.identifiersOf(row.fieldValues, uniqueFields);
           docs.push({
             productDefinitionId: line.productDefinitionId,
             vendorId,
@@ -194,9 +252,11 @@ export default class StockInvoiceService {
             approvalStatus: ITEM_APPROVAL_STATUS.PENDING,
             isFoc: !!row.isFoc,
             fieldValues: row.fieldValues || {},
+            identifiers: keys.length ? keys : undefined,
             quantity: null,
             receivedAt: invoice.invoiceDate,
             receivedBy: receivedBy ?? null,
+            ...stamp(line, productDef, !!row.isFoc),
           });
         }
         if (docs.length) {
@@ -240,6 +300,7 @@ export default class StockInvoiceService {
                 quantity: qd.quantity,
                 receivedAt: invoice.invoiceDate,
                 receivedBy: receivedBy ?? null,
+                ...stamp(line, productDef, qd.isFoc),
               },
             ],
             { session }
@@ -250,6 +311,19 @@ export default class StockInvoiceService {
 
       line.createdInventoryItemIds = createdIds;
     }
+  }
+
+  // Approval is when units become stock, so it is when their timeline starts.
+  static async _recordReceived(invoice, itemFilter, session) {
+    const items = await StockInventoryItemModel.find({ ...itemFilter, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED })
+      .select("productDefinitionId branchId quantity status")
+      .session(session)
+      .lean();
+    await StockItemMovementService.recordReceived(
+      items,
+      { type: ITEM_MOVEMENT_REF.INVOICE, refId: invoice._id, refNumber: invoice.invoiceNumber },
+      session
+    );
   }
 
   static async _writeRatings(invoice, vendorId, user, session) {
@@ -996,6 +1070,7 @@ export default class StockInvoiceService {
       { $set: { approvalStatus: ITEM_APPROVAL_STATUS.APPROVED } },
       { session }
     );
+    await StockInvoiceService._recordReceived(invoice, { invoiceEntryId: entry._id }, session);
     const tracking = await StockTrackingOrderModel.findOne({ _id: invoice.trackingOrderId }).session(session);
     for (const el of entry.lines) {
       if (!(el.receivedQuantity > 0)) continue;
@@ -1038,9 +1113,11 @@ export default class StockInvoiceService {
     entry.reviewedAt = new Date();
     await invoice.save({ session });
 
+    // A rejected receipt was never stock: its serials go back to being free,
+    // so the corrected resubmission can carry them.
     await StockInventoryItemModel.updateMany(
       { invoiceEntryId: entry._id },
-      { $set: { approvalStatus: ITEM_APPROVAL_STATUS.REJECTED } },
+      { $set: { approvalStatus: ITEM_APPROVAL_STATUS.REJECTED }, $unset: { identifiers: 1 } },
       { session }
     );
     await StockTrackingOrderService.recalculateStatus(invoice.trackingOrderId, session);
@@ -1084,6 +1161,7 @@ export default class StockInvoiceService {
       { $set: { approvalStatus: ITEM_APPROVAL_STATUS.APPROVED } },
       { session }
     );
+    await StockInvoiceService._recordReceived(invoice, { invoiceId: invoice._id }, session);
 
     for (const line of invoice.lines) {
       await StockVendorPurchaseHistoryModel.create(
@@ -1127,9 +1205,10 @@ export default class StockInvoiceService {
     invoice.reviewedAt = new Date();
     await invoice.save({ session });
 
+    // Same as rejectEntry: the serials of a rejected receipt are free again.
     await StockInventoryItemModel.updateMany(
       { invoiceId: invoice._id },
-      { $set: { approvalStatus: ITEM_APPROVAL_STATUS.REJECTED } },
+      { $set: { approvalStatus: ITEM_APPROVAL_STATUS.REJECTED }, $unset: { identifiers: 1 } },
       { session }
     );
 

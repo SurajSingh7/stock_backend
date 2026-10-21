@@ -23,30 +23,136 @@ export const TRACKING_METHODS_ARRAY = Object.values(TRACKING_METHODS);
 // Inventory-item physical status (NOT quotations).
 export const ITEM_STATUS = {
   AVAILABLE: "AVAILABLE",
-  ALLOCATED: "ALLOCATED",
+  /*
+    Issued to a subscriber against an Item Request — the unit is out of the
+    store, with the customer whose order is on `assignedTo`. Set only by
+    issuing a request (StockItemRequestService.issue), never by hand. Replaced
+    the never-used ALLOCATED (scripts/rename-allocated-to-assigned.js).
+  */
+  ASSIGNED: "ASSIGNED",
   IN_REPAIR: "IN_REPAIR",
   SCRAPPED: "SCRAPPED",
   IN_TRANSIT: "IN_TRANSIT",
   /*
-    Came in, was accepted into stock, and was later found defective — and a
-    debit note took the money for it back off the invoice.
+    Came in, was accepted into stock, was found defective — and a debit note
+    took the money for it back off the invoice. The unit goes back to the
+    vendor; it is no longer ours.
 
     Set only by accepting a DEBIT_NOTE adjustment, in the same transaction, so
     the books and the shelf never disagree. Without it a debited item would
     sit in stock as AVAILABLE: not paid for, but still transferable — which is
     exactly the mismatch nobody notices until an audit.
 
-    Deliberately NOT called RETURNED. This says what CONDITION the unit is in;
-    returning it to the vendor is a movement, and a separate flow that does not
-    exist yet. FAULTY is where that flow will start, not a dead end:
-        FAULTY -> SCRAPPED   (written off)
-        FAULTY -> RETURNED   (future: sent back, replacement expected)
-        FAULTY -> AVAILABLE  (turned out fine, or repaired)
+    Named for what happened to the MONEY, not for the unit's condition, and
+    deliberately kept apart from a unit of ours that breaks in use (which we
+    paid for and may repair or claim under warranty). One status for both
+    would let the same unit be recovered twice — once by the debit note, again
+    by a warranty claim. This used to be called FAULTY; see
+    scripts/rename-faulty-to-debited.js.
   */
-  FAULTY: "FAULTY",
+  DEBITED: "DEBITED",
+  /*
+    Entered as opening stock while it is still physically with an employee
+    (the "Abhi kiske paas hai" note). Counted as owned stock, but neither
+    available nor transferable — otherwise a laptop in someone's bag would be
+    handed out a second time. Assignment (phase 2) moves it on from here.
+  */
+  RESERVED: "RESERVED",
 };
 
 export const ITEM_STATUS_ARRAY = Object.values(ITEM_STATUS);
+
+/*
+  Where a unit FIRST entered the system — set once at creation, never changed.
+  A unit coming back from an employee or a transfer is the same unit with the
+  same origin; only its movements say where it has been since. VENDOR_REPLACEMENT
+  (a unit sent by the vendor against a faulty one) arrives with the
+  replacement phase.
+*/
+export const ITEM_SOURCE = {
+  PURCHASE: "PURCHASE",
+  OPENING_STOCK: "OPENING_STOCK",
+};
+export const ITEM_SOURCE_ARRAY = Object.values(ITEM_SOURCE);
+
+// The unit's physical condition. A unit becomes USED the first time someone
+// is given it, and never goes back to NEW.
+export const ITEM_CONDITION = {
+  NEW: "NEW",
+  USED: "USED",
+};
+export const ITEM_CONDITION_ARRAY = Object.values(ITEM_CONDITION);
+
+/*
+  One row in a unit's timeline (inventory_item_movements). Append-only.
+  Assignment/return/repair/replacement add their own types in later phases.
+*/
+export const ITEM_MOVEMENT_TYPE = {
+  RECEIVED: "RECEIVED",
+  TRANSFERRED: "TRANSFERRED",
+  // Handed to a subscriber against an Item Request.
+  ISSUED: "ISSUED",
+};
+export const ITEM_MOVEMENT_TYPE_ARRAY = Object.values(ITEM_MOVEMENT_TYPE);
+
+// The document a movement happened on.
+export const ITEM_MOVEMENT_REF = {
+  INVOICE: "INVOICE",
+  OPENING_STOCK: "OPENING_STOCK",
+  TRANSFER_REQUEST: "TRANSFER_REQUEST",
+  ITEM_REQUEST: "ITEM_REQUEST",
+};
+export const ITEM_MOVEMENT_REF_ARRAY = Object.values(ITEM_MOVEMENT_REF);
+
+/*
+  Item Request — a subscriber's order (from the NOC / broadband website)
+  asking the store for items. One leaf category per request, a quantity per
+  ticked product. RETURN and REPLACE join ISSUE in later phases.
+*/
+export const ITEM_REQUEST_TYPE = {
+  ISSUE: "ISSUE",
+};
+export const ITEM_REQUEST_TYPE_ARRAY = Object.values(ITEM_REQUEST_TYPE);
+
+/*
+    PENDING ──issue──► PARTIAL ──issue──► COMPLETED
+       │                  └──short close──► PARTIALLY_CLOSED
+       └──reject──► REJECTED ──requester edits & resends──► PENDING
+
+  The store decides everything except the resend. The requester cannot cancel;
+  needing more after a short close is a new request.
+*/
+export const ITEM_REQUEST_STATUS = {
+  PENDING: "PENDING",
+  PARTIAL: "PARTIAL",
+  COMPLETED: "COMPLETED",
+  PARTIALLY_CLOSED: "PARTIALLY_CLOSED",
+  REJECTED: "REJECTED",
+};
+export const ITEM_REQUEST_STATUS_ARRAY = Object.values(ITEM_REQUEST_STATUS);
+
+/*
+  Who raised the request. Each caller only ever sees and edits its own, and the
+  test simulator's rows can be found and removed in one query once the real
+  website is connected.
+*/
+export const ITEM_REQUEST_CHANNEL = {
+  EXTERNAL_API: "EXTERNAL_API",
+  TEST_SIMULATOR: "TEST_SIMULATOR",
+};
+export const ITEM_REQUEST_CHANNEL_ARRAY = Object.values(ITEM_REQUEST_CHANNEL);
+
+/*
+  Opening Stock Entry — stock that was already on hand before this system.
+  DRAFT -> POSTED (posting creates the inventory items). Approval is not wanted
+  yet; when it is, PENDING_APPROVAL slots in between and POST becomes SUBMIT +
+  APPROVE — nothing already POSTED needs to change.
+*/
+export const OPENING_STOCK_STATUS = {
+  DRAFT: "DRAFT",
+  POSTED: "POSTED",
+};
+export const OPENING_STOCK_STATUS_ARRAY = Object.values(OPENING_STOCK_STATUS);
 
 export const CATEGORY_TYPES = {
   GROUP: "GROUP",
@@ -377,7 +483,7 @@ export const DUE_FILTER = {
 */
 export const ADJUSTMENT_TYPE = {
   // Goods were defective. Carries the items it is claimed against, and
-  // accepting it also marks those items FAULTY.
+  // accepting it also marks those items DEBITED.
   DEBIT_NOTE: "DEBIT_NOTE",
   // Anything else with an amount and a reason — freight, handling, a charge
   // the vendor passed on. No items, no stock effect.

@@ -75,6 +75,17 @@ const MODULE_DEFINITIONS = [
   { key: "branches", name: "Branches", actions: withMenu(STANDARD_ACTIONS) },
   { key: "gst-rates", name: "GST Rates", actions: withMenu(STANDARD_ACTIONS) },
   { key: "transfer-requests", name: "Transfer Requests", actions: withMenu(["CREATE", "READ", "PROCESS", "REJECT"]) },
+  // Stock that was already on hand before this system. POST is its own action
+  // because it is the step that actually creates stock — the person typing up
+  // a 300-row draft need not be the one allowed to put it on the books. An
+  // APPROVE action joins here if approval is ever wanted.
+  { key: "opening-stock", name: "Opening Stock", actions: withMenu(["CREATE", "READ", "UPDATE", "DELETE", "POST"]) },
+  // Subscribers' requests for stock. Issuing, short-closing and rejecting are
+  // separate actions: the person handing over units need not be the one who
+  // may refuse a request outright.
+  { key: "item-requests", name: "Item Requests", actions: withMenu(["READ", "ISSUE", "SHORT_CLOSE", "REJECT"]) },
+  // 🧪 TEST ONLY — plays the requesting website. Remove when the real one is live.
+  { key: "test-simulator", name: "Request Simulator (Test)", actions: withMenu(["READ", "CREATE", "REQUEST"]) },
   { key: "notifications", name: "Notifications", actions: withMenu(STANDARD_ACTIONS) },
 ];
 

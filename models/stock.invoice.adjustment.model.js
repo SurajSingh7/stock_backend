@@ -44,7 +44,7 @@ const adjustmentLineSchema = new Schema(
           {
             inventoryItemId: { type: Schema.Types.ObjectId, required: true },
             quantity: { type: Number, default: 0, min: 0 },
-            // True when this note took the batch to zero and marked it FAULTY,
+            // True when this note took the batch to zero and marked it DEBITED,
             // so undoing knows to set it back to AVAILABLE as well as refill it.
             zeroedOut: { type: Boolean, default: false },
           },
