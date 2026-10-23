@@ -24,13 +24,20 @@ const mailResultSchema = new Schema(
     mode: { type: String, enum: MAIL_MODE_ARRAY, default: null },
     channel: { type: String, trim: true, default: "" },
     sentAt: { type: Date, default: null },
-    notificationId: { type: Schema.Types.ObjectId, ref: "notifications", default: null },
+    // Which Alerts & Escalations rule supplied the mail, and its Message Log row.
+    ruleId: { type: Schema.Types.ObjectId, ref: "alert_rules", default: null },
+    alertMessageId: { type: Schema.Types.ObjectId, ref: "alert_messages", default: null },
+    // Set when sandbox was on: the test address it actually went to.
+    sandboxedTo: { type: String, trim: true, default: "" },
     // Array like cc: a PO can address several of the vendor's contacts.
     // Mongoose casts an older single-string value into a one-element array on
     // read, so existing rows keep working.
     to: { type: [String], default: [] },
     cc: { type: [String], default: [] },
     from: { type: String, trim: true, default: "" },
+    // Optional note on a mail that was not sent by the system (Sent Manually /
+    // Mail Skipped) — e.g. "handed over at site".
+    note: { type: String, trim: true, default: "" },
   },
   { _id: false }
 );

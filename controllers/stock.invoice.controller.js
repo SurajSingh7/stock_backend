@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { successResponseHandler, errorResponseHandler } from "../helpers/response.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockInvoiceService from "../services/stock.invoice.service.js";
+import { emitAlertEvent, refreshAlerts } from "../services/stock.alert.dispatcher.service.js";
 import { toPublicInvoicePath, deleteInvoiceFile } from "../helpers/stock.invoice.upload.helper.js";
 import {
   validateCreateInvoice,
@@ -54,6 +55,7 @@ export default class StockInvoiceController {
         req.params.id, req.body, actingUser(req), session, req.dataAccess, { submit }
       );
       await session.commitTransaction();
+      if (submit) emitAlertEvent("INVOICE_SUBMITTED", req.params.id, { actor: req.user });
       successResponseHandler(res, data, submit ? "Invoice submitted for approval" : "Draft saved");
     } catch (error) {
       await session.abortTransaction();
@@ -88,6 +90,7 @@ export default class StockInvoiceController {
       session.startTransaction();
       const data = await StockInvoiceService.approveEntry(req.params.id, req.params.entryId, actingUser(req), session, req.dataAccess);
       await session.commitTransaction();
+      refreshAlerts(req.params.id);
       successResponseHandler(res, data, "Entry approved");
     } catch (error) {
       await session.abortTransaction();
@@ -107,6 +110,8 @@ export default class StockInvoiceController {
         req.params.id, req.params.entryId, req.body.reason, actingUser(req), session, req.dataAccess
       );
       await session.commitTransaction();
+      refreshAlerts(req.params.id);
+      emitAlertEvent("INVOICE_REJECTED", req.params.id, { actor: req.user });
       successResponseHandler(res, data, "Entry rejected");
     } catch (error) {
       await session.abortTransaction();
@@ -123,6 +128,7 @@ export default class StockInvoiceController {
       session.startTransaction();
       const data = await StockInvoiceService.deleteInvoice(req.params.id, actingUser(req), session, req.dataAccess);
       await session.commitTransaction();
+      refreshAlerts(req.params.id);
       successResponseHandler(res, data, "Invoice deleted");
     } catch (error) {
       await session.abortTransaction();
@@ -218,6 +224,7 @@ export default class StockInvoiceController {
       const data = await StockInvoiceService.approveInvoice(req.params.id, actingUser(req), session, req.dataAccess);
       await session.commitTransaction();
       log.info("Invoice approved");
+      refreshAlerts(req.params.id);
       successResponseHandler(res, data, "Invoice approved");
     } catch (error) {
       await session.abortTransaction();
@@ -242,6 +249,8 @@ export default class StockInvoiceController {
       );
       await session.commitTransaction();
       log.info("Invoice rejected");
+      refreshAlerts(req.params.id);
+      emitAlertEvent("INVOICE_REJECTED", req.params.id, { actor: req.user });
       successResponseHandler(res, data, "Invoice rejected");
     } catch (error) {
       await session.abortTransaction();

@@ -122,6 +122,12 @@ export default class StockTestSimulatorService {
     );
   }
 
+  // What a test subscriber holds — for the Return / Replace pickers.
+  static async holdings(subscriberId) {
+    const s = await StockTestSimulatorService._subscriber(subscriberId);
+    return StockItemRequestService.holdingsForRequester(CHANNEL, s.orderId);
+  }
+
   static getRequest(requestId) {
     return StockItemRequestService.getForRequester(requestId, CHANNEL);
   }

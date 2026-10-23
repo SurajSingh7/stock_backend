@@ -23,6 +23,7 @@ let transporter = null;
 const env = (key) => (process.env[key] || "").trim();
 
 const isConfigured = () => Boolean(env("SMTP_HOST") && env("SMTP_USER") && env("SMTP_PASS"));
+export const isMailConfigured = isConfigured;
 
 const getTransporter = () => {
   if (!isConfigured()) return null;

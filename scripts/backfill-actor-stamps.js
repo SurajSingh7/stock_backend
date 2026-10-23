@@ -37,7 +37,7 @@ const BY_ID = new Map(USERS.map((u) => [u.userId, u]));
 
 const COLLECTIONS = [
   "categories", "field_definitions", "product_definitions", "vendors",
-  "terms_conditions", "notifications", "branches", "inventory_items",
+  "terms_conditions", "branches", "inventory_items",
   "transfer_requests", "quotations", "tracking_orders", "purchase_orders",
   "invoices",
 ];

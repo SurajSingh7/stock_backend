@@ -48,6 +48,12 @@ export const DATA_SCOPE_REGISTRY = {
   // A request belongs to the branch it asks stock from — only that branch's
   // store can issue it.
   "item-requests": { branch: "branchId" },
+  // Broken units are inventory items — scoped to the branch they sit in.
+  repairs: { branch: "branchId" },
+  // Units with employees still belong to the branch whose stock they are.
+  "employee-items": { branch: "branchId" },
+  // Inventory reports read inventory items — the same branch scope.
+  "stock-reports": { branch: "branchId" },
   // 🧪 TEST ONLY — the simulator's pretend subscribers belong to no branch.
   "test-simulator": {},
   "transfer-requests": { branch: ["requestingBranchId", "sourceBranchId"] },

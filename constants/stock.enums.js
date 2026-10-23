@@ -58,9 +58,42 @@ export const ITEM_STATUS = {
     handed out a second time. Assignment (phase 2) moves it on from here.
   */
   RESERVED: "RESERVED",
+  /*
+    One of OURS that is broken — came back from a subscriber in bad condition
+    (or replaced on site). Paid for, so it is still an asset: it goes on to be
+    repaired, claimed under warranty, or scrapped. Never confuse with DEBITED,
+    where the money was already recovered from the vendor.
+  */
+  FAULTY: "FAULTY",
+  /*
+    Sent back to its vendor on a warranty claim (IN_REPAIR is our own repair).
+    Comes back repaired (AVAILABLE), is swapped for a new unit
+    (VENDOR_REPLACED), or the claim is refused (FAULTY again).
+  */
+  AT_VENDOR: "AT_VENDOR",
+  /*
+    The vendor kept this unit and sent another in its place — terminal. The
+    new unit is its own inventory item (source VENDOR_REPLACEMENT) pointing
+    back here; this one stays on record so the chain can be followed.
+  */
+  VENDOR_REPLACED: "VENDOR_REPLACED",
 };
 
 export const ITEM_STATUS_ARRAY = Object.values(ITEM_STATUS);
+
+// Where a FAULTY unit has gone to be fixed.
+export const REPAIR_KIND = {
+  INTERNAL: "INTERNAL", // our own technicians — IN_REPAIR
+  VENDOR: "VENDOR",     // warranty claim — AT_VENDOR
+};
+export const REPAIR_KIND_ARRAY = Object.values(REPAIR_KIND);
+
+// How a unit came back from a subscriber — decides AVAILABLE or FAULTY.
+export const RETURN_CONDITION = {
+  GOOD: "GOOD",
+  FAULTY: "FAULTY",
+};
+export const RETURN_CONDITION_ARRAY = Object.values(RETURN_CONDITION);
 
 /*
   Where a unit FIRST entered the system — set once at creation, never changed.
@@ -72,6 +105,8 @@ export const ITEM_STATUS_ARRAY = Object.values(ITEM_STATUS);
 export const ITEM_SOURCE = {
   PURCHASE: "PURCHASE",
   OPENING_STOCK: "OPENING_STOCK",
+  // Sent by a vendor against a warranty claim, in place of a faulty unit.
+  VENDOR_REPLACEMENT: "VENDOR_REPLACEMENT",
 };
 export const ITEM_SOURCE_ARRAY = Object.values(ITEM_SOURCE);
 
@@ -92,7 +127,30 @@ export const ITEM_MOVEMENT_TYPE = {
   TRANSFERRED: "TRANSFERRED",
   // Handed to a subscriber against an Item Request.
   ISSUED: "ISSUED",
+  // Came back from a subscriber (Return, or the old unit of a Replace).
+  RETURNED: "RETURNED",
+  // Faulty handling (Repair & Warranty).
+  REPORTED_FAULTY: "REPORTED_FAULTY",
+  SENT_FOR_REPAIR: "SENT_FOR_REPAIR",
+  REPAIRED: "REPAIRED",
+  REPAIR_FAILED: "REPAIR_FAILED",
+  CLAIM_SENT: "CLAIM_SENT",
+  CLAIM_RETURNED: "CLAIM_RETURNED",
+  CLAIM_REJECTED: "CLAIM_REJECTED",
+  VENDOR_REPLACED: "VENDOR_REPLACED",
+  MARKED_OK: "MARKED_OK",
+  SCRAPPED: "SCRAPPED",
+  // Given to one of our employees (Employee Items).
+  ASSIGNED: "ASSIGNED",
 };
+
+// Who an ASSIGNED unit is with: a customer (via an Item Request) or one of our
+// own people (Employee Items).
+export const ASSIGNEE_KIND = {
+  SUBSCRIBER: "SUBSCRIBER",
+  EMPLOYEE: "EMPLOYEE",
+};
+export const ASSIGNEE_KIND_ARRAY = Object.values(ASSIGNEE_KIND);
 export const ITEM_MOVEMENT_TYPE_ARRAY = Object.values(ITEM_MOVEMENT_TYPE);
 
 // The document a movement happened on.
@@ -101,16 +159,22 @@ export const ITEM_MOVEMENT_REF = {
   OPENING_STOCK: "OPENING_STOCK",
   TRANSFER_REQUEST: "TRANSFER_REQUEST",
   ITEM_REQUEST: "ITEM_REQUEST",
+  // A warranty claim with a vendor — refNumber is the vendor's docket / RMA no.
+  WARRANTY_CLAIM: "WARRANTY_CLAIM",
 };
 export const ITEM_MOVEMENT_REF_ARRAY = Object.values(ITEM_MOVEMENT_REF);
 
 /*
-  Item Request — a subscriber's order (from the NOC / broadband website)
-  asking the store for items. One leaf category per request, a quantity per
-  ticked product. RETURN and REPLACE join ISSUE in later phases.
+  Item Request — a subscriber's order (from the NOC / broadband website):
+    ISSUE   a leaf category and a quantity; the store picks the product(s)
+    RETURN  units / quantities the subscriber holds, coming back to the store
+    REPLACE units of ONE category coming back, and as many going out in their
+            place — both halves on one request
 */
 export const ITEM_REQUEST_TYPE = {
   ISSUE: "ISSUE",
+  RETURN: "RETURN",
+  REPLACE: "REPLACE",
 };
 export const ITEM_REQUEST_TYPE_ARRAY = Object.values(ITEM_REQUEST_TYPE);
 
@@ -340,11 +404,18 @@ export const CONSUMPTION_REF_TYPE = {
 };
 export const CONSUMPTION_REF_TYPE_ARRAY = Object.values(CONSUMPTION_REF_TYPE);
 
-// How the PO reached the vendor — actually emailed, or handled outside the
-// system. Stored on the tracking order for the "Mail Sent"/"Manual" badge, and
-// it is what marks a PO as already sent now that there is no SENT status.
-export const MAIL_MODE = { SENT: "SENT", MANUAL: "MANUAL" };
+// What happened to the PO mail. Stored on the tracking order for the badge.
+//   SENT    "Mail Sent"     — emailed by the system
+//   MANUAL  "Sent Manually" — the vendor got it outside the system (by hand,
+//                             own mail, WhatsApp); the stored value predates the
+//                             label and is kept so old records read the same
+//   SKIPPED "Mail Skipped"  — not sent at all; the order moves on regardless and
+//                             the mail can still be sent later
+// Any of the three means the send step is done and the PO is locked against
+// delete/reset; only SENT and MANUAL mean the vendor actually holds the PO.
+export const MAIL_MODE = { SENT: "SENT", MANUAL: "MANUAL", SKIPPED: "SKIPPED" };
 export const MAIL_MODE_ARRAY = Object.values(MAIL_MODE);
+export const MAIL_REACHED_VENDOR = [MAIL_MODE.SENT, MAIL_MODE.MANUAL];
 
 // ─── Data Access Control ────────────────────────────────────────────────────
 // WHICH RECORDS a user may see and act on. Kept entirely separate from the
@@ -562,10 +633,98 @@ export const VIEW_MENU_ACTION = "VIEW_MENU";
 export const CONTACT_RECIPIENT_TYPE = { TO: "TO", CC: "CC", NONE: "NONE" };
 export const CONTACT_RECIPIENT_TYPE_ARRAY = Object.values(CONTACT_RECIPIENT_TYPE);
 
-export const NOTIFICATION_CHANNEL = {
+// ─── Alerts & Escalations ───────────────────────────────────────────────────
+/*
+  One engine, many channels. A rule says WHAT to send on an event; the channel
+  decides HOW it travels. The provider behind a channel (chatflow today, Meta
+  or a BSP tomorrow) is chosen in .env — see helpers/alert.providers/ — so no
+  rule, template or log row ever names a provider.
+*/
+export const ALERT_CHANNEL = {
   EMAIL: "EMAIL",
   WHATSAPP: "WHATSAPP",
-  SMS: "SMS",
-  SLACK: "SLACK",
+  // Reserved: the website bell (phase 5). Present so rules and templates can
+  // already be shaped for it; sending refuses until its sender exists.
+  IN_APP: "IN_APP",
 };
-export const NOTIFICATION_CHANNEL_ARRAY = Object.values(NOTIFICATION_CHANNEL);
+export const ALERT_CHANNEL_ARRAY = Object.values(ALERT_CHANNEL);
+
+// AUTOMATIC fires on its event by itself. MANUAL never fires: it only fills a
+// dialog a person sends from (PO → vendor), and the person decides.
+export const ALERT_RULE_KIND = { AUTOMATIC: "AUTOMATIC", MANUAL: "MANUAL" };
+export const ALERT_RULE_KIND_ARRAY = Object.values(ALERT_RULE_KIND);
+
+// A step of a rule's chain. All three send the same way; the type only says
+// to a reader whether the team was reminded or the matter went upward.
+export const ALERT_STEP_TYPE = { INITIAL: "INITIAL", REMINDER: "REMINDER", ESCALATION: "ESCALATION" };
+export const ALERT_STEP_TYPE_ARRAY = Object.values(ALERT_STEP_TYPE);
+
+/*
+  Who a send goes to.
+    CONTACT  one person from the Contacts list
+    GROUP    a Contacts group: a list of people, or one WhatsApp group
+    CREATOR  whoever created the record (its createdBy snapshot)
+    VENDOR   the record's vendor — its contacts marked To (and CC)
+    ADDRESS  a raw email / phone typed into the rule
+*/
+export const ALERT_RECIPIENT_TYPE = {
+  CONTACT: "CONTACT",
+  GROUP: "GROUP",
+  CREATOR: "CREATOR",
+  VENDOR: "VENDOR",
+  ADDRESS: "ADDRESS",
+};
+export const ALERT_RECIPIENT_TYPE_ARRAY = Object.values(ALERT_RECIPIENT_TYPE);
+
+export const ALERT_GROUP_TYPE = { LIST: "LIST", WHATSAPP_GROUP: "WHATSAPP_GROUP" };
+export const ALERT_GROUP_TYPE_ARRAY = Object.values(ALERT_GROUP_TYPE);
+
+export const ALERT_CONTACT_TYPE = { INTERNAL: "INTERNAL", EXTERNAL: "EXTERNAL" };
+export const ALERT_CONTACT_TYPE_ARRAY = Object.values(ALERT_CONTACT_TYPE);
+
+/*
+  One message's life (Message Log).
+    QUEUED → SENDING → SENT → DELIVERED → READ        (the last two: WhatsApp)
+                     ↘ retry … → FAILED → (Resend) → QUEUED
+    SKIPPED   never left: channel off, no address, manual skip
+    CANCELLED stopped while still waiting
+*/
+export const ALERT_MESSAGE_STATUS = {
+  QUEUED: "QUEUED",
+  SENDING: "SENDING",
+  SENT: "SENT",
+  DELIVERED: "DELIVERED",
+  READ: "READ",
+  FAILED: "FAILED",
+  SKIPPED: "SKIPPED",
+  CANCELLED: "CANCELLED",
+};
+export const ALERT_MESSAGE_STATUS_ARRAY = Object.values(ALERT_MESSAGE_STATUS);
+
+// What put a message in the log.
+export const ALERT_TRIGGER = {
+  EVENT: "EVENT",           // a rule's first step
+  ESCALATION: "ESCALATION", // a later step of the chain
+  MANUAL: "MANUAL",         // a person sent it from a dialog
+  RESEND: "RESEND",
+  TEST: "TEST",
+  DIGEST: "DIGEST",
+};
+export const ALERT_TRIGGER_ARRAY = Object.values(ALERT_TRIGGER);
+
+/*
+  A record's escalation chain.
+    ACTIVE   waiting for its next step
+    RESOLVED the work got done — no further step goes out
+    FINISHED the last step went out
+    STOPPED  stopped by hand from the Escalations tab
+    CANCELLED the record went away (deleted / reset) or its rule was removed
+*/
+export const ALERT_ESCALATION_STATUS = {
+  ACTIVE: "ACTIVE",
+  RESOLVED: "RESOLVED",
+  FINISHED: "FINISHED",
+  STOPPED: "STOPPED",
+  CANCELLED: "CANCELLED",
+};
+export const ALERT_ESCALATION_STATUS_ARRAY = Object.values(ALERT_ESCALATION_STATUS);

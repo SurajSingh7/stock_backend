@@ -1,5 +1,9 @@
 import StockFieldDefinitionModel from "../models/stock.field.definition.model.js";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
+// Registered for the populates below — this service must not depend on some
+// other import having loaded them first.
+import "../models/stock.branch.model.js";
+import "../models/stock.product.definition.model.js";
 import { AppError } from "../helpers/response.helper.js";
 import { TRACKING_METHODS, ITEM_APPROVAL_STATUS } from "../constants/stock.enums.js";
 

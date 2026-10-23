@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 import StockQuotationService from "../services/stock.quotation.service.js";
 import StockTrackingOrderService from "../services/stock.tracking.order.service.js";
+import { emitAlertEvent, refreshAlerts } from "../services/stock.alert.dispatcher.service.js";
 import {
   successResponseHandler,
   errorResponseHandler,
@@ -35,6 +36,8 @@ export default class StockQuotationController {
         req.dataAccess
       );
       await session.commitTransaction();
+      // After the commit, and never awaited: alerts must not slow down or fail the save.
+      emitAlertEvent("QUOTATION_CREATED", quotation._id, { actor: req.user });
       successResponseHandler(res, quotation, "Quotation created", 201);
     } catch (error) {
       await session.abortTransaction();
@@ -112,6 +115,11 @@ export default class StockQuotationController {
         req.dataAccess
       );
       await session.commitTransaction();
+      // The approval chase ends now; anything sent back goes to its creator.
+      refreshAlerts(quotation._id);
+      if (["REJECTED", "PARTIALLY_APPROVED"].includes(quotation.status)) {
+        emitAlertEvent("QUOTATION_REJECTED", quotation._id, { actor: req.user });
+      }
       successResponseHandler(res, quotation, "Quotation reviewed");
     } catch (error) {
       await session.abortTransaction();
@@ -133,6 +141,7 @@ export default class StockQuotationController {
         req.dataAccess
       );
       await session.commitTransaction();
+      refreshAlerts(quotation._id);
       successResponseHandler(res, quotation, "Quotation deleted");
     } catch (error) {
       await session.abortTransaction();

@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import fs from "fs";
 
 import StockPurchaseOrderService from "../services/stock.purchase.order.service.js";
+import { emitAlertEvent, refreshAlerts } from "../services/stock.alert.dispatcher.service.js";
 import {
   successResponseHandler,
   errorResponseHandler,
@@ -51,6 +52,7 @@ export default class StockPurchaseOrderController {
       // transaction would leave an orphan PDF behind if it later aborted.
 
       po.pdfPath = (await StockPurchaseOrderService.attachPdf(po._id)) || "";
+      emitAlertEvent("PO_GENERATED", po._id, { actor: req.user });
 
       successResponseHandler(res, po, "Purchase order created", 201);
     } catch (error) {
@@ -109,6 +111,10 @@ export default class StockPurchaseOrderController {
       // Only once the edit is safely committed — same reason as create: a
       // file write inside the transaction can't be rolled back with it.
       po.pdfPath = (await StockPurchaseOrderService.attachPdf(po._id)) || "";
+      // A rejected PO edited back to GENERATED waits for review again: its
+      // "rejected" chase ends and a fresh review chase starts.
+      refreshAlerts(po._id);
+      if (po.status === "GENERATED") emitAlertEvent("PO_GENERATED", po._id, { actor: req.user });
 
       successResponseHandler(res, po, "Purchase order updated");
     } catch (error) {
@@ -130,6 +136,7 @@ export default class StockPurchaseOrderController {
         req.dataAccess
       );
       await session.commitTransaction();
+      refreshAlerts(po._id);
       successResponseHandler(res, po, "Purchase order approved");
     } catch (error) {
       await session.abortTransaction();
@@ -152,6 +159,8 @@ export default class StockPurchaseOrderController {
         req.dataAccess
       );
       await session.commitTransaction();
+      refreshAlerts(po._id);
+      emitAlertEvent("PO_REJECTED", po._id, { actor: req.user });
       successResponseHandler(res, po, "Purchase order rejected");
     } catch (error) {
       await session.abortTransaction();
@@ -192,6 +201,7 @@ export default class StockPurchaseOrderController {
         req.dataAccess
       );
       await session.commitTransaction();
+      refreshAlerts(po._id);
       successResponseHandler(res, po, "Purchase order deleted");
     } catch (error) {
       await session.abortTransaction();

@@ -6,8 +6,6 @@ import {
   UNIT_TYPES_ARRAY,
   CATEGORY_APPROVAL_STATUS_ARRAY,
   TERMS_STATUS_ARRAY,
-  NOTIFICATION_CHANNEL_ARRAY,
-  NOTIFICATION_CHANNEL,
   BRANCH_ROLE_ARRAY,
   ADJUSTMENT_TYPE_ARRAY,
   PAYMENT_MODE_ARRAY,
@@ -941,57 +939,22 @@ export const validateRejectInvoice = (body) => {
   if (!body?.reason || !String(body.reason).trim()) throw new Error("A reason is required");
 };
 
-// ─── Notification Validators ─────────────────────────────────────────────────
-
-export const validateCreateNotification = (body) => {
-  const { name, channel, isDefault, applicableVendors, ccEmails } = body || {};
-
-  if (!name || !String(name).trim()) throw new Error("name is required");
-  if (!channel || !NOTIFICATION_CHANNEL_ARRAY.includes(channel)) {
-    throw new Error(`channel must be one of: ${NOTIFICATION_CHANNEL_ARRAY.join(", ")}`);
-  }
-
-  if (!isDefault) {
-    if (!Array.isArray(applicableVendors) || applicableVendors.length === 0) {
-      throw new Error("applicableVendors is required when Default is No");
-    }
-  }
-
-  if (channel === NOTIFICATION_CHANNEL.EMAIL && ccEmails !== undefined) {
-    if (!Array.isArray(ccEmails)) throw new Error("ccEmails must be an array");
-    ccEmails.forEach((e) => {
-      if (!isValidEmail(e)) throw new Error(`Invalid CC email: ${e}`);
-    });
-  }
-};
-
-export const validateUpdateNotification = (body) => {
-  const { name, channel, isDefault, applicableVendors, ccEmails } = body || {};
-
-  if (name !== undefined && !String(name).trim()) throw new Error("name cannot be empty");
-  if (channel !== undefined && !NOTIFICATION_CHANNEL_ARRAY.includes(channel)) {
-    throw new Error(`channel must be one of: ${NOTIFICATION_CHANNEL_ARRAY.join(", ")}`);
-  }
-
-  if (isDefault === false) {
-    if (!Array.isArray(applicableVendors) || applicableVendors.length === 0) {
-      throw new Error("applicableVendors is required when Default is No");
-    }
-  }
-
-  const effectiveChannel = channel || NOTIFICATION_CHANNEL.EMAIL;
-  if (effectiveChannel === NOTIFICATION_CHANNEL.EMAIL && ccEmails !== undefined) {
-    if (!Array.isArray(ccEmails)) throw new Error("ccEmails must be an array");
-    ccEmails.forEach((e) => {
-      if (!isValidEmail(e)) throw new Error(`Invalid CC email: ${e}`);
-    });
-  }
-};
-
 // ─── Send Mail (Purchase Order) Validator ────────────────────────────────────
 
 export const validateSendMail = (body) => {
-  const { sendEmail, to, cc } = body || {};
+  const { sendEmail, to, cc, skipMode, note } = body || {};
+  if (note !== undefined && note !== null) {
+    if (typeof note !== 'string') throw new Error('note must be text');
+    if (note.trim().length > 500) throw new Error('Note can be at most 500 characters');
+  }
+  if (!sendEmail) {
+    // Not sending: the user must say which of the two it is. Missing is
+    // accepted as MANUAL so an older caller keeps working.
+    if (skipMode !== undefined && skipMode !== null && !['MANUAL', 'SKIPPED'].includes(skipMode)) {
+      throw new Error("Choose Sent Manually or Skip Mail");
+    }
+    return;
+  }
   if (sendEmail) {
     // A list now: a vendor may have several contacts marked To. A bare
     // string is still accepted so an older caller keeps working.

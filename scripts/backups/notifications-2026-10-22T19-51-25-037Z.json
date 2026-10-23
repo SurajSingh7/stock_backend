@@ -1,0 +1,101 @@
+[
+  {
+    "_id": "6a63401a8b7527bdcccbe068",
+    "name": "Vendor Po Send",
+    "channel": "EMAIL",
+    "fromEmail": "accevateabhay@gmail.com",
+    "ccEmails": [
+      "485golu@gmail.com",
+      "abhaykanttiwari9595@gmail.com"
+    ],
+    "isDefault": true,
+    "applicableVendors": [],
+    "isActive": true,
+    "deletedAt": null,
+    "deletedBy": null,
+    "createdAt": "2026-07-24T10:36:10.635Z",
+    "updatedAt": "2026-07-25T11:19:23.394Z",
+    "__v": 2,
+    "createdBy": {
+      "userId": "6979fe225aab35a29ffdbc70",
+      "name": "Abhay Tiwari",
+      "email": "abhaykanttiwari@gtel.in",
+      "phone": "6393216862",
+      "roleName": "Standard Role"
+    },
+    "updatedBy": {
+      "userId": "6979fe225aab35a29ffdbc70",
+      "name": "Abhay Tiwari",
+      "email": "abhaykanttiwari@gtel.in",
+      "phone": "6393216862",
+      "roleName": "Standard Role"
+    }
+  },
+  {
+    "_id": "6a97f3defa8913149e2bd668",
+    "name": "VENDOR WAISE",
+    "channel": "EMAIL",
+    "note": "",
+    "ccEmails": [
+      "220suraj@gmail.com"
+    ],
+    "isDefault": false,
+    "applicableVendors": [
+      "6a5610a06fd0032727bd2f0a"
+    ],
+    "isActive": true,
+    "deletedAt": null,
+    "deletedBy": null,
+    "createdBy": {
+      "userId": "683412faf69da640da90df73",
+      "name": "Amit Batra",
+      "email": "amit@gtel.in",
+      "phone": "8860606963",
+      "roleName": "Admin"
+    },
+    "updatedBy": {
+      "userId": "683412faf69da640da90df73",
+      "name": "Amit Batra",
+      "email": "amit@gtel.in",
+      "phone": "8860606963",
+      "roleName": "Admin"
+    },
+    "createdAt": "2026-09-02T10:01:02.563Z",
+    "updatedAt": "2026-09-02T13:12:59.919Z",
+    "__v": 1
+  },
+  {
+    "_id": "6a981af4fa8913149e2bd67f",
+    "name": "DERTY",
+    "channel": "EMAIL",
+    "note": "",
+    "ccEmails": [
+      "dheeraj@gmail.com",
+      "abhay@gmail.com"
+    ],
+    "isDefault": false,
+    "applicableVendors": [
+      "6a560fc86fd0032727bd2e95"
+    ],
+    "isActive": true,
+    "deletedAt": null,
+    "deletedBy": null,
+    "createdBy": {
+      "userId": "683412faf69da640da90df73",
+      "name": "Amit Batra",
+      "email": "amit@gtel.in",
+      "phone": "8860606963",
+      "roleName": "Admin"
+    },
+    "updatedBy": {
+      "userId": "683412faf69da640da90df73",
+      "name": "Amit Batra",
+      "email": "amit@gtel.in",
+      "phone": "8860606963",
+      "roleName": "Admin"
+    },
+    "createdAt": "2026-09-02T12:47:48.327Z",
+    "updatedAt": "2026-09-02T14:04:45.435Z",
+    "__v": 2
+  }
+]

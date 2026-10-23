@@ -6,6 +6,9 @@ import {
   ITEM_SOURCE_ARRAY,
   ITEM_CONDITION_ARRAY,
   ITEM_CONDITION,
+  REPAIR_KIND_ARRAY,
+  ASSIGNEE_KIND,
+  ASSIGNEE_KIND_ARRAY,
 } from "../constants/stock.enums.js";
 import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
@@ -50,13 +53,22 @@ const legacySchema = new mongoose.Schema(
 );
 
 /*
-  Who has an ASSIGNED unit — the subscriber it was issued to, and the request
-  it went out on. A snapshot (order id, username, service type) so stock
-  screens never need the subscriber registry or the external website to say
-  "ORD-101 · amit123 · Fiber". Cleared when the unit comes back (return phase).
+  Who has an ASSIGNED unit. Either a SUBSCRIBER — issued against an Item
+  Request (order id, username, service type, request) — or one of our own
+  EMPLOYEES (Employee Items). Snapshots, so stock screens never need the
+  subscriber registry, the external website or HRMS to say who has it.
+  Cleared when the unit comes back. No `kind` on older rows means SUBSCRIBER.
 */
 const assignedToSchema = new mongoose.Schema(
   {
+    kind: { type: String, enum: ASSIGNEE_KIND_ARRAY, default: ASSIGNEE_KIND.SUBSCRIBER },
+    // EMPLOYEE — the HRMS login id when picked from HRMS, else just the
+    // name / employee code as typed.
+    employeeUserId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    employeeName: { type: String, trim: true, default: "" },
+    employeeCode: { type: String, trim: true, default: "" },
+    note: { type: String, trim: true, default: "" },
+    // SUBSCRIBER
     subscriberId: { type: mongoose.Schema.Types.ObjectId, ref: "subscribers", default: null },
     orderId: { type: String, trim: true, default: "" },
     username: { type: String, trim: true, default: "" },
@@ -64,6 +76,40 @@ const assignedToSchema = new mongoose.Schema(
     requestId: { type: mongoose.Schema.Types.ObjectId, ref: "item_requests", default: null },
     requestNumber: { type: String, trim: true, default: "" },
     assignedAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
+/*
+  Why a FAULTY unit is faulty — what the store wrote down when it came back
+  broken. Read by the faulty-handling screens (repair / warranty claim / scrap)
+  and cleared once the unit is good again.
+*/
+const faultSchema = new mongoose.Schema(
+  {
+    reportedAt: { type: Date, default: null },
+    note: { type: String, trim: true, default: "" },
+    // Where it was found broken — e.g. a return from subscriber ORD-101.
+    via: { type: String, trim: true, default: "" },
+    requestNumber: { type: String, trim: true, default: "" },
+  },
+  { _id: false }
+);
+
+/*
+  The repair a FAULTY unit is out on — our own (IN_REPAIR) or a vendor warranty
+  claim (AT_VENDOR). Cleared when it comes back; the timeline keeps the story.
+*/
+const repairSchema = new mongoose.Schema(
+  {
+    kind: { type: String, enum: REPAIR_KIND_ARRAY, default: null },
+    sentAt: { type: Date, default: null },
+    note: { type: String, trim: true, default: "" },
+    // Warranty claims only.
+    vendorId: { type: mongoose.Schema.Types.ObjectId, ref: "vendors", default: null },
+    vendorName: { type: String, trim: true, default: "" },
+    claimRef: { type: String, trim: true, default: "" }, // vendor's docket / RMA number
+    inWarranty: { type: Boolean, default: null },        // as judged when it was sent
   },
   { _id: false }
 );
@@ -139,6 +185,14 @@ const stockInventoryItemSchema = new mongoose.Schema(
     // until assignment (phase 2) turns it into a real HRMS user.
     heldByNote: { type: String, trim: true, default: "" },
     assignedTo: { type: assignedToSchema, default: null },
+    fault: { type: faultSchema, default: null },
+    repair: { type: repairSchema, default: null },
+    // A vendor swap links both ways: the faulty unit points at the unit sent
+    // in its place, and that one (source VENDOR_REPLACEMENT) back at it.
+    replacedByItemId: { type: mongoose.Schema.Types.ObjectId, ref: "inventory_items", default: null },
+    replacesItemId: { type: mongoose.Schema.Types.ObjectId, ref: "inventory_items", default: null },
+    // Why a SCRAPPED unit was written off.
+    scrapNote: { type: String, trim: true, default: "" },
     fieldValues: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
@@ -196,6 +250,7 @@ stockInventoryItemSchema.index(
 stockInventoryItemSchema.index({ "source.type": 1 });
 stockInventoryItemSchema.index({ "assignedTo.subscriberId": 1 }, { sparse: true });
 stockInventoryItemSchema.index({ "assignedTo.requestId": 1 }, { sparse: true });
+stockInventoryItemSchema.index({ "assignedTo.kind": 1, "assignedTo.employeeCode": 1 }, { sparse: true });
 stockInventoryItemSchema.index({ "source.refId": 1 });
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.

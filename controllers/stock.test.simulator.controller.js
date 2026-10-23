@@ -15,6 +15,11 @@ export default class StockTestSimulatorController {
     mixedCategories: await StockItemRequestService.catalogMixedCategories(),
   }));
 
+  // What a test subscriber holds — the Return / Replace pickers read this.
+  static holdings = handled(log, "Subscriber items fetched successfully", (req) =>
+    StockTestSimulatorService.holdings(req.params.subscriberId)
+  );
+
   static listSubscribers = handled(log, "Test subscribers fetched successfully", (req) =>
     StockTestSimulatorService.listSubscribers({ search: req.query.search })
   );

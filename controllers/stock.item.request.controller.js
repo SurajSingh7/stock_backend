@@ -30,6 +30,10 @@ export default class StockItemRequestController {
     StockItemRequestService.issue(req.params.id, req.body, actingUser(req), session, req.dataAccess)
   );
 
+  static receive = inTransaction(log, "Items received back", (req, session) =>
+    StockItemRequestService.receive(req.params.id, req.body, actingUser(req), session, req.dataAccess)
+  );
+
   static shortClose = inTransaction(log, "Item request short-closed", (req, session) =>
     StockItemRequestService.shortClose(req.params.id, req.body?.reason, actingUser(req), session, req.dataAccess)
   );
@@ -57,6 +61,11 @@ const EXTERNAL = ITEM_REQUEST_CHANNEL.EXTERNAL_API;
 export class StockExternalItemRequestController {
   static branches = handled(log, "Branches fetched successfully", () => StockItemRequestService.catalogBranches());
   static categories = handled(log, "Categories fetched successfully", () => StockItemRequestService.catalogCategories());
+
+  // What a subscriber holds — to pick a Return / Replace from.
+  static holdings = handled(log, "Subscriber items fetched successfully", (req) =>
+    StockItemRequestService.holdingsForRequester(EXTERNAL, req.params.orderId)
+  );
 
   static create = inTransaction(
     log,

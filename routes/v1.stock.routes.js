@@ -9,7 +9,6 @@ import StockQuotationController from "../controllers/stock.quotation.controller.
 import StockPurchaseOrderController from "../controllers/stock.purchase.order.controller.js";
 import StockTermsConditionController from "../controllers/stock.terms.condition.controller.js";
 import StockTrackingOrderController from "../controllers/stock.tracking.order.controller.js";
-import StockNotificationController from "../controllers/stock.notification.controller.js";
 import StockBranchController from "../controllers/stock.branch.controller.js";
 import StockGstRateController from "../controllers/stock.gst.rate.controller.js";
 import StockFaultyItemController from "../controllers/stock.faulty.item.controller.js";
@@ -18,6 +17,9 @@ import { uploadInvoiceFile, uploadInvoiceForReading } from "../helpers/stock.inv
 import StockTransferRequestController from "../controllers/stock.transfer.request.controller.js";
 import StockOpeningStockController from "../controllers/stock.opening.stock.controller.js";
 import StockItemRequestController from "../controllers/stock.item.request.controller.js";
+import StockRepairController from "../controllers/stock.repair.controller.js";
+import StockEmployeeItemController from "../controllers/stock.employee.item.controller.js";
+import StockInventoryReportController from "../controllers/stock.inventory.report.controller.js";
 import StockTestSimulatorController from "../controllers/stock.test.simulator.controller.js";
 import { uploadOpeningStockSheet } from "../helpers/stock.opening.stock.excel.helper.js";
 import StockAccessControlController from "../controllers/stock.access.control.controller.js";
@@ -28,8 +30,12 @@ import StockVendorLedgerController from "../controllers/stock.vendor.ledger.cont
 import StockReportController from "../controllers/stock.report.controller.js";
 import { uploadPaymentProofs } from "../helpers/stock.payment.upload.helper.js";
 import { requirePermission, requirePermissionForQueryModule } from "../middlewares/stock.permission.middleware.js";
+import alertRoutes from "./v1.alert.routes.js";
 
 const router = express.Router();
+
+// ─── Alerts & Escalations (own router) ─────────────────────────────────────
+router.use("/alerts", alertRoutes);
 
 // ─── Auth (diagnostic) ─────────────────────────────────────────────────────────
 router.get("/me", authenticate, (req, res) => res.json({ success: true, data: req.user }));
@@ -334,7 +340,7 @@ router.get("/vendor-ledger/:vendorId/month", authenticate, requirePermission("ve
 router.get(
   "/scoped-branches",
   authenticate,
-  requirePermissionForQueryModule(["invoices", "inventory-items", "item-requests"], "READ"),
+  requirePermissionForQueryModule(["invoices", "inventory-items", "item-requests", "repairs", "employee-items", "stock-reports"], "READ"),
   StockBranchController.getScopedBranches
 );
 
@@ -389,13 +395,44 @@ router.get("/item-requests", authenticate, requirePermission("item-requests", "R
 router.get("/item-requests/:id", authenticate, requirePermission("item-requests", "READ"), StockItemRequestController.getById);
 router.get("/item-requests/:id/units", authenticate, requirePermission("item-requests", "ISSUE"), StockItemRequestController.availableUnits);
 router.patch("/item-requests/:id/issue", authenticate, requirePermission("item-requests", "ISSUE"), StockItemRequestController.issue);
+router.patch("/item-requests/:id/receive", authenticate, requirePermission("item-requests", "RECEIVE"), StockItemRequestController.receive);
 router.patch("/item-requests/:id/short-close", authenticate, requirePermission("item-requests", "SHORT_CLOSE"), StockItemRequestController.shortClose);
 router.patch("/item-requests/:id/reject", authenticate, requirePermission("item-requests", "REJECT"), StockItemRequestController.reject);
+
+// ─── Repair & Warranty ──────────────────────────────────────────────────────────
+// What happens to our broken units — see services/stock.repair.service.js.
+router.get("/repairs/counts", authenticate, requirePermission("repairs", "READ"), StockRepairController.counts);
+router.get("/repairs/vendors", authenticate, requirePermission("repairs", "READ"), StockRepairController.vendors);
+router.get("/repairs", authenticate, requirePermission("repairs", "READ"), StockRepairController.list);
+router.patch("/repairs/:id/report-faulty", authenticate, requirePermission("repairs", "REPORT"), StockRepairController.reportFaulty);
+router.patch("/repairs/:id/send-repair", authenticate, requirePermission("repairs", "MANAGE"), StockRepairController.sendForRepair);
+router.patch("/repairs/:id/repair-result", authenticate, requirePermission("repairs", "MANAGE"), StockRepairController.repairResult);
+router.patch("/repairs/:id/claim", authenticate, requirePermission("repairs", "MANAGE"), StockRepairController.sendClaim);
+router.patch("/repairs/:id/claim-outcome", authenticate, requirePermission("repairs", "MANAGE"), StockRepairController.claimOutcome);
+router.patch("/repairs/:id/mark-ok", authenticate, requirePermission("repairs", "MANAGE"), StockRepairController.markOk);
+router.patch("/repairs/:id/scrap", authenticate, requirePermission("repairs", "SCRAP"), StockRepairController.scrap);
+
+// ─── Employee Items ────────────────────────────────────────────────────────────
+// Stock with our own people — see services/stock.employee.item.service.js.
+router.get("/employee-items/pending", authenticate, requirePermission("employee-items", "READ"), StockEmployeeItemController.pending);
+router.get("/employee-items/available", authenticate, requirePermission("employee-items", "ASSIGN"), StockEmployeeItemController.available);
+router.get("/employee-items/employees", authenticate, requirePermission("employee-items", "READ"), StockEmployeeItemController.employees);
+router.get("/employee-items/items", authenticate, requirePermission("employee-items", "READ"), StockEmployeeItemController.employeeItems);
+router.post("/employee-items/assign", authenticate, requirePermission("employee-items", "ASSIGN"), StockEmployeeItemController.assign);
+router.post("/employee-items/return", authenticate, requirePermission("employee-items", "RETURN"), StockEmployeeItemController.returnItems);
+
+// ─── Stock Reports (inventory, not billing) ────────────────────────────────────
+router.get("/stock-reports/position", authenticate, requirePermission("stock-reports", "READ"), StockInventoryReportController.position);
+router.get("/stock-reports/value", authenticate, requirePermission("stock-reports", "READ"), StockInventoryReportController.value);
+router.get("/stock-reports/warranty", authenticate, requirePermission("stock-reports", "READ"), StockInventoryReportController.warranty);
+router.get("/stock-reports/subscribers", authenticate, requirePermission("stock-reports", "READ"), StockInventoryReportController.subscribers);
+router.get("/stock-reports/repairs", authenticate, requirePermission("stock-reports", "READ"), StockInventoryReportController.repairs);
 
 // ─── 🧪 Request Simulator (TEST ONLY — remove when the real website is live) ───
 // Plays the requesting website; see services/stock.test.simulator.service.js.
 router.get("/test-simulator/meta", authenticate, requirePermission("test-simulator", "READ"), StockTestSimulatorController.meta);
 router.get("/test-simulator/subscribers", authenticate, requirePermission("test-simulator", "READ"), StockTestSimulatorController.listSubscribers);
+router.get("/test-simulator/subscribers/:subscriberId/items", authenticate, requirePermission("test-simulator", "READ"), StockTestSimulatorController.holdings);
 router.post("/test-simulator/subscribers", authenticate, requirePermission("test-simulator", "CREATE"), StockTestSimulatorController.createSubscriber);
 router.post("/test-simulator/subscribers/:subscriberId/requests", authenticate, requirePermission("test-simulator", "REQUEST"), StockTestSimulatorController.sendRequest);
 router.get("/test-simulator/requests/:requestId", authenticate, requirePermission("test-simulator", "READ"), StockTestSimulatorController.getRequest);
@@ -409,14 +446,5 @@ router.get("/transfer-requests/:id", authenticate, requirePermission("transfer-r
 router.patch("/transfer-requests/:id/process", authenticate, requirePermission("transfer-requests", "PROCESS"), StockTransferRequestController.processTransferRequest);
 router.patch("/transfer-requests/:id/reject", authenticate, requirePermission("transfer-requests", "REJECT"), StockTransferRequestController.rejectTransferRequest);
 
-// ─── Notification master ─────────────────────────────────────────────────────
-router.post("/notifications", authenticate, requirePermission("notifications", "CREATE"), StockNotificationController.createNotification);
-router.get("/notifications", authenticate, requirePermission("notifications", "READ"), StockNotificationController.getAllNotifications);
-router.get("/notifications/assignable-vendors", authenticate, requirePermission("notifications", "READ"), StockNotificationController.getAssignableVendors);
-router.get("/notifications/resolve/:vendorId", authenticate, requirePermission("notifications", "READ"), StockNotificationController.resolveForVendor);
-router.get("/notifications/:id", authenticate, requirePermission("notifications", "READ"), StockNotificationController.getNotificationById);
-router.put("/notifications/:id", authenticate, requirePermission("notifications", "UPDATE"), StockNotificationController.updateNotification);
-router.delete("/notifications/:id", authenticate, requirePermission("notifications", "DELETE"), StockNotificationController.softDeleteNotification);
-router.patch("/notifications/:id/restore", authenticate, requirePermission("notifications", "RESTORE"), StockNotificationController.restoreNotification);
 
 export default router;

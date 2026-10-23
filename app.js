@@ -10,6 +10,7 @@ import internalRoutes from "./routes/internal.routes.js";
 import externalRoutes from "./routes/external.routes.js";
 import { seedModules } from "./seeders/stock.module.seeder.js";
 import { multerErrorHandler } from "./helpers/stock.upload.helper.js";
+import { startAlertWorker } from "./services/stock.alert.worker.js";
 
 dotenv.config();
 
@@ -79,6 +80,9 @@ mongoose
   console.log("✅ MongoDB connected");
 
   await seedModules();
+
+  // Alerts & Escalations: sender, WhatsApp status poll, escalation checker.
+  startAlertWorker();
 
   app.listen(process.env.PORT || 5000, () => {
     console.log(

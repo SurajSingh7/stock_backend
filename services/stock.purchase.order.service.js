@@ -9,7 +9,7 @@ import StockProductDefinitionModel from "../models/stock.product.definition.mode
 
 import StockTermsConditionService from "./stock.terms.condition.service.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
-import StockNotificationService from "./stock.notification.service.js";
+import StockAlertManualService from "./stock.alert.manual.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
@@ -39,15 +39,14 @@ const requesterName = (user) =>
   (user?.name || "").trim() || user?.employeeCode || user?.email || "";
 import { getLogger } from "../helpers/logger.helper.js";
 import { generatePOPdf } from "../helpers/stock.po.pdf.helper.js";
-import { poPdfAbsolutePath } from "../helpers/stock.po.pdf.helper.js";
-import { sendMail as sendMailTransport } from "../helpers/mail.helper.js";
 import {
   PO_STATUS,
   PO_TAX_TYPE,
   TERMS_SOURCE,
   TRACKING_STATUS,
   MAIL_MODE,
-  NOTIFICATION_CHANNEL,
+  MAIL_REACHED_VENDOR,
+  ALERT_CHANNEL,
 } from "../constants/stock.enums.js";
 
 const log = getLogger(import.meta.url);
@@ -778,11 +777,7 @@ export default class StockPurchaseOrderService {
     }
     const before = po.toObject();
 
-    const { sendEmail, to, cc, from } = body;
-    const { notification } = await StockNotificationService.resolveForVendor(
-      po.vendorId,
-      NOTIFICATION_CHANNEL.EMAIL
-    );
+    const { sendEmail, to, cc } = body;
 
     // One or many. A string is still accepted so an older caller keeps working.
     const toList = (Array.isArray(to) ? to : [to])
@@ -800,42 +795,48 @@ export default class StockPurchaseOrderService {
         );
       }
 
-      // No per-notification From address anymore — sending always goes out
-      // as MAIL_FROM_DEFAULT (see mail.helper.js) unless a caller explicitly
-      // passes one.
-      const resolvedFrom = from || undefined;
-      const resolvedCc = Array.isArray(cc) && cc.length ? cc : notification?.ccEmails || [];
-
-      const pdfAbs = po.pdfPath ? poPdfAbsolutePath(po.pdfPath) : null;
-      await sendMailTransport({
-        from: resolvedFrom,
-        to: toList.join(","),
-        cc: resolvedCc,
-        subject: `Purchase Order ${po.poNumber}`,
-        html: `<p>Please find attached Purchase Order <strong>${po.poNumber}</strong>.</p>`,
-        attachments: pdfAbs ? [{ filename: `${po.poNumber}.pdf`, path: pdfAbs }] : undefined,
+      // Through Alerts & Escalations: the PO's Manual rule supplies the
+      // subject, text and PDF; the dialog supplies To/CC. Sent at once (the
+      // dialog waits), logged in the Message Log, master switch + sandbox
+      // applied. Throws when nothing went out — then nothing is recorded.
+      const sent = await StockAlertManualService.sendNow("PO_SEND_TO_VENDOR", po._id, {
+        to: toList,
+        cc: Array.isArray(cc) ? cc : [],
+        actor: user,
       });
 
       po.emailedTo = toList.join(", ");
       po.emailedAt = new Date();
       mailResult = {
         mode: MAIL_MODE.SENT,
-        channel: NOTIFICATION_CHANNEL.EMAIL,
-        notificationId: notification?._id || null,
-        to: toList,
-        cc: resolvedCc,
-        from: resolvedFrom || "",
+        channel: ALERT_CHANNEL.EMAIL,
+        ruleId: sent.ruleId,
+        alertMessageId: sent.messageId,
+        to: sent.to,
+        cc: sent.cc,
+        from: process.env.MAIL_FROM_DEFAULT || "",
+        sandboxedTo: sent.sandboxedTo || "",
       };
     } else {
-      // Manual hand-off — no email sent through the ERP, but the PO has still
-      // left the building, so it is recorded the same as an emailed one.
+      // Not sent by the system. Either the vendor got it some other way
+      // (Sent Manually) or it is not being sent at all (Mail Skipped) — both
+      // let the order move on. A missing skipMode is an older caller: MANUAL.
+      const mode = body.skipMode === MAIL_MODE.SKIPPED ? MAIL_MODE.SKIPPED : MAIL_MODE.MANUAL;
+
+      // "Skipped" would claim the vendor does not have a PO they already hold.
+      if (mode === MAIL_MODE.SKIPPED) {
+        const tracked = await StockTrackingOrderModel.findOne({ poId: po._id, isActive: true }).lean();
+        if (MAIL_REACHED_VENDOR.includes(tracked?.mailResult?.mode)) {
+          throw new Error("This PO has already reached the vendor, so its mail can no longer be skipped");
+        }
+      }
+
       mailResult = {
-        mode: MAIL_MODE.MANUAL,
-        channel: NOTIFICATION_CHANNEL.EMAIL,
-        notificationId: notification?._id || null,
+        mode,
+        channel: ALERT_CHANNEL.EMAIL,
         to: toList,
         cc: Array.isArray(cc) ? cc.filter(Boolean) : [],
-        from: from || "",
+        note: typeof body.note === "string" ? body.note.trim() : "",
       };
     }
 
@@ -873,14 +874,18 @@ export default class StockPurchaseOrderService {
     const po = await StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).session(session);
     if (!po) throw new Error("Purchase order not found");
     assertDataScope(po, dataAccess);
-    // With no SENT status left, "already gone to the vendor" is whatever the
-    // tracking order recorded when the mail went out (emailed OR marked
-    // Manual) — po.emailedAt alone would miss the manual hand-off.
+    // With no SENT status left, "the send step is done" is whatever the
+    // tracking order recorded (Mail Sent, Sent Manually or Mail Skipped) —
+    // po.emailedAt alone would miss the last two.
     const tracked = await StockTrackingOrderModel.findOne({ poId: po._id, isActive: true })
       .session(session)
       .lean();
     if (po.emailedAt || tracked?.mailResult?.mode) {
-      throw new Error("Cannot delete — this PO has already been sent to the vendor");
+      throw new Error(
+        tracked?.mailResult?.mode === MAIL_MODE.SKIPPED
+          ? "Cannot delete — this PO's mail was skipped and the order has moved on"
+          : "Cannot delete — this PO has already been sent to the vendor"
+      );
     }
     const before = po.toObject();
 

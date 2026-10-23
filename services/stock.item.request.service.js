@@ -23,6 +23,10 @@ import {
   ITEM_REQUEST_STATUS,
   ITEM_REQUEST_STATUS_ARRAY,
   ITEM_REQUEST_CHANNEL_ARRAY,
+  ITEM_REQUEST_TYPE,
+  ITEM_REQUEST_TYPE_ARRAY,
+  RETURN_CONDITION,
+  RETURN_CONDITION_ARRAY,
 } from "../constants/stock.enums.js";
 
 /*
@@ -93,6 +97,28 @@ const unitLabel = (item) => {
 
 // Free stock at a branch: individual units counted, batches summed.
 const FREE = { isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED };
+
+const MAX_RETURN_ITEMS = 100;
+const hasIssueSide = (type) => type === ITEM_REQUEST_TYPE.ISSUE || type === ITEM_REQUEST_TYPE.REPLACE;
+const hasReturnSide = (type) => type === ITEM_REQUEST_TYPE.RETURN || type === ITEM_REQUEST_TYPE.REPLACE;
+
+/*
+  Where a request stands, from what has moved on each half it has:
+  nothing yet → PENDING, everything → COMPLETED, anything in between → PARTIAL.
+  A REPLACE is complete only when the old units are back AND the new ones out.
+*/
+const progressStatus = (r) => {
+  const issueDone = !hasIssueSide(r.type) || r.issuedQty >= r.requestedQty;
+  const returnDone = !hasReturnSide(r.type) || r.returnReceivedQty >= r.returnRequestedQty;
+  if (issueDone && returnDone) return ITEM_REQUEST_STATUS.COMPLETED;
+  return (r.issuedQty || 0) > 0 || (r.returnReceivedQty || 0) > 0 ? ITEM_REQUEST_STATUS.PARTIAL : ITEM_REQUEST_STATUS.PENDING;
+};
+
+const typeOf = (t) => {
+  const type = t || ITEM_REQUEST_TYPE.ISSUE;
+  if (!ITEM_REQUEST_TYPE_ARRAY.includes(type)) throw new AppError(`Invalid request type: ${t}`, 400);
+  return type;
+};
 
 // What was handed over, per product, across every visit.
 const issuedByProduct = (issues = []) => {
@@ -188,31 +214,144 @@ export default class StockItemRequestService {
   /* Requester side                                                         */
   /* ====================================================================== */
 
-  // Branch, one leaf category, and how many.
-  static async _resolveRequestBody(body, session) {
+  // The branch stock goes out from (ISSUE) or comes back to (RETURN).
+  static async _resolveBranch(body, session) {
     if (!mongoose.isValidObjectId(body?.branchId)) throw new AppError("Branch is required", 400);
     const branch = await StockBranchModel.findOne({ _id: body.branchId, isActive: true }).session(session).lean();
     if (!branch) throw new AppError("Invalid branch selected", 400);
+    return branch;
+  }
 
-    if (!mongoose.isValidObjectId(body?.categoryId)) throw new AppError("Category is required", 400);
-    const category = await StockCategoryModel.findOne({ _id: body.categoryId, isActive: true }).session(session).lean();
+  // A leaf category whose products are all counted the same way.
+  static async _resolveLeaf(categoryId, session) {
+    if (!mongoose.isValidObjectId(categoryId)) throw new AppError("Category is required", 400);
+    const category = await StockCategoryModel.findOne({ _id: categoryId, isActive: true }).session(session).lean();
     if (!category) throw new AppError("Invalid category selected", 400);
     if (category.type !== CATEGORY_TYPES.LEAF) throw new AppError("Invalid category: pick the last level (a leaf category)", 400);
     const { trackingMethod, unit } = await StockItemRequestService._categoryKind(category._id, session);
+    return { category, categoryPath: await StockCategoryService.buildDisplayPath(category.path, session), trackingMethod, unit };
+  }
 
+  // ISSUE: one leaf category, and how many.
+  static async _resolveIssueSide(body, session) {
+    const leaf = await StockItemRequestService._resolveLeaf(body?.categoryId, session);
     const qty = Number(body.quantity);
     if (!Number.isFinite(qty) || qty <= 0) throw new AppError("Quantity must be more than 0", 400);
-    if (trackingMethod === TRACKING_METHODS.INDIVIDUAL && !Number.isInteger(qty))
+    if (leaf.trackingMethod === TRACKING_METHODS.INDIVIDUAL && !Number.isInteger(qty))
       throw new AppError("Quantity must be a whole number for this category", 400);
+    return { ...leaf, requestedQty: round3(qty) };
+  }
 
-    return {
-      branch,
-      category,
-      categoryPath: await StockCategoryService.buildDisplayPath(category.path, session),
-      trackingMethod,
-      unit,
-      requestedQty: round3(qty),
+  /*
+    RETURN / REPLACE: the things coming back, named from what the subscriber
+    holds — body.items: [{ inventoryItemId, quantity? }]. A unit is 1; a batch
+    may come back in part (quantity), all of it by default.
+
+    Each must be ASSIGNED to this very subscriber, and not already on another
+    open return or replace — two requests for the same router would be
+    received twice.
+  */
+  static async _resolveReturnSide(body, subscriberId, session, excludeRequestId = null) {
+    const inputs = Array.isArray(body?.items) ? body.items : [];
+    if (!inputs.length) throw new AppError("Choose at least one item to return", 400);
+    if (inputs.length > MAX_RETURN_ITEMS) throw new AppError(`Invalid: at most ${MAX_RETURN_ITEMS} items per request`, 400);
+    const ids = inputs.map((i) => String(i?.inventoryItemId || ""));
+    if (ids.some((id) => !mongoose.isValidObjectId(id))) throw new AppError("Invalid item selected", 400);
+    if (new Set(ids).size !== ids.length) throw new AppError("Invalid: an item is listed twice", 400);
+
+    const held = await StockInventoryItemModel.find({
+      _id: { $in: ids },
+      isActive: true,
+      status: ITEM_STATUS.ASSIGNED,
+      "assignedTo.subscriberId": subscriberId,
+    })
+      .populate({ path: "productDefinitionId", select: "name categoryId trackingMethod unit" })
+      .session(session)
+      .lean();
+    if (held.length !== ids.length)
+      throw new AppError(`${ids.length - held.length} chosen item(s) are not with this subscriber`, 400);
+
+    const lockFilter = {
+      isActive: true,
+      status: { $in: OPEN_REQUEST_STATUSES },
+      "returnLines.inventoryItemId": { $in: ids.map(oid) },
     };
+    if (excludeRequestId) lockFilter._id = { $ne: excludeRequestId };
+    const locked = await StockItemRequestModel.findOne(lockFilter).select("requestNumber").session(session).lean();
+    if (locked) throw new AppError(`Some of these items are already on open request ${locked.requestNumber}`, 409);
+
+    const byId = new Map(held.map((h) => [String(h._id), h]));
+    const returnLines = inputs.map((input) => {
+      const it = byId.get(String(input.inventoryItemId));
+      const p = it.productDefinitionId;
+      const isUnit = it.quantity === null || it.quantity === undefined;
+      let qty = 1;
+      if (!isUnit) {
+        qty = input.quantity === undefined || input.quantity === null || input.quantity === "" ? it.quantity : round3(Number(input.quantity));
+        if (!(qty > 0) || qty > it.quantity) throw new AppError(`${p.name}: return quantity must be between 0 and ${it.quantity}`, 400);
+      }
+      return {
+        inventoryItemId: it._id,
+        productDefinitionId: p._id,
+        productName: p.name,
+        categoryId: p.categoryId,
+        trackingMethod: isUnit ? TRACKING_METHODS.INDIVIDUAL : TRACKING_METHODS.QUANTITY,
+        unit: p.unit || null,
+        label: unitLabel(it),
+        requestedQty: qty,
+        receivedQty: 0,
+      };
+    });
+    return { returnLines, returnRequestedQty: round3(returnLines.reduce((s, l) => s + l.requestedQty, 0)) };
+  }
+
+  /*
+    Everything a request of `type` carries besides its subscriber, ready to set
+    on the document. REPLACE: the old units must all be of ONE leaf category,
+    and as many of that category go out in their place.
+  */
+  static async _resolve(type, body, subscriberId, session, excludeRequestId = null) {
+    const branch = await StockItemRequestService._resolveBranch(body, session);
+    const out = {
+      branchId: branch._id,
+      categoryId: null,
+      categoryPath: "",
+      trackingMethod: null,
+      unit: null,
+      requestedQty: 0,
+      returnLines: [],
+      returnRequestedQty: 0,
+    };
+    if (type === ITEM_REQUEST_TYPE.ISSUE) {
+      const s = await StockItemRequestService._resolveIssueSide(body, session);
+      Object.assign(out, {
+        categoryId: s.category._id,
+        categoryPath: s.categoryPath,
+        trackingMethod: s.trackingMethod,
+        unit: s.unit,
+        requestedQty: s.requestedQty,
+      });
+    }
+    if (hasReturnSide(type)) Object.assign(out, await StockItemRequestService._resolveReturnSide(body, subscriberId, session, excludeRequestId));
+    if (type === ITEM_REQUEST_TYPE.REPLACE) {
+      const categories = new Set(out.returnLines.map((l) => String(l.categoryId)));
+      if (categories.size !== 1) throw new AppError("Replace works on one category at a time — raise one request per category", 400);
+      const leaf = await StockItemRequestService._resolveLeaf([...categories][0], session);
+      Object.assign(out, {
+        categoryId: leaf.category._id,
+        categoryPath: leaf.categoryPath,
+        trackingMethod: leaf.trackingMethod,
+        unit: leaf.unit,
+        requestedQty: out.returnRequestedQty,
+      });
+    }
+    return out;
+  }
+
+  static _summary(type, r) {
+    if (type === ITEM_REQUEST_TYPE.ISSUE) return `${r.categoryPath} × ${r.requestedQty}`;
+    const items = r.returnLines.map((l) => (l.trackingMethod === TRACKING_METHODS.INDIVIDUAL ? l.label : `${l.productName} ${l.requestedQty}`));
+    return `${type === ITEM_REQUEST_TYPE.REPLACE ? "Replace" : "Return"}: ${items.join(", ")}`;
   }
 
   // The website owns its subscribers; this keeps the latest copy of the ones
@@ -236,8 +375,9 @@ export default class StockItemRequestService {
 
   static async createRequest(body, channel, session) {
     assertChannel(channel);
-    const resolved = await StockItemRequestService._resolveRequestBody(body, session);
+    const type = typeOf(body?.type);
     const { subscriber, snapshot } = await StockItemRequestService._upsertSubscriber(channel, body.subscriber, session);
+    const resolved = await StockItemRequestService._resolve(type, body, subscriber._id, session);
     const requestedBy = { externalUserId: text(body.requestedBy?.id, 100), name: text(body.requestedBy?.name, 150) };
 
     const requestNumber = await nextDocumentNumber({ model: StockItemRequestModel, field: "requestNumber", prefix: "REQ", session });
@@ -245,18 +385,14 @@ export default class StockItemRequestService {
       [
         {
           requestNumber,
+          type,
           channel,
-          branchId: resolved.branch._id,
+          ...resolved,
           subscriberId: subscriber._id,
           subscriber: snapshot,
-          categoryId: resolved.category._id,
-          categoryPath: resolved.categoryPath,
-          trackingMethod: resolved.trackingMethod,
-          unit: resolved.unit,
-          requestedQty: resolved.requestedQty,
           requestedBy,
           remarks: text(body.remarks, 1000),
-          history: [{ action: "CREATED", byName: requestedBy.name, note: `${resolved.categoryPath} × ${resolved.requestedQty}` }],
+          history: [{ action: "CREATED", byName: requestedBy.name, note: StockItemRequestService._summary(type, resolved) }],
         },
       ],
       { session }
@@ -277,27 +413,23 @@ export default class StockItemRequestService {
     if (request.status !== ITEM_REQUEST_STATUS.REJECTED) throw new AppError("Only a rejected request can be edited and sent again", 400);
     const before = request.toObject();
 
-    const resolved = await StockItemRequestService._resolveRequestBody(body, session);
     const { subscriber, snapshot } = await StockItemRequestService._upsertSubscriber(
       channel,
       { ...body.subscriber, orderId: request.subscriber.orderId }, // the request stays with its subscriber
       session
     );
+    // The type stays what it was — an issue cannot be resent as a return.
+    const resolved = await StockItemRequestService._resolve(request.type, body, subscriber._id, session, request._id);
     const byName = text(body.requestedBy?.name, 150) || request.requestedBy?.name || "";
 
-    request.branchId = resolved.branch._id;
-    request.categoryId = resolved.category._id;
-    request.categoryPath = resolved.categoryPath;
-    request.trackingMethod = resolved.trackingMethod;
-    request.unit = resolved.unit;
-    request.requestedQty = resolved.requestedQty;
+    request.set(resolved);
     request.subscriberId = subscriber._id;
     request.subscriber = snapshot;
     if (body.remarks !== undefined) request.remarks = text(body.remarks, 1000);
     request.status = ITEM_REQUEST_STATUS.PENDING;
     request.rejection = null;
     request.revision = (request.revision || 1) + 1;
-    request.history.push({ action: "RESENT", byName, note: `Revision ${request.revision}: ${resolved.categoryPath} × ${resolved.requestedQty}` });
+    request.history.push({ action: "RESENT", byName, note: `Revision ${request.revision}: ${StockItemRequestService._summary(request.type, resolved)}` });
     await request.save({ session });
 
     await StockAuditLogService.recordAudit({
@@ -312,8 +444,25 @@ export default class StockItemRequestService {
     return {
       _id: r._id,
       requestNumber: r.requestNumber,
+      type: r.type || ITEM_REQUEST_TYPE.ISSUE,
       status: r.status,
       revision: r.revision,
+      returnLines: (r.returnLines || []).map((l) => ({
+        inventoryItemId: l.inventoryItemId,
+        productName: l.productName,
+        label: l.label,
+        unit: l.unit,
+        trackingMethod: l.trackingMethod,
+        requestedQty: l.requestedQty,
+        receivedQty: l.receivedQty,
+      })),
+      returnRequestedQty: r.returnRequestedQty || 0,
+      returnReceivedQty: r.returnReceivedQty || 0,
+      receipts: (r.receipts || []).map((rc) => ({
+        at: rc.at,
+        byName: rc.by?.name || "",
+        lines: rc.lines.map((l) => ({ productName: l.productName, label: l.label, quantity: l.quantity, condition: l.condition })),
+      })),
       branchId: r.branchId?._id || r.branchId,
       branchName: r.branchId?.name || undefined,
       subscriber: r.subscriber,
@@ -364,9 +513,10 @@ export default class StockItemRequestService {
   /* ====================================================================== */
 
   // The store-side filter WITHOUT the branch scope — callers apply it.
-  static _storeFilter({ status, branchId, search }) {
+  static _storeFilter({ status, branchId, search, type }) {
     const filter = { isActive: true };
     if (status && ITEM_REQUEST_STATUS_ARRAY.includes(status)) filter.status = status;
+    if (type && ITEM_REQUEST_TYPE_ARRAY.includes(type)) filter.type = type;
     if (branchId && mongoose.isValidObjectId(branchId)) filter.branchId = oid(branchId);
     if (search) {
       const rx = { $regex: escapeRegex(String(search).trim()), $options: "i" };
@@ -380,7 +530,7 @@ export default class StockItemRequestService {
     const filter = applyDataScope(StockItemRequestService._storeFilter(query), dataAccess, MODULE_KEY);
     const [data, total] = await Promise.all([
       StockItemRequestModel.find(filter)
-        .select("requestNumber status channel branchId subscriber categoryPath trackingMethod unit requestedQty issuedQty requestedBy revision createdAt updatedAt")
+        .select("requestNumber type status channel branchId subscriber categoryPath trackingMethod unit requestedQty issuedQty returnLines.label returnLines.productName returnRequestedQty returnReceivedQty requestedBy revision createdAt updatedAt")
         .populate({ path: "branchId", select: "name code" })
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -435,9 +585,12 @@ export default class StockItemRequestService {
     const r = await StockItemRequestModel.findById(request._id).populate({ path: "branchId", select: "name code" }).lean();
     assertDataScope({ ...r, branchId: r.branchId?._id }, dataAccess);
 
-    r.remainingQty = round3(Math.max(0, r.requestedQty - r.issuedQty));
+    r.type = r.type || ITEM_REQUEST_TYPE.ISSUE;
+    r.remainingQty = round3(Math.max(0, (r.requestedQty || 0) - (r.issuedQty || 0)));
     r.issuedByProduct = issuedByProduct(r.issues);
-    if (OPEN_REQUEST_STATUSES.includes(r.status)) {
+    (r.returnLines || []).forEach((l) => (l.remainingQty = round3(Math.max(0, l.requestedQty - l.receivedQty))));
+    r.returnRemainingQty = round3(Math.max(0, (r.returnRequestedQty || 0) - (r.returnReceivedQty || 0)));
+    if (OPEN_REQUEST_STATUSES.includes(r.status) && hasIssueSide(r.type)) {
       const products = await StockProductDefinitionModel.find({ categoryId: r.categoryId, isActive: true })
         .select("_id name trackingMethod unit")
         .sort({ name: 1 })
@@ -618,8 +771,10 @@ export default class StockItemRequestService {
   static async issue(id, body, user, session, dataAccess) {
     const request = await StockItemRequestService._load(id, session, dataAccess);
     if (!OPEN_REQUEST_STATUSES.includes(request.status)) throw new AppError("This request is no longer open for issuing", 400);
+    if (!hasIssueSide(request.type)) throw new AppError("Nothing is issued on a return request — receive it instead", 400);
     const before = request.toObject();
     const remaining = round3(request.requestedQty - request.issuedQty);
+    if (!(remaining > 0)) throw new AppError("Everything on this request has already been issued", 400);
 
     const products = await StockProductDefinitionModel.find({ categoryId: request.categoryId, isActive: true })
       .select("_id name trackingMethod unit")
@@ -631,6 +786,7 @@ export default class StockItemRequestService {
     const ctx = {
       now,
       assignedTo: {
+        kind: "SUBSCRIBER",
         subscriberId: request.subscriberId,
         orderId: request.subscriber.orderId,
         username: request.subscriber.username,
@@ -674,8 +830,8 @@ export default class StockItemRequestService {
     const by = personOf(user);
     request.issues.push({ at: now, by, lines: issueLines });
     request.issuedQty = round3(request.issuedQty + total);
-    const done = request.issuedQty >= request.requestedQty;
-    request.status = done ? ITEM_REQUEST_STATUS.COMPLETED : ITEM_REQUEST_STATUS.PARTIAL;
+    request.status = progressStatus(request);
+    const done = request.status === ITEM_REQUEST_STATUS.COMPLETED;
     request.history.push({
       action: "ISSUED",
       at: now,
@@ -693,11 +849,192 @@ export default class StockItemRequestService {
     return request.toObject();
   }
 
-  // Close a partly issued request for good — nothing more will be given on it.
+  /*
+    Receive — things coming back from the subscriber, each with the condition
+    it came back in, some or all of what is still due.
+      body: { lines: [{ returnLineId, quantity? (batch), condition: GOOD|FAULTY, note? }] }
+
+    GOOD goes back on the shelf as AVAILABLE; FAULTY becomes FAULTY with the
+    note, for the repair / warranty / scrap screens. Either way the stock lands
+    at the request's branch, is no longer anybody's, and gets a RETURNED row.
+    A batch coming back in part is split, like an issue in reverse: the part
+    received becomes its own document, the rest stays with the subscriber.
+  */
+  static async receive(id, body, user, session, dataAccess) {
+    const request = await StockItemRequestService._load(id, session, dataAccess);
+    if (!OPEN_REQUEST_STATUSES.includes(request.status)) throw new AppError("This request is no longer open", 400);
+    if (!hasReturnSide(request.type)) throw new AppError("Nothing comes back on an issue request", 400);
+    const before = request.toObject();
+
+    const inputs = Array.isArray(body?.lines) ? body.lines : [];
+    if (!inputs.length) throw new AppError("Choose at least one item that came back", 400);
+    if (new Set(inputs.map((l) => String(l?.returnLineId))).size !== inputs.length) throw new AppError("Invalid: an item is listed twice", 400);
+
+    const now = new Date();
+    const by = personOf(user);
+    const ref = { type: ITEM_MOVEMENT_REF.ITEM_REQUEST, refId: request._id, refNumber: request.requestNumber };
+    const from = `${request.subscriber.orderId}${request.subscriber.username ? ` · ${request.subscriber.username}` : ""}`;
+    const movements = [];
+    const receiptLines = [];
+    let total = 0;
+
+    for (const input of inputs) {
+      const line = request.returnLines.id(input?.returnLineId);
+      if (!line) throw new AppError("Invalid: an item does not belong to this request", 400);
+      const condition = String(input.condition || "").toUpperCase();
+      if (!RETURN_CONDITION_ARRAY.includes(condition)) throw new AppError(`${line.label}: say whether it came back good or faulty`, 400);
+      const note = text(input.note, 500);
+      if (condition === RETURN_CONDITION.FAULTY && !note) throw new AppError(`${line.label}: describe the fault`, 400);
+      const remaining = round3(line.requestedQty - line.receivedQty);
+      if (!(remaining > 0)) throw new AppError(`${line.label}: already received`, 400);
+
+      const isUnit = line.trackingMethod === TRACKING_METHODS.INDIVIDUAL;
+      const qty = isUnit ? 1 : round3(Number(input.quantity ?? remaining));
+      if (!(qty > 0) || qty > remaining) throw new AppError(`${line.productName}: receive between 0 and ${remaining}`, 400);
+
+      // Still with this subscriber — the guard against receiving the same
+      // thing twice, or something that has since moved on.
+      const held = await StockInventoryItemModel.findOne({
+        _id: line.inventoryItemId,
+        isActive: true,
+        status: ITEM_STATUS.ASSIGNED,
+        "assignedTo.subscriberId": request.subscriberId,
+      }).session(session);
+      if (!held || (!isUnit && held.quantity < qty))
+        throw new AppError(`${line.label}: no longer with this subscriber as requested — refresh`, 409);
+
+      const landed = {
+        status: condition === RETURN_CONDITION.GOOD ? ITEM_STATUS.AVAILABLE : ITEM_STATUS.FAULTY,
+        branchId: request.branchId,
+        condition: ITEM_CONDITION.USED,
+        assignedTo: null,
+        fault: condition === RETURN_CONDITION.FAULTY ? { reportedAt: now, note, via: `Return from ${from}`, requestNumber: request.requestNumber } : null,
+      };
+      const move = {
+        productDefinitionId: line.productDefinitionId,
+        type: ITEM_MOVEMENT_TYPE.RETURNED,
+        at: now,
+        toBranchId: request.branchId,
+        status: landed.status,
+        ref,
+        note: `Returned by ${from} · ${condition === RETURN_CONDITION.GOOD ? "Good" : `Faulty: ${note}`}`,
+      };
+
+      let landedId = held._id;
+      if (isUnit || qty === held.quantity) {
+        held.set(landed);
+        await held.save({ session });
+        movements.push({ ...move, inventoryItemId: held._id, quantity: isUnit ? null : qty });
+      } else {
+        held.quantity = round3(held.quantity - qty);
+        await held.save({ session });
+        const src = held.toObject();
+        const [back] = await StockInventoryItemModel.create(
+          [
+            {
+              productDefinitionId: src.productDefinitionId,
+              vendorId: src.vendorId,
+              invoiceId: src.invoiceId,
+              approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
+              isFoc: src.isFoc,
+              quantity: qty,
+              fieldValues: src.fieldValues,
+              source: src.source,
+              warranty: src.warranty,
+              purchaseCost: src.purchaseCost,
+              purchaseDate: src.purchaseDate,
+              legacy: src.legacy,
+              receivedAt: src.receivedAt,
+              receivedBy: src.receivedBy,
+              ...landed,
+            },
+          ],
+          { session }
+        );
+        landedId = back._id;
+        movements.push(
+          { ...move, inventoryItemId: back._id, quantity: qty, relatedItemId: held._id },
+          { ...move, inventoryItemId: held._id, quantity: qty, relatedItemId: back._id, status: ITEM_STATUS.ASSIGNED }
+        );
+      }
+
+      line.receivedQty = round3(line.receivedQty + qty);
+      total = round3(total + qty);
+      receiptLines.push({ returnLineId: line._id, productName: line.productName, label: line.label, quantity: qty, condition, note, inventoryItemId: landedId });
+    }
+
+    await StockItemMovementService.record(movements, session);
+
+    request.receipts.push({ at: now, by, lines: receiptLines });
+    request.returnReceivedQty = round3(request.returnReceivedQty + total);
+    request.status = progressStatus(request);
+    request.history.push({
+      action: "RECEIVED",
+      at: now,
+      byName: by.name,
+      note: receiptLines.map((l) => `${l.label} (${l.condition === RETURN_CONDITION.GOOD ? "good" : "faulty"})`).join(", "),
+    });
+    if (request.status === ITEM_REQUEST_STATUS.COMPLETED) request.history.push({ action: "COMPLETED", at: now, byName: by.name });
+    await request.save({ session });
+
+    await StockAuditLogService.recordAudit({
+      entityType: ENTITY_TYPE, entityId: request._id, action: "RECEIVE", actor: user, before, after: request.toObject(),
+    });
+    return request.toObject();
+  }
+
+  /*
+    What a subscriber holds right now, for the requester to pick a Return or
+    Replace from — with any open request that already claims an item, so the
+    website can grey it out.
+  */
+  static async holdingsForRequester(channel, orderId) {
+    assertChannel(channel);
+    const sub = await StockSubscriberModel.findOne({ channel, orderIdKey: String(orderId || "").trim().toUpperCase() }).lean();
+    if (!sub) return { subscriber: null, items: [] };
+    const items = await StockInventoryItemModel.find({ isActive: true, status: ITEM_STATUS.ASSIGNED, "assignedTo.subscriberId": sub._id })
+      .populate({ path: "productDefinitionId", select: "name categoryId trackingMethod unit" })
+      .sort({ "assignedTo.assignedAt": -1 })
+      .lean();
+    const open = await StockItemRequestModel.find({
+      isActive: true,
+      status: { $in: OPEN_REQUEST_STATUSES },
+      "returnLines.inventoryItemId": { $in: items.map((i) => i._id) },
+    })
+      .select("requestNumber returnLines.inventoryItemId")
+      .lean();
+    const claimedBy = new Map();
+    open.forEach((r) => r.returnLines.forEach((l) => claimedBy.set(String(l.inventoryItemId), r.requestNumber)));
+
+    const categoryIds = [...new Set(items.map((i) => String(i.productDefinitionId?.categoryId)).filter(Boolean))];
+    const cats = await StockCategoryModel.find({ _id: { $in: categoryIds } }).select("path").lean();
+    const pathById = new Map();
+    for (const c of cats) pathById.set(String(c._id), await StockCategoryService.buildDisplayPath(c.path));
+
+    return {
+      subscriber: { orderId: sub.orderId, username: sub.username, serviceType: sub.serviceType },
+      items: items.map((i) => ({
+        inventoryItemId: i._id,
+        productName: i.productDefinitionId?.name || "",
+        categoryId: i.productDefinitionId?.categoryId || null,
+        categoryPath: pathById.get(String(i.productDefinitionId?.categoryId)) || "",
+        trackingMethod: i.quantity === null || i.quantity === undefined ? TRACKING_METHODS.INDIVIDUAL : TRACKING_METHODS.QUANTITY,
+        unit: i.productDefinitionId?.unit || null,
+        label: unitLabel(i),
+        quantity: i.quantity,
+        branchId: i.branchId,
+        issuedOn: i.assignedTo?.requestNumber || "",
+        assignedAt: i.assignedTo?.assignedAt || null,
+        claimedBy: claimedBy.get(String(i._id)) || null,
+      })),
+    };
+  }
+
+  // Close a partly done request for good — nothing more will move on it.
   static async shortClose(id, reason, user, session, dataAccess) {
     const request = await StockItemRequestService._load(id, session, dataAccess);
     if (request.status !== ITEM_REQUEST_STATUS.PARTIAL)
-      throw new AppError("Only a partly issued request can be short-closed — reject it if nothing was issued", 400);
+      throw new AppError("Only a partly done request can be short-closed — reject it if nothing has moved on it yet", 400);
     const why = text(reason, 500);
     if (!why) throw new AppError("A reason is required to short-close", 400);
     const before = request.toObject();
@@ -719,7 +1056,7 @@ export default class StockItemRequestService {
   static async reject(id, reason, user, session, dataAccess) {
     const request = await StockItemRequestService._load(id, session, dataAccess);
     if (request.status !== ITEM_REQUEST_STATUS.PENDING)
-      throw new AppError("Only a pending request can be rejected — short-close it if some items were issued", 400);
+      throw new AppError("Only a pending request can be rejected — short-close it if something has already moved on it", 400);
     const why = text(reason, 500);
     if (!why) throw new AppError("A reason is required to reject", 400);
     const before = request.toObject();

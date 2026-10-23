@@ -3,6 +3,8 @@ import { successResponseHandler, errorResponseHandler } from "../helpers/respons
 import { paginateReturn } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockInvoicePaymentService from "../services/stock.invoice.payment.service.js";
+import { emitAlertEvent, refreshAlerts } from "../services/stock.alert.dispatcher.service.js";
+import { DEBIT_NOTE_STATUS, PAYMENT_APPROVAL_STATUS } from "../constants/stock.enums.js";
 import { groupProofsBySplit, deletePaymentProofFile } from "../helpers/stock.payment.upload.helper.js";
 import {
   validateSchedulePayment,
@@ -41,6 +43,36 @@ const log = getLogger(import.meta.url);
   own chain: raised on the Invoice List, reviewed on Payments, decided on
   Payment Approval — each step through its own module and action.
 */
+/*
+  Alerts after a debit-note / payment-approval write. Read off the record's
+  NEW status rather than the action, so every path into a state (raise,
+  resubmit, review send, review reject) alerts the same way. Running chains
+  of the record — and of its invoice, whose payment request a debit note can
+  pull back — are re-checked first.
+*/
+const DEBIT_NOTE_EVENT = {
+  [DEBIT_NOTE_STATUS.REVIEW_PENDING]: "DEBIT_NOTE_RAISED",
+  [DEBIT_NOTE_STATUS.APPROVAL_PENDING]: "DEBIT_NOTE_SENT_FOR_APPROVAL",
+  [DEBIT_NOTE_STATUS.REVIEW_REJECTED]: "DEBIT_NOTE_REVIEW_REJECTED",
+};
+const debitNoteAlerts = (req, dn) => {
+  if (!dn?._id) return;
+  refreshAlerts(dn._id);
+  if (dn.invoiceId) refreshAlerts(dn.invoiceId);
+  const event = DEBIT_NOTE_EVENT[dn.status];
+  if (event) emitAlertEvent(event, dn._id, { actor: req.user });
+};
+const PAYMENT_EVENT = {
+  [PAYMENT_APPROVAL_STATUS.PENDING]: "PAYMENT_APPROVAL_REQUESTED",
+  [PAYMENT_APPROVAL_STATUS.REJECTED]: "PAYMENT_APPROVAL_REJECTED",
+};
+const paymentAlerts = (req, invoice) => {
+  if (!invoice?._id) return;
+  refreshAlerts(invoice._id);
+  const event = PAYMENT_EVENT[invoice.paymentApprovalStatus];
+  if (event) emitAlertEvent(event, invoice._id, { actor: req.user });
+};
+
 const MODULE = {
   INVOICE_LIST: "invoice-list",
   PAYMENTS: "payments",
@@ -52,13 +84,21 @@ export default class StockInvoicePaymentController {
     Every write here is one transaction with the same commit/abort shape, so it
     is written once — the same pattern as StockTrackingOrderController.txn.
   */
-  static txn(run, okMessage) {
+  static txn(run, okMessage, after) {
     return async (req, res) => {
       const session = await mongoose.startSession();
       try {
         session.startTransaction();
         const data = await run(req, session);
         await session.commitTransaction();
+        // Side effects that must only follow a committed write (alerts).
+        if (after) {
+          try {
+            after(req, data);
+          } catch (err) {
+            log.error(okMessage + " — after-commit step failed", err);
+          }
+        }
         successResponseHandler(res, data, okMessage);
       } catch (error) {
         await session.abortTransaction();
@@ -236,7 +276,8 @@ export default class StockInvoicePaymentController {
         req.params.id, req.body, req.user, session, req.dataAccess, MODULE.INVOICE_LIST
       );
     },
-    "Debit note raised"
+    "Debit note raised",
+    debitNoteAlerts
   );
 
   // :id is the DEBIT NOTE.
@@ -247,7 +288,8 @@ export default class StockInvoicePaymentController {
         req.params.id, req.body, req.user, session, req.dataAccess, MODULE.INVOICE_LIST
       );
     },
-    "Debit note resubmitted"
+    "Debit note resubmitted",
+    debitNoteAlerts
   );
 
   static withdrawDebitNote = StockInvoicePaymentController.txn(
@@ -255,7 +297,8 @@ export default class StockInvoicePaymentController {
       StockInvoicePaymentService.withdrawDebitNote(
         req.params.id, req.body, req.user, session, req.dataAccess, MODULE.INVOICE_LIST
       ),
-    "Debit note withdrawn"
+    "Debit note withdrawn",
+    debitNoteAlerts
   );
 
   static reviewDebitNote = StockInvoicePaymentController.txn(
@@ -265,7 +308,8 @@ export default class StockInvoicePaymentController {
         req.params.id, req.body, req.user, session, req.dataAccess, MODULE.PAYMENTS
       );
     },
-    "Debit note reviewed"
+    "Debit note reviewed",
+    debitNoteAlerts
   );
 
   static decideDebitNote = StockInvoicePaymentController.txn(
@@ -275,7 +319,8 @@ export default class StockInvoicePaymentController {
         req.params.id, req.body, req.user, session, req.dataAccess, MODULE.PAYMENT_APPROVAL
       );
     },
-    "Debit note decision saved"
+    "Debit note decision saved",
+    debitNoteAlerts
   );
 
   static updateMisc = StockInvoicePaymentController.txn(
@@ -299,7 +344,8 @@ export default class StockInvoicePaymentController {
       StockInvoicePaymentService.sendForPaymentApproval(
         req.params.id, req.body, req.user, session, req.dataAccess, MODULE.PAYMENTS
       ),
-    "Sent for payment approval"
+    "Sent for payment approval",
+    paymentAlerts
   );
 
   static decideApproval = StockInvoicePaymentController.txn(
@@ -309,7 +355,8 @@ export default class StockInvoicePaymentController {
         req.params.id, req.body, req.user, session, req.dataAccess, MODULE.PAYMENT_APPROVAL
       );
     },
-    "Payment approval decision saved"
+    "Payment approval decision saved",
+    paymentAlerts
   );
 
   /*

@@ -83,10 +83,29 @@ const MODULE_DEFINITIONS = [
   // Subscribers' requests for stock. Issuing, short-closing and rejecting are
   // separate actions: the person handing over units need not be the one who
   // may refuse a request outright.
-  { key: "item-requests", name: "Item Requests", actions: withMenu(["READ", "ISSUE", "SHORT_CLOSE", "REJECT"]) },
+  { key: "item-requests", name: "Item Requests", actions: withMenu(["READ", "ISSUE", "RECEIVE", "SHORT_CLOSE", "REJECT"]) },
+  // Our broken units. REPORT (mark a shelf unit faulty) is held by store staff;
+  // MANAGE (repair / warranty claim / outcome) by whoever runs repairs; SCRAP —
+  // writing an asset off — separately again.
+  { key: "repairs", name: "Repair & Warranty", actions: withMenu(["READ", "REPORT", "MANAGE", "SCRAP"]) },
+  // Stock with our own people — handing out and taking back are separate.
+  { key: "employee-items", name: "Employee Items", actions: withMenu(["READ", "ASSIGN", "RETURN"]) },
+  // Read-only inventory reports — position, value, warranty, subscribers, repairs.
+  { key: "stock-reports", name: "Stock Reports", actions: withMenu(["READ"]) },
   // 🧪 TEST ONLY — plays the requesting website. Remove when the real one is live.
   { key: "test-simulator", name: "Request Simulator (Test)", actions: withMenu(["READ", "CREATE", "REQUEST"]) },
-  { key: "notifications", name: "Notifications", actions: withMenu(STANDARD_ACTIONS) },
+
+  /*
+    Alerts & Escalations — one module per tab, so each page can be granted on
+    its own (support may read the Message Log without touching rules). TEST
+    sends a real message, so it is its own action, apart from UPDATE.
+  */
+  { key: "alert-channels", name: "Alerts · Channels", actions: withMenu(["READ", "UPDATE", "TEST"]) },
+  { key: "alert-contacts", name: "Alerts · Contacts & Groups", actions: withMenu(["CREATE", "READ", "UPDATE", "DELETE"]) },
+  { key: "alert-templates", name: "Alerts · Templates", actions: withMenu(["CREATE", "READ", "UPDATE", "DELETE", "TEST"]) },
+  { key: "alert-rules", name: "Alerts · Rules", actions: withMenu(["CREATE", "READ", "UPDATE", "DELETE"]) },
+  { key: "alert-escalations", name: "Alerts · Escalations", actions: withMenu(["READ", "STOP"]) },
+  { key: "alert-log", name: "Alerts · Message Log", actions: withMenu(["READ", "RESEND", "CANCEL"]) },
 ];
 
 export const seedModules = async () => {

@@ -65,7 +65,17 @@ const LISTABLE_CARD_STATUSES = [ITEM_STATUS.AVAILABLE, ITEM_STATUS.RESERVED, ITE
 // Statuses only their own flow may set or clear — each carries data that flow
 // keeps in step (assignedTo, a debit note's draws, the opening-stock note).
 // Changing one by hand would leave that data saying something untrue.
-const FLOW_OWNED_STATUSES = [ITEM_STATUS.ASSIGNED, ITEM_STATUS.RESERVED, ITEM_STATUS.DEBITED];
+const FLOW_OWNED_STATUSES = [
+  ITEM_STATUS.ASSIGNED,
+  ITEM_STATUS.RESERVED,
+  ITEM_STATUS.DEBITED,
+  // Repair & Warranty — see StockRepairService.
+  ITEM_STATUS.FAULTY,
+  ITEM_STATUS.IN_REPAIR,
+  ITEM_STATUS.AT_VENDOR,
+  ITEM_STATUS.VENDOR_REPLACED,
+  ITEM_STATUS.SCRAPPED,
+];
 
 export default class StockInventoryItemService {
   // ─── Validate fieldValues against productDefinition ──────────────────────────
