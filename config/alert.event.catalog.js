@@ -75,7 +75,8 @@ const buildQuotation = (q) => {
   const rejected = (q.categoryApprovals || []).filter((c) => c.status === "REJECTED");
   return {
     ref: q.quotationNumber || "",
-    link: link("/stock/quotations", q.quotationNumber),
+    // Pending → straight to the approval screen; decided → the list.
+    link: link(q.status === QUOTATION_STATUS.PENDING ? "/stock/quotations/approval" : "/stock/quotations/list", q.quotationNumber),
     amount,
     branchId: null,
     vendorIds: uniq(items.map((it) => it.vendorId)),
