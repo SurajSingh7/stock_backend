@@ -30,14 +30,13 @@ const VALIDATED_ROWS = MAX_ROWS + 1;
 const fixedColumns = (isQuantity) => [
   ...(isQuantity ? [{ key: "quantity", label: "Quantity *", width: 12 }] : []),
   { key: "condition", label: "Condition (NEW / USED)", width: 22 },
+  { key: "workingState", label: "Working State", width: 22 },
+  { key: "faultNote", label: "Fault / Reason (if not working)", width: 32 },
   { key: "vendor", label: "Vendor (exact name)", width: 28 },
   { key: "purchaseDate", label: "Purchase Date (DD-MM-YYYY)", width: 24, date: true },
   { key: "purchaseCost", label: "Purchase Cost (per unit)", width: 22 },
   { key: "warrantyMonths", label: "Warranty Months", width: 16 },
   { key: "warrantyEndDate", label: "OR Warranty End Date (DD-MM-YYYY)", width: 30, date: true },
-  { key: "heldBy", label: "Currently With (name / emp code)", width: 30 },
-  { key: "lastUsedBy", label: "Last Used By (before system)", width: 28 },
-  { key: "historyRemarks", label: "Past History / Remarks", width: 36 },
 ];
 
 /**
@@ -74,6 +73,9 @@ export async function buildOpeningStockTemplate({ product, fields, vendors }) {
   const lists = wb.addWorksheet(LISTS, { state: "veryHidden" });
   lists.getCell("A1").value = "NEW";
   lists.getCell("A2").value = "USED";
+  lists.getCell("C1").value = "Working";
+  lists.getCell("C2").value = "Faulty (Repairable)";
+  lists.getCell("C3").value = "Beyond Repair (Dead)";
   vendors.forEach((v, i) => (lists.getCell(`B${i + 1}`).value = v.name));
 
   columns.forEach((c, idx) => {
@@ -84,6 +86,8 @@ export async function buildOpeningStockTemplate({ product, fields, vendors }) {
       const cell = ws.getCell(r, idx + 1);
       if (c.key === "condition") {
         cell.dataValidation = { type: "list", allowBlank: true, formulae: [`${LISTS}!$A$1:$A$2`] };
+      } else if (c.key === "workingState") {
+        cell.dataValidation = { type: "list", allowBlank: true, formulae: [`${LISTS}!$C$1:$C$3`] };
       } else if (c.key === "vendor" && vendors.length) {
         cell.dataValidation = {
           type: "list",
@@ -111,9 +115,9 @@ export async function buildOpeningStockTemplate({ product, fields, vendors }) {
     "One row = one unit" + (isQuantity ? " batch (fill Quantity)." : " (one serial / MAC per row)."),
     "Columns marked * must be filled. Columns marked (unique) can never repeat — at least one of them is needed per unit.",
     "Condition: NEW or USED. Blank means USED.",
+    "Working State: Working, Faulty (Repairable) or Beyond Repair (Dead). Blank means Working. Faulty goes to Repair & Warranty; Beyond Repair (Dead) is kept on record as scrapped. Either needs a Fault / Reason.",
     "Warranty: give EITHER Warranty Months (counted from Purchase Date) OR a Warranty End Date. Leave both blank if unknown.",
-    "Currently With: fill only if the item is with an employee right now — it will be kept RESERVED until assigned.",
-    "Last Used By / Past History: anything known from before this system. Optional.",
+    "Only stock that is in the store goes here. Stock already with an employee or a subscriber goes in Opening Issued Stock.",
     `Up to ${MAX_ROWS} rows per upload. Do not rename or reorder the columns.`,
   ].forEach((line, i) => (help.getCell(`A${i + 1}`).value = line));
   help.getColumn(1).width = 120;

@@ -9,6 +9,7 @@ import StockBranchService from "./stock.branch.service.js";
 import StockItemIdentityService from "./stock.item.identity.service.js";
 import StockItemMovementService from "./stock.item.movement.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
+import StockPeopleDirectoryService from "./stock.people.directory.service.js";
 import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import { nextDocumentNumber } from "../helpers/document.number.helper.js";
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
@@ -23,7 +24,11 @@ import {
   ITEM_CONDITION,
   ITEM_CONDITION_ARRAY,
   ITEM_MOVEMENT_REF,
+  ITEM_MOVEMENT_TYPE,
+  ASSIGNEE_KIND,
   OPENING_STOCK_STATUS,
+  OPENING_STOCK_STATE,
+  OPENING_STOCK_KIND,
 } from "../constants/stock.enums.js";
 
 /*
@@ -43,16 +48,39 @@ import {
 
   Posting is the only step that touches stock: one inventory item per line,
   stamped OPENING_STOCK, plus its first timeline row.
+
+  Two kinds of entry share all of this (see OPENING_STOCK_KIND), each its own
+  screen and module:
+    STORE   Opening Stock — in the store; Working / Faulty / Beyond Repair
+    ISSUED  Opening Issued Stock — already with ONE person from the People
+            Directory; every line is a working, used unit, and posting makes
+            it ASSIGNED to them as if it had been issued here
 */
 
-const MODULE_KEY = "opening-stock";
 const ENTITY_TYPE = "opening-stock";
 const TEXT_MAX = 300;
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const assertDataScope = (entry, dataAccess) => {
-  if (!isWithinDataScope(entry, dataAccess, MODULE_KEY)) throw new Error("Opening stock entry not found");
+const KIND = {
+  [OPENING_STOCK_KIND.STORE]: { moduleKey: "opening-stock", prefix: "OS" },
+  [OPENING_STOCK_KIND.ISSUED]: { moduleKey: "opening-issued-stock", prefix: "OI" },
 };
+const kindOf = (kind) => (kind === OPENING_STOCK_KIND.ISSUED ? OPENING_STOCK_KIND.ISSUED : OPENING_STOCK_KIND.STORE);
+const isIssued = (entry) => entry.kind === OPENING_STOCK_KIND.ISSUED;
+// Entries from before ISSUED existed have no `kind` and are STORE.
+const kindFilter = (kind) => (kind === OPENING_STOCK_KIND.ISSUED ? OPENING_STOCK_KIND.ISSUED : { $ne: OPENING_STOCK_KIND.ISSUED });
+
+// Wrong kind is "not found" too — an issued entry is not reachable through
+// the Opening Stock screen's module, and the other way round.
+const assertDataScope = (entry, dataAccess, kind) => {
+  if (kindOf(entry.kind) !== kind || !isWithinDataScope(entry, dataAccess, KIND[kind].moduleKey))
+    throw new Error("Opening stock entry not found");
+};
+
+const who = (p) =>
+  p.kind === ASSIGNEE_KIND.EMPLOYEE
+    ? `${p.name}${p.employeeCode ? ` (${p.employeeCode})` : ""}`
+    : `${p.orderId}${p.username || p.name ? ` · ${p.username || p.name}` : ""}`;
 
 /* ── Coercion ─────────────────────────────────────────────────────────────── */
 
@@ -93,7 +121,24 @@ const toNumber = (v, label, { integer = false, positive = false } = {}) => {
   return n;
 };
 
-const toText = (v) => (v === undefined || v === null ? "" : String(v).trim().slice(0, TEXT_MAX));
+const toText = (v, max = TEXT_MAX) => (v === undefined || v === null ? "" : String(v).trim().slice(0, max));
+
+// "Faulty (Repairable)", "beyond repair", "BEYOND_REPAIR" … → the enum value.
+// Blank means WORKING; anything else unrecognised is refused.
+const toWorkingState = (v) => {
+  const s = String(v ?? "").trim().toUpperCase().replace(/[^A-Z]+/g, "_").replace(/^_|_$/g, "");
+  if (!s || s === "WORKING") return OPENING_STOCK_STATE.WORKING;
+  if (s.startsWith("FAULTY")) return OPENING_STOCK_STATE.FAULTY;
+  if (s.startsWith("BEYOND") || s === "DEAD" || s === "BER") return OPENING_STOCK_STATE.BEYOND_REPAIR;
+  throw new AppError(`Working state "${v}" is not valid — use Working, Faulty (Repairable) or Beyond Repair (Dead)`, 400);
+};
+
+// What a posted line becomes.
+const postedStatus = (line) => {
+  if (line.workingState === OPENING_STOCK_STATE.FAULTY) return ITEM_STATUS.FAULTY;
+  if (line.workingState === OPENING_STOCK_STATE.BEYOND_REPAIR) return ITEM_STATUS.SCRAPPED;
+  return ITEM_STATUS.AVAILABLE;
+};
 
 const ymd = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null);
 
@@ -162,7 +207,9 @@ export default class StockOpeningStockService {
   /* ---------------------------------------------------------------------- */
 
   // One input line → the stored shape. Throws only on MALFORMED input.
-  static _buildLine(input, { products, vendors }, where) {
+  // `issued`: an Opening Issued Stock line — someone is using it, so it is a
+  // working, used unit whatever was sent.
+  static _buildLine(input, { products, vendors }, where, { issued = false } = {}) {
     const product = products.get(String(input?.productDefinitionId || ""));
     if (!product) throw new AppError(`${where}product not found`, 400);
     const { def, fields } = product;
@@ -189,10 +236,11 @@ export default class StockOpeningStockService {
     if (warrantyMonths !== null && !isValidWarrantyMonths(warrantyMonths))
       throw new AppError(`${where}Warranty months must be between 1 and ${WARRANTY_MONTHS_MAX}`, 400);
 
-    const condition = ITEM_CONDITION_ARRAY.includes(String(input.condition || "").toUpperCase())
-      ? String(input.condition).toUpperCase()
-      : ITEM_CONDITION.USED;
-    const heldBy = toText(input.heldBy);
+    const condition =
+      !issued && ITEM_CONDITION_ARRAY.includes(String(input.condition || "").toUpperCase())
+        ? String(input.condition).toUpperCase()
+        : ITEM_CONDITION.USED;
+    const workingState = issued ? OPENING_STOCK_STATE.WORKING : toWorkingState(input.workingState);
 
     return {
       ...(input._id && mongoose.isValidObjectId(input._id) ? { _id: input._id } : {}),
@@ -208,18 +256,35 @@ export default class StockOpeningStockService {
       purchaseCost: toNumber(input.purchaseCost, `${where}Purchase cost`),
       warrantyMonths,
       warrantyEndDate: toDate(input.warrantyEndDate, `${where}Warranty end date`),
-      // A unit that is with someone right now is, by definition, in use.
-      condition: heldBy ? ITEM_CONDITION.USED : condition,
-      heldBy,
-      lastUsedBy: toText(input.lastUsedBy),
-      historyRemarks: toText(input.historyRemarks),
+      condition,
+      workingState,
+      faultNote: workingState === OPENING_STOCK_STATE.WORKING ? "" : toText(input.faultNote, 500),
     };
   }
 
-  static async _buildLines(inputs, session) {
+  static async _buildLines(inputs, session, kind = OPENING_STOCK_KIND.STORE) {
     const products = await loadProducts(inputs.map((l) => l?.productDefinitionId), session);
     const vendors = await loadVendors(inputs.map((l) => l?.vendorId), session);
-    return inputs.map((l, i) => StockOpeningStockService._buildLine(l, { products, vendors }, `Line ${i + 1}: `));
+    const issued = kind === OPENING_STOCK_KIND.ISSUED;
+    return inputs.map((l, i) => StockOpeningStockService._buildLine(l, { products, vendors }, `Line ${i + 1}: `, { issued }));
+  }
+
+  /*
+    ISSUED only — who the entry's stock is with, and since when. The person is
+    looked up in the directory, never taken from the request.
+  */
+  static async _issuedFields(body, entryDate, session) {
+    const out = {};
+    if (body.personId !== undefined) {
+      const person = await StockPeopleDirectoryService.getActive(body.personId, session);
+      out.issuedTo = StockPeopleDirectoryService.snapshotOf(person);
+    }
+    if (body.issuedSince !== undefined) {
+      const since = toDate(body.issuedSince, "Issued since");
+      if (since && entryDate && since > entryDate) throw new AppError("Issued since can't be after the entry date", 400);
+      out.issuedSince = since;
+    }
+    return out;
   }
 
   /* ---------------------------------------------------------------------- */
@@ -256,6 +321,9 @@ export default class StockOpeningStockService {
 
       if (line.warrantyMonths && line.warrantyEndDate) messages[i].push("Give warranty months OR an end date, not both");
       if (line.warrantyMonths && !line.purchaseDate) messages[i].push("Purchase date is needed to count warranty months");
+
+      const working = !line.workingState || line.workingState === OPENING_STOCK_STATE.WORKING;
+      if (!working && !line.faultNote) messages[i].push("Describe the fault");
     });
 
     // Repeated inside this entry.
@@ -351,16 +419,23 @@ export default class StockOpeningStockService {
   /* CRUD                                                                   */
   /* ---------------------------------------------------------------------- */
 
-  static async list({ skip, limit, status, branchId, search }, dataAccess) {
-    const filter = { isActive: true };
+  static async list({ skip, limit, status, branchId, search, kind }, dataAccess) {
+    const k = kindOf(kind);
+    const filter = { isActive: true, kind: kindFilter(k) };
     if (status && Object.values(OPENING_STOCK_STATUS).includes(status)) filter.status = status;
     if (branchId && mongoose.isValidObjectId(branchId)) filter.branchId = branchId;
-    if (search) filter.entryNumber = { $regex: escapeRegex(search), $options: "i" };
-    applyDataScope(filter, dataAccess, MODULE_KEY);
+    if (search) {
+      const rx = { $regex: escapeRegex(search), $options: "i" };
+      filter.$or =
+        k === OPENING_STOCK_KIND.ISSUED
+          ? [{ entryNumber: rx }, { "issuedTo.name": rx }, { "issuedTo.employeeCode": rx }, { "issuedTo.orderId": rx }, { "issuedTo.username": rx }]
+          : [{ entryNumber: rx }];
+    }
+    applyDataScope(filter, dataAccess, KIND[k].moduleKey);
 
     const [rows, total] = await Promise.all([
       StockOpeningStockModel.find(filter)
-        .select("entryNumber branchId entryDate remarks status postedAt postedBy createdBy createdAt lines.quantity lines.trackingMethod lines.heldBy")
+        .select("entryNumber kind branchId entryDate remarks status issuedTo issuedSince postedAt postedBy createdBy createdAt lines.quantity lines.trackingMethod lines.workingState")
         .populate({ path: "branchId", select: "name code" })
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -373,32 +448,42 @@ export default class StockOpeningStockService {
       ...r,
       lineCount: lines.length,
       unitCount: lines.filter((l) => l.trackingMethod === TRACKING_METHODS.INDIVIDUAL).length,
-      reservedCount: lines.filter((l) => l.heldBy).length,
+      faultyCount: lines.filter((l) => l.workingState === OPENING_STOCK_STATE.FAULTY).length,
+      beyondRepairCount: lines.filter((l) => l.workingState === OPENING_STOCK_STATE.BEYOND_REPAIR).length,
     }));
     return { data, total };
   }
 
-  static async getById(id, dataAccess) {
+  static async getById(id, kind, dataAccess) {
     const entry = await StockOpeningStockModel.findOne({ _id: id, isActive: true })
       .populate({ path: "branchId", select: "name code" })
       .lean();
     if (!entry) throw new Error("Opening stock entry not found");
-    assertDataScope({ ...entry, branchId: entry.branchId?._id }, dataAccess);
+    assertDataScope({ ...entry, branchId: entry.branchId?._id }, dataAccess, kindOf(kind));
     return StockOpeningStockService._withIssues(entry);
   }
 
-  static async create(body, user, session, dataAccess) {
+  static async create(body, kind, user, session, dataAccess) {
+    const k = kindOf(kind);
     const branchId = await StockBranchService.assertBranchInScope(body.branchId, dataAccess, session);
-    const lines = await StockOpeningStockService._buildLines(body.lines || [], session);
-    const entryNumber = await nextDocumentNumber({ model: StockOpeningStockModel, field: "entryNumber", prefix: "OS", session });
+    const lines = await StockOpeningStockService._buildLines(body.lines || [], session, k);
+    const entryDate = toDate(body.entryDate, "Entry date") || toDate(new Date(), "Entry date");
+    let issued = {};
+    if (k === OPENING_STOCK_KIND.ISSUED) {
+      if (!body.personId) throw new AppError("Choose who has these items", 400);
+      issued = await StockOpeningStockService._issuedFields(body, entryDate, session);
+    }
+    const entryNumber = await nextDocumentNumber({ model: StockOpeningStockModel, field: "entryNumber", prefix: KIND[k].prefix, session });
 
     const [entry] = await StockOpeningStockModel.create(
       [
         {
           entryNumber,
+          kind: k,
           branchId,
-          entryDate: toDate(body.entryDate, "Entry date") || toDate(new Date(), "Entry date"),
+          entryDate,
           remarks: toText(body.remarks),
+          ...issued,
           lines,
         },
       ],
@@ -410,22 +495,27 @@ export default class StockOpeningStockService {
     return StockOpeningStockService._withIssues(entry, session);
   }
 
-  static async _loadDraft(id, session, dataAccess) {
+  static async _loadDraft(id, kind, session, dataAccess) {
     const entry = await StockOpeningStockModel.findOne({ _id: id, isActive: true }).session(session);
     if (!entry) throw new Error("Opening stock entry not found");
-    assertDataScope(entry, dataAccess);
+    assertDataScope(entry, dataAccess, kindOf(kind));
     if (entry.status !== OPENING_STOCK_STATUS.DRAFT) throw new AppError("Only a draft entry can be changed — this one is already posted", 400);
     return entry;
   }
 
-  static async update(id, body, user, session, dataAccess) {
-    const entry = await StockOpeningStockService._loadDraft(id, session, dataAccess);
+  static async update(id, body, kind, user, session, dataAccess) {
+    const entry = await StockOpeningStockService._loadDraft(id, kind, session, dataAccess);
     const before = entry.toObject();
 
     if (body.branchId !== undefined) entry.branchId = await StockBranchService.assertBranchInScope(body.branchId, dataAccess, session);
     if (body.entryDate !== undefined) entry.entryDate = toDate(body.entryDate, "Entry date") || entry.entryDate;
     if (body.remarks !== undefined) entry.remarks = toText(body.remarks);
-    if (body.lines !== undefined) entry.lines = await StockOpeningStockService._buildLines(body.lines, session);
+    if (body.lines !== undefined) entry.lines = await StockOpeningStockService._buildLines(body.lines, session, kindOf(entry.kind));
+    if (isIssued(entry)) {
+      if (body.personId === null || body.personId === "") throw new AppError("Choose who has these items", 400);
+      entry.set(await StockOpeningStockService._issuedFields(body, entry.entryDate, session));
+      if (entry.issuedSince && entry.issuedSince > entry.entryDate) throw new AppError("Issued since can't be after the entry date", 400);
+    }
 
     await entry.save({ session });
     await StockAuditLogService.recordAudit({
@@ -434,8 +524,8 @@ export default class StockOpeningStockService {
     return StockOpeningStockService._withIssues(entry, session);
   }
 
-  static async remove(id, user, session, dataAccess) {
-    const entry = await StockOpeningStockService._loadDraft(id, session, dataAccess);
+  static async remove(id, kind, user, session, dataAccess) {
+    const entry = await StockOpeningStockService._loadDraft(id, kind, session, dataAccess);
     const before = entry.toObject();
     entry.isActive = false;
     entry.deletedAt = new Date();
@@ -451,8 +541,8 @@ export default class StockOpeningStockService {
   /* Post — the one step that creates stock                                 */
   /* ---------------------------------------------------------------------- */
 
-  static async post(id, user, session, dataAccess) {
-    const entry = await StockOpeningStockService._loadDraft(id, session, dataAccess);
+  static async post(id, kind, user, session, dataAccess) {
+    const entry = await StockOpeningStockService._loadDraft(id, kind, session, dataAccess);
     if (!entry.lines.length) throw new AppError("Add at least one item before posting", 400);
     const before = entry.toObject();
 
@@ -460,6 +550,28 @@ export default class StockOpeningStockService {
     if (issues.length) {
       const sample = issues.slice(0, 3).map((r) => `line ${r.index + 1}: ${r.messages[0]}`).join("; ");
       throw new AppError(`${issues.length} line(s) need fixing before posting — ${sample}`, 400);
+    }
+
+    /*
+      ISSUED: the person as the directory has them now (the snapshot is
+      refreshed), and — for a subscriber — their row in the subscriber
+      registry, so the website sees these units when it asks what they hold.
+    */
+    let assignedTo = null;
+    let person = null;
+    if (isIssued(entry)) {
+      if (!entry.issuedTo?.personId) throw new AppError("Choose who has these items before posting", 400);
+      person = await StockPeopleDirectoryService.getActive(entry.issuedTo.personId, session);
+      const subscriber = await StockPeopleDirectoryService.ensureSubscriber(person, session);
+      entry.issuedTo = StockPeopleDirectoryService.snapshotOf(person);
+      assignedTo = {
+        ...StockPeopleDirectoryService.assigneeOf(person, {
+          subscriberId: subscriber?._id || null,
+          assignedAt: entry.issuedSince || entry.entryDate,
+          note: `Opening issued stock ${entry.entryNumber}`,
+        }),
+        requestNumber: entry.entryNumber,
+      };
     }
 
     const products = await loadProducts(before.lines.map((l) => l.productDefinitionId), session);
@@ -471,7 +583,7 @@ export default class StockOpeningStockService {
         productDefinitionId: line.productDefinitionId,
         vendorId: line.vendorId || null,
         branchId: entry.branchId,
-        status: line.heldBy ? ITEM_STATUS.RESERVED : ITEM_STATUS.AVAILABLE,
+        status: assignedTo ? ITEM_STATUS.ASSIGNED : postedStatus(line),
         approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
         fieldValues: line.fieldValues || {},
         identifiers: keys.length ? keys : undefined,
@@ -485,8 +597,13 @@ export default class StockOpeningStockService {
           months: line.warrantyMonths ?? null,
           endDate: line.warrantyEndDate || warrantyEndDate(line.purchaseDate, line.warrantyMonths),
         },
-        legacy: { lastUsedBy: line.lastUsedBy || "", remarks: line.historyRemarks || "" },
-        heldByNote: line.heldBy || "",
+        assignedTo,
+        // Faulty → straight into Repair & Warranty; beyond repair → on record only.
+        fault:
+          line.workingState === OPENING_STOCK_STATE.FAULTY
+            ? { reportedAt: entry.entryDate, note: line.faultNote, via: `Opening stock ${entry.entryNumber}`, requestNumber: "" }
+            : null,
+        scrapNote: line.workingState === OPENING_STOCK_STATE.BEYOND_REPAIR ? line.faultNote : "",
         receivedAt: entry.entryDate,
         receivedBy: user?._id || user?.id || null,
       };
@@ -506,12 +623,33 @@ export default class StockOpeningStockService {
     };
     await entry.save({ session });
 
+    const ref = { type: ITEM_MOVEMENT_REF.OPENING_STOCK, refId: entry._id, refNumber: entry.entryNumber };
+    // An issued unit's timeline reads like one issued here: received into
+    // stock, then handed to the person — both on the entry date, the second
+    // saying since when they really have had it.
     await StockItemMovementService.recordReceived(
-      items,
-      { type: ITEM_MOVEMENT_REF.OPENING_STOCK, refId: entry._id, refNumber: entry.entryNumber },
+      person ? items.map((it) => ({ ...it.toObject(), status: ITEM_STATUS.AVAILABLE })) : items,
+      ref,
       session,
       { at: entry.entryDate }
     );
+    if (person) {
+      const since = entry.issuedSince ? ` since ${ymd(entry.issuedSince).split("-").reverse().join("-")}` : "";
+      await StockItemMovementService.record(
+        items.map((it) => ({
+          inventoryItemId: it._id,
+          productDefinitionId: it.productDefinitionId,
+          type: person.kind === ASSIGNEE_KIND.EMPLOYEE ? ITEM_MOVEMENT_TYPE.ASSIGNED : ITEM_MOVEMENT_TYPE.ISSUED,
+          at: entry.entryDate,
+          quantity: it.quantity ?? null,
+          fromBranchId: it.branchId,
+          status: ITEM_STATUS.ASSIGNED,
+          ref,
+          note: `${person.kind === ASSIGNEE_KIND.EMPLOYEE ? "Assigned" : "Issued"} to ${who(person)}${since} — entered as opening issued stock`,
+        })),
+        session
+      );
+    }
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE, entityId: entry._id, action: "POST", actor: user, before, after: entry.toObject(),
     });
@@ -576,14 +714,13 @@ export default class StockOpeningStockService {
             fieldValues,
             quantity: values.quantity,
             condition: values.condition,
+            workingState: values.workingState,
+            faultNote: values.faultNote,
             vendorId,
             purchaseDate: values.purchaseDate,
             purchaseCost: values.purchaseCost,
             warrantyMonths: values.warrantyMonths,
             warrantyEndDate: values.warrantyEndDate,
-            heldBy: values.heldBy,
-            lastUsedBy: values.lastUsedBy,
-            historyRemarks: values.historyRemarks,
           },
           ctx,
           ""

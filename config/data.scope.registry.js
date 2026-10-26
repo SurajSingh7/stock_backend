@@ -45,6 +45,7 @@ export const DATA_SCOPE_REGISTRY = {
   "inventory-items": { branch: "branchId" },
   // An entry belongs to the branch whose stock it counts in.
   "opening-stock": { branch: "branchId" },
+  "opening-issued-stock": { branch: "branchId" },
   // A request belongs to the branch it asks stock from — only that branch's
   // store can issue it.
   "item-requests": { branch: "branchId" },

@@ -80,6 +80,10 @@ const MODULE_DEFINITIONS = [
   // a 300-row draft need not be the one allowed to put it on the books. An
   // APPROVE action joins here if approval is ever wanted.
   { key: "opening-stock", name: "Opening Stock", actions: withMenu(["CREATE", "READ", "UPDATE", "DELETE", "POST"]) },
+  // The same entries for stock already with someone (posting makes it
+  // ASSIGNED to them) — its own module, so who may say "X has had this for
+  // years" is granted apart from who counts the shelves.
+  { key: "opening-issued-stock", name: "Opening Issued Stock", actions: withMenu(["CREATE", "READ", "UPDATE", "DELETE", "POST"]) },
   // Subscribers' requests for stock. Issuing, short-closing and rejecting are
   // separate actions: the person handing over units need not be the one who
   // may refuse a request outright.

@@ -57,17 +57,15 @@ const applyOriginFilters = (filter, { sourceType, condition }) => {
   if (condition && ITEM_CONDITION_ARRAY.includes(condition)) filter.condition = condition;
 };
 
-// The statuses Item Inventory lists as tabs: what can be handed out, what is
-// on the books but still with someone (opening stock not yet assigned), and
-// what has been issued to a subscriber.
-const LISTABLE_CARD_STATUSES = [ITEM_STATUS.AVAILABLE, ITEM_STATUS.RESERVED, ITEM_STATUS.ASSIGNED];
+// The statuses Item Inventory lists as tabs: what can be handed out, and what
+// is with someone (a subscriber or an employee).
+const LISTABLE_CARD_STATUSES = [ITEM_STATUS.AVAILABLE, ITEM_STATUS.ASSIGNED];
 
 // Statuses only their own flow may set or clear — each carries data that flow
-// keeps in step (assignedTo, a debit note's draws, the opening-stock note).
+// keeps in step (assignedTo, a debit note's draws, a fault or repair).
 // Changing one by hand would leave that data saying something untrue.
 const FLOW_OWNED_STATUSES = [
   ITEM_STATUS.ASSIGNED,
-  ITEM_STATUS.RESERVED,
   ITEM_STATUS.DEBITED,
   // Repair & Warranty — see StockRepairService.
   ITEM_STATUS.FAULTY,
@@ -265,8 +263,6 @@ export default class StockInventoryItemService {
           warranty: item.warranty,
           purchaseCost: item.purchaseCost,
           purchaseDate: item.purchaseDate,
-          legacy: item.legacy,
-          heldByNote: item.heldByNote,
           assignedTo: item.assignedTo,
           receivedAt: item.receivedAt,
           createdAt: item.createdAt,
@@ -506,13 +502,11 @@ export default class StockInventoryItemService {
         warranty: item.warranty,
         purchaseCost: item.purchaseCost,
         purchaseDate: item.purchaseDate,
-        heldByNote: item.heldByNote,
         assignedTo: item.assignedTo,
         fieldValues: item.fieldValues,
         quantity: item.quantity,
         receivedAt: item.receivedAt,
       },
-      preSystem: item.legacy?.lastUsedBy || item.legacy?.remarks ? item.legacy : null,
       movements,
     };
   }
@@ -556,7 +550,7 @@ export default class StockInventoryItemService {
       if (def.trackingMethod === TRACKING_METHODS.INDIVIDUAL) {
         // Counted per status in one pass, over EVERY status in ITEM_STATUS —
         // the hardcoded list this replaces silently dropped debited units from
-        // the total, and would have dropped RESERVED ones too.
+        // the total, and would drop any status added later too.
         const rows = await StockInventoryItemModel.aggregate([
           {
             $match: applyDataScope(
@@ -578,7 +572,6 @@ export default class StockInventoryItemService {
           scrapped: byStatus.SCRAPPED,
           inTransit: byStatus.IN_TRANSIT,
           debited: byStatus.DEBITED,
-          reserved: byStatus.RESERVED,
         };
       } else {
         // quantity mode — aggregate
@@ -610,7 +603,6 @@ export default class StockInventoryItemService {
           scrappedQty: byStatus["SCRAPPED"] ?? 0,
           inTransitQty: byStatus["IN_TRANSIT"] ?? 0,
           debitedQty: byStatus["DEBITED"] ?? 0,
-          reservedQty: byStatus["RESERVED"] ?? 0,
         };
       }
     } catch (error) {

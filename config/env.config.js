@@ -32,3 +32,9 @@ export const internalApiKey = process.env.INTERNAL_API_KEY;
 // server-to-server. Its own key, not INTERNAL_API_KEY: that one is trusted by
 // HRMS for other things, and this caller should be revocable on its own.
 export const externalApiKey = process.env.EXTERNAL_API_KEY;
+
+// The people API behind the People Directory search (HRMS employees and
+// website subscribers). Unset = the 🧪 test mock answers instead — see
+// helpers/people.providers.
+export const peopleApiUrl = process.env.PEOPLE_API_URL;
+export const peopleApiKey = process.env.PEOPLE_API_KEY;

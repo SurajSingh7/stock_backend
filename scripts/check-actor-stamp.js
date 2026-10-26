@@ -23,6 +23,7 @@ const MODEL_FILE = {
   "inventory-items": "stock.inventory.item.model.js",
   "transfer-requests": "stock.transfer.request.model.js",
   "opening-stock": "stock.opening.stock.model.js",
+  "opening-issued-stock": "stock.opening.stock.model.js",
   "item-requests": "stock.item.request.model.js",
   repairs: "stock.inventory.item.model.js",
   "employee-items": "stock.inventory.item.model.js",

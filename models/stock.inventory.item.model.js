@@ -41,29 +41,20 @@ const warrantySchema = new mongoose.Schema(
   { _id: false }
 );
 
-// What is known about the unit from BEFORE this system — free text, because
-// the people named may have left and will not be in HRMS. Shown as a single
-// "pre-system" note at the top of the unit's timeline.
-const legacySchema = new mongoose.Schema(
-  {
-    lastUsedBy: { type: String, trim: true, default: "" },
-    remarks: { type: String, trim: true, default: "" },
-  },
-  { _id: false }
-);
-
 /*
   Who has an ASSIGNED unit. Either a SUBSCRIBER — issued against an Item
-  Request (order id, username, service type, request) — or one of our own
-  EMPLOYEES (Employee Items). Snapshots, so stock screens never need the
-  subscriber registry, the external website or HRMS to say who has it.
-  Cleared when the unit comes back. No `kind` on older rows means SUBSCRIBER.
+  Request, or entered as Opening Issued Stock — or one of our own EMPLOYEES.
+  Snapshots, so stock screens never need the People Directory, the website or
+  HRMS to say who has it. Cleared when the unit comes back. No `kind` on older
+  rows means SUBSCRIBER.
 */
 const assignedToSchema = new mongoose.Schema(
   {
     kind: { type: String, enum: ASSIGNEE_KIND_ARRAY, default: ASSIGNEE_KIND.SUBSCRIBER },
-    // EMPLOYEE — the HRMS login id when picked from HRMS, else just the
-    // name / employee code as typed.
+    // The People Directory record the person was picked from, when they were.
+    personId: { type: mongoose.Schema.Types.ObjectId, ref: "directory_people", default: null },
+    phone: { type: String, trim: true, default: "" },
+    // EMPLOYEE
     employeeUserId: { type: mongoose.Schema.Types.ObjectId, default: null },
     employeeName: { type: String, trim: true, default: "" },
     employeeCode: { type: String, trim: true, default: "" },
@@ -180,10 +171,6 @@ const stockInventoryItemSchema = new mongoose.Schema(
     // have no paperwork. Optional for now; may become required later.
     purchaseCost: { type: Number, default: null, min: 0 },
     purchaseDate: { type: Date, default: null },
-    legacy: { type: legacySchema, default: () => ({}) },
-    // Who has a RESERVED unit, as written on the opening stock line. Free text
-    // until assignment (phase 2) turns it into a real HRMS user.
-    heldByNote: { type: String, trim: true, default: "" },
     assignedTo: { type: assignedToSchema, default: null },
     fault: { type: faultSchema, default: null },
     repair: { type: repairSchema, default: null },

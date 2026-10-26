@@ -7,6 +7,11 @@ import {
   ITEM_CONDITION,
   OPENING_STOCK_STATUS,
   OPENING_STOCK_STATUS_ARRAY,
+  OPENING_STOCK_STATE,
+  OPENING_STOCK_STATE_ARRAY,
+  OPENING_STOCK_KIND,
+  OPENING_STOCK_KIND_ARRAY,
+  ASSIGNEE_KIND_ARRAY,
 } from "../constants/stock.enums.js";
 
 const { Schema } = mongoose;
@@ -46,12 +51,10 @@ const openingStockLineSchema = new Schema(
 
     condition: { type: String, enum: ITEM_CONDITION_ARRAY, default: ITEM_CONDITION.USED },
 
-    // "Abhi kiske paas hai" — set when the unit is with an employee right now.
-    // Such a unit is posted RESERVED, not AVAILABLE.
-    heldBy: { type: String, trim: true, default: "" },
-    // Pre-system history: free text, since past users may no longer be in HRMS.
-    lastUsedBy: { type: String, trim: true, default: "" },
-    historyRemarks: { type: String, trim: true, default: "" },
+    // Does it work? Decides what posting makes of it — see OPENING_STOCK_STATE.
+    workingState: { type: String, enum: OPENING_STOCK_STATE_ARRAY, default: OPENING_STOCK_STATE.WORKING },
+    // What is wrong with it — required unless WORKING.
+    faultNote: { type: String, trim: true, default: "" },
 
     // Set when the entry is posted.
     inventoryItemId: { type: Schema.Types.ObjectId, ref: "inventory_items", default: null },
@@ -62,7 +65,35 @@ const openingStockLineSchema = new Schema(
 const openingStockEntrySchema = new Schema(
   {
     entryNumber: { type: String, trim: true, uppercase: true, required: true },
+    // STORE (Opening Stock, OS-…) or ISSUED (Opening Issued Stock, OI-…) —
+    // fixed at creation.
+    kind: { type: String, enum: OPENING_STOCK_KIND_ARRAY, default: OPENING_STOCK_KIND.STORE },
     branchId: { type: Schema.Types.ObjectId, ref: "branches", required: true },
+
+    /*
+      ISSUED only — the one person every line of the entry is with, picked from
+      the People Directory. A snapshot of their details as they were when the
+      entry was saved; posting refreshes it from the directory once more.
+    */
+    issuedTo: {
+      type: new Schema(
+        {
+          personId: { type: Schema.Types.ObjectId, ref: "directory_people", default: null },
+          kind: { type: String, enum: ASSIGNEE_KIND_ARRAY, default: null },
+          name: { type: String, trim: true, default: "" },
+          employeeCode: { type: String, trim: true, default: "" },
+          orderId: { type: String, trim: true, default: "" },
+          username: { type: String, trim: true, default: "" },
+          serviceType: { type: String, trim: true, default: "" },
+          phone: { type: String, trim: true, default: "" },
+          email: { type: String, trim: true, default: "" },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    // ISSUED only — since when the person has had these.
+    issuedSince: { type: Date, default: null },
     // The day this stock is counted into the system — the received date its
     // items carry and the first date on their timelines.
     entryDate: { type: Date, required: true },
@@ -98,6 +129,7 @@ const openingStockEntrySchema = new Schema(
 
 openingStockEntrySchema.index({ entryNumber: 1 }, { unique: true });
 openingStockEntrySchema.index({ branchId: 1, status: 1 });
+openingStockEntrySchema.index({ kind: 1, createdAt: -1 });
 openingStockEntrySchema.index({ createdAt: -1 });
 
 // createdBy / updatedBy / deletedBy — see the plugin.

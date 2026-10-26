@@ -24,10 +24,11 @@ export const TRACKING_METHODS_ARRAY = Object.values(TRACKING_METHODS);
 export const ITEM_STATUS = {
   AVAILABLE: "AVAILABLE",
   /*
-    Issued to a subscriber against an Item Request — the unit is out of the
-    store, with the customer whose order is on `assignedTo`. Set only by
-    issuing a request (StockItemRequestService.issue), never by hand. Replaced
-    the never-used ALLOCATED (scripts/rename-allocated-to-assigned.js).
+    Out of the store, with the person on `assignedTo` — a subscriber (issued
+    against an Item Request) or an employee (Employee Items), or entered as
+    already with them (Opening Issued Stock). Set only by those flows, never
+    by hand. Replaced the never-used ALLOCATED
+    (scripts/rename-allocated-to-assigned.js).
   */
   ASSIGNED: "ASSIGNED",
   IN_REPAIR: "IN_REPAIR",
@@ -51,13 +52,6 @@ export const ITEM_STATUS = {
     scripts/rename-faulty-to-debited.js.
   */
   DEBITED: "DEBITED",
-  /*
-    Entered as opening stock while it is still physically with an employee
-    (the "Abhi kiske paas hai" note). Counted as owned stock, but neither
-    available nor transferable — otherwise a laptop in someone's bag would be
-    handed out a second time. Assignment (phase 2) moves it on from here.
-  */
-  RESERVED: "RESERVED",
   /*
     One of OURS that is broken — came back from a subscriber in bad condition
     (or replaced on site). Paid for, so it is still an asset: it goes on to be
@@ -217,6 +211,44 @@ export const OPENING_STOCK_STATUS = {
   POSTED: "POSTED",
 };
 export const OPENING_STOCK_STATUS_ARRAY = Object.values(OPENING_STOCK_STATUS);
+
+/*
+  Two kinds of opening entry, two screens:
+    STORE   "Opening Stock" — what is physically in the store (number OS-…)
+    ISSUED  "Opening Issued Stock" — what is already with one person, an
+            employee or a subscriber picked from the People Directory; posting
+            makes the units ASSIGNED to them (number OI-…)
+*/
+export const OPENING_STOCK_KIND = {
+  STORE: "STORE",
+  ISSUED: "ISSUED",
+};
+export const OPENING_STOCK_KIND_ARRAY = Object.values(OPENING_STOCK_KIND);
+
+/*
+  People Directory — who stock can be with. EXTERNAL: found through the
+  people API (HRMS employees, website subscribers — one search); MANUAL: typed
+  in here because the API does not have them (yet).
+*/
+export const PERSON_SOURCE = {
+  EXTERNAL: "EXTERNAL",
+  MANUAL: "MANUAL",
+};
+export const PERSON_SOURCE_ARRAY = Object.values(PERSON_SOURCE);
+
+/*
+  Whether an opening-stock unit works — separate from its condition (New/Used):
+  a unit can be New and Faulty, or Used and Working.
+    WORKING        → AVAILABLE
+    FAULTY         → FAULTY, straight into Repair & Warranty
+    BEYOND_REPAIR  → SCRAPPED — on record (serial, audit) but never stock again
+*/
+export const OPENING_STOCK_STATE = {
+  WORKING: "WORKING",
+  FAULTY: "FAULTY",
+  BEYOND_REPAIR: "BEYOND_REPAIR",
+};
+export const OPENING_STOCK_STATE_ARRAY = Object.values(OPENING_STOCK_STATE);
 
 export const CATEGORY_TYPES = {
   GROUP: "GROUP",

@@ -24,7 +24,12 @@ export default class StockItemMovementService {
         toBranchId: it.branchId ?? null,
         status: it.status,
         ref,
-        note: it.heldByNote ? `Currently with: ${it.heldByNote}` : "",
+        note:
+          it.status === "FAULTY"
+            ? `Received faulty: ${it.fault?.note || ""}`
+            : it.status === "SCRAPPED"
+              ? `Received beyond repair: ${it.scrapNote || ""}`
+              : "",
       })),
       session
     );

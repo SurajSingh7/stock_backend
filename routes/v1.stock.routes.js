@@ -15,7 +15,8 @@ import StockFaultyItemController from "../controllers/stock.faulty.item.controll
 import StockInvoiceController from "../controllers/stock.invoice.controller.js";
 import { uploadInvoiceFile, uploadInvoiceForReading } from "../helpers/stock.invoice.upload.helper.js";
 import StockTransferRequestController from "../controllers/stock.transfer.request.controller.js";
-import StockOpeningStockController from "../controllers/stock.opening.stock.controller.js";
+import StockOpeningStockController, { StockOpeningIssuedStockController } from "../controllers/stock.opening.stock.controller.js";
+import StockPeopleDirectoryController from "../controllers/stock.people.directory.controller.js";
 import StockItemRequestController from "../controllers/stock.item.request.controller.js";
 import StockRepairController from "../controllers/stock.repair.controller.js";
 import StockEmployeeItemController from "../controllers/stock.employee.item.controller.js";
@@ -385,6 +386,40 @@ router.put("/opening-stock/:id", authenticate, requirePermission("opening-stock"
 router.delete("/opening-stock/:id", authenticate, requirePermission("opening-stock", "DELETE"), StockOpeningStockController.remove);
 router.patch("/opening-stock/:id/post", authenticate, requirePermission("opening-stock", "POST"), StockOpeningStockController.post);
 
+// ─── Opening Issued Stock ──────────────────────────────────────────────────────
+// Stock already with one person (employee or subscriber) before this system —
+// the same entries as above, kind ISSUED, on their own module.
+router.get("/opening-issued-stock/form-options", authenticate, requirePermission("opening-issued-stock", "READ"), StockOpeningIssuedStockController.getFormOptions);
+router.get("/opening-issued-stock/products", authenticate, requirePermission("opening-issued-stock", "READ"), StockOpeningIssuedStockController.searchProducts);
+router.get("/opening-issued-stock", authenticate, requirePermission("opening-issued-stock", "READ"), StockOpeningIssuedStockController.list);
+router.post("/opening-issued-stock", authenticate, requirePermission("opening-issued-stock", "CREATE"), StockOpeningIssuedStockController.create);
+router.get("/opening-issued-stock/:id", authenticate, requirePermission("opening-issued-stock", "READ"), StockOpeningIssuedStockController.getById);
+router.put("/opening-issued-stock/:id", authenticate, requirePermission("opening-issued-stock", "UPDATE"), StockOpeningIssuedStockController.update);
+router.delete("/opening-issued-stock/:id", authenticate, requirePermission("opening-issued-stock", "DELETE"), StockOpeningIssuedStockController.remove);
+router.patch("/opening-issued-stock/:id/post", authenticate, requirePermission("opening-issued-stock", "POST"), StockOpeningIssuedStockController.post);
+
+// ─── People Directory ──────────────────────────────────────────────────────────
+// Who stock can be with — one search over the people API plus hand-added
+// people. Used from the screens named in ?module=, on their permissions.
+router.get(
+  "/people/search",
+  authenticate,
+  requirePermissionForQueryModule(["opening-issued-stock", "employee-items"], "READ"),
+  StockPeopleDirectoryController.search
+);
+router.post(
+  "/people/select",
+  authenticate,
+  requirePermissionForQueryModule(null, { "opening-issued-stock": "CREATE", "employee-items": "ASSIGN" }),
+  StockPeopleDirectoryController.select
+);
+router.post(
+  "/people",
+  authenticate,
+  requirePermissionForQueryModule(null, { "opening-issued-stock": "CREATE", "employee-items": "ASSIGN" }),
+  StockPeopleDirectoryController.create
+);
+
 // ─── Item Requests (store side) ────────────────────────────────────────────────
 // Raised by the NOC / broadband website (routes/external.routes.js) or the test
 // simulator below; issued, short-closed or rejected here. Static paths first.
@@ -414,7 +449,6 @@ router.patch("/repairs/:id/scrap", authenticate, requirePermission("repairs", "S
 
 // ─── Employee Items ────────────────────────────────────────────────────────────
 // Stock with our own people — see services/stock.employee.item.service.js.
-router.get("/employee-items/pending", authenticate, requirePermission("employee-items", "READ"), StockEmployeeItemController.pending);
 router.get("/employee-items/available", authenticate, requirePermission("employee-items", "ASSIGN"), StockEmployeeItemController.available);
 router.get("/employee-items/employees", authenticate, requirePermission("employee-items", "READ"), StockEmployeeItemController.employees);
 router.get("/employee-items/items", authenticate, requirePermission("employee-items", "READ"), StockEmployeeItemController.employeeItems);

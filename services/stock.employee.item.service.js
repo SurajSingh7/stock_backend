@@ -4,6 +4,7 @@ import "../models/stock.branch.model.js"; // registered for the branch populates
 import "../models/stock.product.definition.model.js";
 import StockItemMovementService from "./stock.item.movement.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
+import StockPeopleDirectoryService from "./stock.people.directory.service.js";
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 import { AppError } from "../helpers/response.helper.js";
 import {
@@ -19,15 +20,15 @@ import {
 /*
   Employee Items — stock with our own people (laptop, phone, test kit …).
 
-    RESERVED (opening stock "currently with …")  ─┐
-    AVAILABLE (anything on the shelf)            ─┴─ assign ──► ASSIGNED (EMPLOYEE)
-                                                                    │ return
-                                       Good → AVAILABLE ◄───────────┤
-                                       Faulty → FAULTY (Repair & Warranty)
+    AVAILABLE (on the shelf) ── assign ──► ASSIGNED (EMPLOYEE)
+                                              │ return
+                 Good → AVAILABLE ◄───────────┤
+                 Faulty → FAULTY (Repair & Warranty)
 
-  The person is an HRMS user when picked from HRMS, otherwise the name and
-  employee code typed in — the same person need not be in HRMS any more for
-  the record to say who had it.
+  The person is picked from the People Directory (the people API, or typed in
+  by hand there). The unit keeps a snapshot of their name and code, so the
+  record still says who had it if they later leave. Stock someone already had
+  before this system is entered through Opening Issued Stock instead.
 */
 
 const MODULE_KEY = "employee-items";
@@ -53,7 +54,6 @@ const view = (it) => ({
   condition: it.condition,
   source: it.source,
   warranty: it.warranty,
-  heldByNote: it.heldByNote,
   assignedTo: it.assignedTo,
 });
 
@@ -62,25 +62,19 @@ const POPULATE = [
   { path: "branchId", select: "name" },
 ];
 
-// The employee key holdings are grouped by: HRMS id when known, else code, else name.
-const employeeKeyOf = (a) => (a?.employeeUserId ? `id:${a.employeeUserId}` : a?.employeeCode ? `code:${a.employeeCode.toUpperCase()}` : `name:${(a?.employeeName || "").toUpperCase()}`);
+// The employee key holdings are grouped by: employee code (the directory's
+// identity for an employee), else the HRMS id older rows carry, else name.
+const employeeKeyOf = (a) =>
+  a?.employeeCode
+    ? `code:${a.employeeCode.toUpperCase()}`
+    : a?.employeeUserId
+      ? `id:${a.employeeUserId}`
+      : `name:${(a?.employeeName || "").toUpperCase()}`;
 
 export default class StockEmployeeItemService {
   /* ---------------------------------------------------------------------- */
   /* Reads                                                                  */
   /* ---------------------------------------------------------------------- */
-
-  // Opening stock entered as "currently with …", waiting to be tied to a person.
-  static async pending({ search } = {}, dataAccess) {
-    const filter = { isActive: true, status: ITEM_STATUS.RESERVED };
-    if (search) {
-      const rx = { $regex: escapeRegex(String(search).trim()), $options: "i" };
-      filter.$or = [{ heldByNote: rx }, { identifiers: { $regex: escapeRegex(String(search).trim().toUpperCase()) } }];
-    }
-    applyDataScope(filter, dataAccess, MODULE_KEY);
-    const rows = await StockInventoryItemModel.find(filter).populate(POPULATE).sort({ heldByNote: 1, createdAt: -1 }).limit(500).lean();
-    return rows.map(view);
-  }
 
   // Shelf units to hand out — individual units only, by serial search.
   static async available({ search, branchId } = {}, dataAccess) {
@@ -108,6 +102,7 @@ export default class StockEmployeeItemService {
         employeeUserId: it.assignedTo.employeeUserId,
         employeeName: it.assignedTo.employeeName,
         employeeCode: it.assignedTo.employeeCode,
+        phone: it.assignedTo.phone || "",
         units: 0,
         lastAssignedAt: null,
       };
@@ -132,8 +127,8 @@ export default class StockEmployeeItemService {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Assign — shelf or reserved units to one person                         */
-  /* body: { itemIds: [...], employee: { userId?, name, employeeCode? }, note? } */
+  /* Assign — shelf units to one employee from the People Directory          */
+  /* body: { itemIds: [...], personId, note? }                              */
   /* ---------------------------------------------------------------------- */
 
   static async assign(body, user, session, dataAccess) {
@@ -142,17 +137,17 @@ export default class StockEmployeeItemService {
     if (ids.length > MAX_UNITS) throw new AppError(`Invalid: at most ${MAX_UNITS} units at a time`, 400);
     if (ids.some((id) => !mongoose.isValidObjectId(id))) throw new AppError("Invalid unit selected", 400);
 
-    const name = text(body?.employee?.name, 150);
-    const employeeCode = text(body?.employee?.employeeCode, 50);
-    if (!name) throw new AppError("Employee name is required", 400);
-    const employeeUserId = body?.employee?.userId && mongoose.isValidObjectId(body.employee.userId) ? body.employee.userId : null;
+    if (!body?.personId) throw new AppError("Choose the employee", 400);
+    const person = await StockPeopleDirectoryService.getActive(body.personId, session);
+    if (person.kind !== ASSIGNEE_KIND.EMPLOYEE) throw new AppError("Only an employee can be chosen here", 400);
+    const { name, employeeCode } = person;
     const note = text(body?.note, 500);
 
     const items = await StockInventoryItemModel.find({
       _id: { $in: ids },
       isActive: true,
       approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
-      status: { $in: [ITEM_STATUS.AVAILABLE, ITEM_STATUS.RESERVED] },
+      status: ITEM_STATUS.AVAILABLE,
     }).session(session);
     if (items.length !== ids.length)
       throw new AppError(`${ids.length - items.length} chosen unit(s) are no longer free to assign — refresh`, 409);
@@ -161,16 +156,15 @@ export default class StockEmployeeItemService {
     });
 
     const now = new Date();
-    const assignedTo = { kind: ASSIGNEE_KIND.EMPLOYEE, employeeUserId, employeeName: name, employeeCode, note, assignedAt: now };
+    const assignedTo = StockPeopleDirectoryService.assigneeOf(person, { assignedAt: now, note });
     const movements = [];
     for (const it of items) {
       const before = it.toObject();
-      const fromReserved = it.status === ITEM_STATUS.RESERVED;
       // The status in the filter is the guard against the same unit being
       // assigned twice at once.
       const res = await StockInventoryItemModel.updateOne(
         { _id: it._id, status: before.status },
-        { $set: { status: ITEM_STATUS.ASSIGNED, condition: ITEM_CONDITION.USED, heldByNote: "", assignedTo } },
+        { $set: { status: ITEM_STATUS.ASSIGNED, condition: ITEM_CONDITION.USED, assignedTo } },
         { session }
       );
       if (res.modifiedCount !== 1) throw new AppError(`${labelOf(before)} was just taken elsewhere — refresh`, 409);
@@ -182,7 +176,7 @@ export default class StockEmployeeItemService {
         quantity: it.quantity ?? null,
         fromBranchId: it.branchId,
         status: ITEM_STATUS.ASSIGNED,
-        note: `Assigned to ${name}${employeeCode ? ` (${employeeCode})` : ""}${fromReserved && before.heldByNote ? ` — was "currently with ${before.heldByNote}"` : ""}${note ? ` · ${note}` : ""}`,
+        note: `Assigned to ${name}${employeeCode ? ` (${employeeCode})` : ""}${note ? ` · ${note}` : ""}`,
       });
       await StockAuditLogService.recordAudit({
         entityType: ENTITY_TYPE, entityId: it._id, action: "ASSIGN_EMPLOYEE", actor: user, before, after: { ...before, status: ITEM_STATUS.ASSIGNED, assignedTo },

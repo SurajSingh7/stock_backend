@@ -301,7 +301,6 @@ export default class StockTransferRequestService {
             warranty: src.warranty,
             purchaseCost: src.purchaseCost,
             purchaseDate: src.purchaseDate,
-            legacy: src.legacy,
             receivedAt: src.receivedAt,
             receivedBy: src.receivedBy,
           },

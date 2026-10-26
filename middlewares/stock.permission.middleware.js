@@ -119,8 +119,12 @@ export function requirePermission(moduleKey, action) {
  * caller can only ever name a module they already have. The allow-list is here
  * to keep the surface deliberate, not to add a security layer.
  */
+// `action` is one action for every allowed module, or — when the modules call
+// the same act by different names — a map { moduleKey: action }, whose keys
+// are then the allow-list (allowedModules is ignored).
 export function requirePermissionForQueryModule(allowedModules, action) {
-  const allowed = new Set(allowedModules);
+  const actionFor = typeof action === "string" ? null : action;
+  const allowed = new Set(actionFor ? Object.keys(actionFor) : allowedModules);
   // Named for the same reason requirePermission names its own middleware:
   // scripts/check-route-permissions.js spots permission checks by fn.name.
   return function permissionCheckFromQuery(req, res, next) {
@@ -131,7 +135,7 @@ export function requirePermissionForQueryModule(allowedModules, action) {
         message: `module must be one of: ${[...allowed].join(", ")}`,
       });
     }
-    return requirePermission(moduleKey, action)(req, res, next);
+    return requirePermission(moduleKey, actionFor ? actionFor[moduleKey] : action)(req, res, next);
   };
 }
 
