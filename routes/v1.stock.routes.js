@@ -424,6 +424,7 @@ router.post(
 // Raised by the NOC / broadband website (routes/external.routes.js) or the test
 // simulator below; issued, short-closed or rejected here. Static paths first.
 router.get("/item-requests/status-counts", authenticate, requirePermission("item-requests", "READ"), StockItemRequestController.statusCounts);
+router.get("/item-requests/type-counts", authenticate, requirePermission("item-requests", "READ"), StockItemRequestController.typeCounts);
 router.get("/item-requests/subscribers", authenticate, requirePermission("item-requests", "READ"), StockItemRequestController.subscribersWithItems);
 router.get("/item-requests/subscribers/:subscriberId", authenticate, requirePermission("item-requests", "READ"), StockItemRequestController.subscriberItems);
 router.get("/item-requests", authenticate, requirePermission("item-requests", "READ"), StockItemRequestController.list);
@@ -431,7 +432,11 @@ router.get("/item-requests/:id", authenticate, requirePermission("item-requests"
 router.get("/item-requests/:id/units", authenticate, requirePermission("item-requests", "ISSUE"), StockItemRequestController.availableUnits);
 router.patch("/item-requests/:id/issue", authenticate, requirePermission("item-requests", "ISSUE"), StockItemRequestController.issue);
 router.patch("/item-requests/:id/receive", authenticate, requirePermission("item-requests", "RECEIVE"), StockItemRequestController.receive);
+// Replace one row: old back and/or new out — needs both rights.
+router.patch("/item-requests/:id/swap", authenticate, requirePermission("item-requests", "RECEIVE"), requirePermission("item-requests", "ISSUE"), StockItemRequestController.swap);
 router.patch("/item-requests/:id/short-close", authenticate, requirePermission("item-requests", "SHORT_CLOSE"), StockItemRequestController.shortClose);
+// One line of a request closed short — the same right as closing all of it.
+router.patch("/item-requests/:id/lines/:lineId/close", authenticate, requirePermission("item-requests", "SHORT_CLOSE"), StockItemRequestController.closeLine);
 router.patch("/item-requests/:id/reject", authenticate, requirePermission("item-requests", "REJECT"), StockItemRequestController.reject);
 
 // ─── Repair & Warranty ──────────────────────────────────────────────────────────
@@ -471,6 +476,7 @@ router.post("/test-simulator/subscribers", authenticate, requirePermission("test
 router.post("/test-simulator/subscribers/:subscriberId/requests", authenticate, requirePermission("test-simulator", "REQUEST"), StockTestSimulatorController.sendRequest);
 router.get("/test-simulator/requests/:requestId", authenticate, requirePermission("test-simulator", "READ"), StockTestSimulatorController.getRequest);
 router.put("/test-simulator/requests/:requestId", authenticate, requirePermission("test-simulator", "REQUEST"), StockTestSimulatorController.resendRequest);
+router.post("/test-simulator/requests/:requestId/withdraw", authenticate, requirePermission("test-simulator", "REQUEST"), StockTestSimulatorController.withdrawRequest);
 
 // ─── Inventory Transfer Requests ──────────────────────────────────────────────
 router.post("/transfer-requests", authenticate, requirePermission("transfer-requests", "CREATE"), StockTransferRequestController.createTransferRequest);

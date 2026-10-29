@@ -160,10 +160,12 @@ export const ITEM_MOVEMENT_REF_ARRAY = Object.values(ITEM_MOVEMENT_REF);
 
 /*
   Item Request — a subscriber's order (from the NOC / broadband website):
-    ISSUE   a leaf category and a quantity; the store picks the product(s)
+    ISSUE   up to 20 lines, each a leaf category and a quantity; the store
+            picks the product(s) for each
     RETURN  units / quantities the subscriber holds, coming back to the store
-    REPLACE units of ONE category coming back, and as many going out in their
-            place — both halves on one request
+    REPLACE units coming back, and as many of each one's category going out
+            in their place (one outgoing line per category) — both halves on
+            one request
 */
 export const ITEM_REQUEST_TYPE = {
   ISSUE: "ISSUE",
@@ -176,9 +178,16 @@ export const ITEM_REQUEST_TYPE_ARRAY = Object.values(ITEM_REQUEST_TYPE);
     PENDING ──issue──► PARTIAL ──issue──► COMPLETED
        │                  └──short close──► PARTIALLY_CLOSED
        └──reject──► REJECTED ──requester edits & resends──► PENDING
+                       └──requester withdraws──► WITHDRAWN (final)
 
-  The store decides everything except the resend. The requester cannot cancel;
-  needing more after a short close is a new request.
+  Worked out from the lines (ITEM_REQUEST_LINE_STATUS): once every line is
+  done or closed (and, for a return, everything is back) the request is
+  COMPLETED — or PARTIALLY_CLOSED if any line was closed short. The store
+  decides everything except the resend and the withdraw. The requester cannot
+  cancel an open request — only withdraw a REJECTED one it no longer wants
+  (until then its categories stay blocked for that subscriber and branch, so
+  it is resent rather than asked for afresh). Needing more after a close is a
+  new request.
 */
 export const ITEM_REQUEST_STATUS = {
   PENDING: "PENDING",
@@ -186,8 +195,21 @@ export const ITEM_REQUEST_STATUS = {
   COMPLETED: "COMPLETED",
   PARTIALLY_CLOSED: "PARTIALLY_CLOSED",
   REJECTED: "REJECTED",
+  WITHDRAWN: "WITHDRAWN",
 };
 export const ITEM_REQUEST_STATUS_ARRAY = Object.values(ITEM_REQUEST_STATUS);
+
+/*
+  One outgoing line of a request — derived, never stored:
+    PENDING   nothing given yet        PARTIAL  some given
+    DONE      all given                CLOSED   closed short by the store
+*/
+export const ITEM_REQUEST_LINE_STATUS = {
+  PENDING: "PENDING",
+  PARTIAL: "PARTIAL",
+  DONE: "DONE",
+  CLOSED: "CLOSED",
+};
 
 /*
   Who raised the request. Each caller only ever sees and edits its own, and the
@@ -249,6 +271,31 @@ export const OPENING_STOCK_STATE = {
   BEYOND_REPAIR: "BEYOND_REPAIR",
 };
 export const OPENING_STOCK_STATE_ARRAY = Object.values(OPENING_STOCK_STATE);
+
+// The same three states for anything coming BACK — from a subscriber or an
+// employee — chosen by the store when it checks the unit, with its condition
+// (New: unused, box/seal intact; Used) beside it.
+export const WORKING_STATE = OPENING_STOCK_STATE;
+export const WORKING_STATE_ARRAY = OPENING_STOCK_STATE_ARRAY;
+
+/*
+  Why the requester is giving something back — picked on the website with the
+  request. OTHER needs a note.
+*/
+export const RETURN_REASON = {
+  CONNECTION_CLOSED: "Connection Closed",
+  SHIFTING: "Shifting / Relocation",
+  SERVICE_CHANGE: "Service Change",
+  NOT_NEEDED: "Not Needed / Extra",
+  WRONG_ITEM: "Wrong Item Given",
+  OTHER: "Other",
+};
+export const REPLACE_REASON = {
+  NOT_WORKING: "Not Working",
+  INTERMITTENT: "Intermittent Problem",
+  DAMAGED: "Physically Damaged",
+  OTHER: "Other",
+};
 
 export const CATEGORY_TYPES = {
   GROUP: "GROUP",

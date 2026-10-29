@@ -13,6 +13,7 @@ export default class StockTestSimulatorController {
     categories: await StockItemRequestService.catalogCategories(),
     // Shown as a note: leaves that cannot be requested by quantity yet.
     mixedCategories: await StockItemRequestService.catalogMixedCategories(),
+    reasons: StockItemRequestService.catalogReasons(),
   }));
 
   // What a test subscriber holds — the Return / Replace pickers read this.
@@ -31,6 +32,10 @@ export default class StockTestSimulatorController {
     "Request sent",
     (req, session) => StockTestSimulatorService.sendRequest(req.params.subscriberId, req.body, actingUser(req), session),
     { status: 201 }
+  );
+
+  static withdrawRequest = inTransaction(log, "Request withdrawn", (req, session) =>
+    StockTestSimulatorService.withdrawRequest(req.params.requestId, req.body, actingUser(req), session)
   );
 
   static resendRequest = inTransaction(log, "Request sent again", (req, session) =>

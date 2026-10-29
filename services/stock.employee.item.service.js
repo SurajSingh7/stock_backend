@@ -7,14 +7,12 @@ import StockAuditLogService from "./stock.audit.log.service.js";
 import StockPeopleDirectoryService from "./stock.people.directory.service.js";
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 import { AppError } from "../helpers/response.helper.js";
+import { readReturnState, landedFields, returnStateLabel } from "../helpers/return.state.helper.js";
 import {
   ITEM_STATUS,
   ITEM_APPROVAL_STATUS,
-  ITEM_CONDITION,
   ITEM_MOVEMENT_TYPE,
   ASSIGNEE_KIND,
-  RETURN_CONDITION,
-  RETURN_CONDITION_ARRAY,
 } from "../constants/stock.enums.js";
 
 /*
@@ -22,8 +20,9 @@ import {
 
     AVAILABLE (on the shelf) ── assign ──► ASSIGNED (EMPLOYEE)
                                               │ return
-                 Good → AVAILABLE ◄───────────┤
+                 Working → AVAILABLE ◄────────┤
                  Faulty → FAULTY (Repair & Warranty)
+                 Beyond Repair → SCRAPPED
 
   The person is picked from the People Directory (the people API, or typed in
   by hand there). The unit keeps a snapshot of their name and code, so the
@@ -164,7 +163,7 @@ export default class StockEmployeeItemService {
       // assigned twice at once.
       const res = await StockInventoryItemModel.updateOne(
         { _id: it._id, status: before.status },
-        { $set: { status: ITEM_STATUS.ASSIGNED, condition: ITEM_CONDITION.USED, assignedTo } },
+        { $set: { status: ITEM_STATUS.ASSIGNED, assignedTo } }, // condition as it was: judged when it comes back
         { session }
       );
       if (res.modifiedCount !== 1) throw new AppError(`${labelOf(before)} was just taken elsewhere — refresh`, 409);
@@ -187,18 +186,16 @@ export default class StockEmployeeItemService {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Return — back from the employee, good or faulty                        */
-  /* body: { itemIds: [...], condition: GOOD|FAULTY, note? }                */
+  /* Return — back from the employee, as the store judges it               */
+  /* body: { itemIds: [...], workingState, itemCondition, note? }          */
+  /* (see helpers/return.state.helper.js; old condition GOOD|FAULTY works) */
   /* ---------------------------------------------------------------------- */
 
   static async returnItems(body, user, session, dataAccess) {
     const ids = [...new Set((Array.isArray(body?.itemIds) ? body.itemIds : []).map(String))];
     if (!ids.length) throw new AppError("Choose at least one unit that came back", 400);
     if (ids.some((id) => !mongoose.isValidObjectId(id))) throw new AppError("Invalid unit selected", 400);
-    const condition = String(body?.condition || "").toUpperCase();
-    if (!RETURN_CONDITION_ARRAY.includes(condition)) throw new AppError("Say whether it came back good or faulty", 400);
-    const note = text(body?.note, 500);
-    if (condition === RETURN_CONDITION.FAULTY && !note) throw new AppError("Describe the fault", 400);
+    const state = readReturnState(body);
 
     const items = await StockInventoryItemModel.find({
       _id: { $in: ids },
@@ -214,9 +211,7 @@ export default class StockEmployeeItemService {
       if (!isWithinDataScope(it, dataAccess, MODULE_KEY)) throw new Error("Inventory item not found");
       const before = it.toObject();
       const who = `${before.assignedTo.employeeName}${before.assignedTo.employeeCode ? ` (${before.assignedTo.employeeCode})` : ""}`;
-      it.status = condition === RETURN_CONDITION.GOOD ? ITEM_STATUS.AVAILABLE : ITEM_STATUS.FAULTY;
-      it.assignedTo = null;
-      it.fault = condition === RETURN_CONDITION.FAULTY ? { reportedAt: now, note, via: `Return from employee ${who}`, requestNumber: "" } : null;
+      it.set(landedFields(state, it.branchId, now, `Return from employee ${who}`));
       await it.save({ session });
       movements.push({
         inventoryItemId: it._id,
@@ -226,7 +221,7 @@ export default class StockEmployeeItemService {
         quantity: it.quantity ?? null,
         toBranchId: it.branchId,
         status: it.status,
-        note: `Returned by ${who} · ${condition === RETURN_CONDITION.GOOD ? "Good" : `Faulty: ${note}`}`,
+        note: `Returned by ${who} · ${returnStateLabel(state)}`,
       });
       await StockAuditLogService.recordAudit({
         entityType: ENTITY_TYPE, entityId: it._id, action: "RETURN_EMPLOYEE", actor: user, before, after: it.toObject(),

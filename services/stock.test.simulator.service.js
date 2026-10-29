@@ -105,6 +105,15 @@ export default class StockTestSimulatorService {
     );
   }
 
+  static withdrawRequest(requestId, body, user, session) {
+    return StockItemRequestService.withdrawRequest(
+      requestId,
+      { reason: body?.reason, requestedBy: { id: String(user?._id || ""), name: user?.name || "Test user" } },
+      CHANNEL,
+      session
+    );
+  }
+
   static async resendRequest(requestId, body, user, session) {
     const current = await StockItemRequestService.getForRequester(requestId, CHANNEL);
     const s = await StockTestSimulatorSubscriberModel.findOne({ orderIdKey: String(current.subscriber.orderId).toUpperCase() })

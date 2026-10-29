@@ -286,6 +286,9 @@ const UNSCOPED_BY_DESIGN = {
     listForRequester: "requester side, scoped by channel",
     holdingsForRequester: "requester side, scoped by channel and subscriber",
     _resolveReturnSide: "requester side — checks the request's own earlier returns, scoped by channel and subscriber",
+    _assertCategoriesNotOpen: "requester side — one open issue per category, scoped by subscriber and branch",
+    withdrawRequest: "requester side, scoped by channel",
+    _openElsewhere: "warning only — the same subscriber's open requests at other branches, request number and branch name only",
   },
   invoices: {
     _invoicedQtyByLine: "PO cap must sum every invoice",

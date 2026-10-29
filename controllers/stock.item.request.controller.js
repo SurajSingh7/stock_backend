@@ -18,12 +18,24 @@ export default class StockItemRequestController {
     StockItemRequestService.statusCounts(req.query, req.dataAccess)
   );
 
+  static typeCounts = handled(log, "Item request counts fetched successfully", (req) =>
+    StockItemRequestService.typeCounts(req.query, req.dataAccess)
+  );
+
   static getById = handled(log, "Item request fetched successfully", (req) =>
     StockItemRequestService.getById(req.params.id, req.dataAccess)
   );
 
   static availableUnits = handled(log, "Available units fetched successfully", (req) =>
-    StockItemRequestService.availableUnits(req.params.id, { search: req.query.search, productId: req.query.productId }, req.dataAccess)
+    StockItemRequestService.availableUnits(
+      req.params.id,
+      { lineId: req.query.lineId, search: req.query.search, productId: req.query.productId },
+      req.dataAccess
+    )
+  );
+
+  static closeLine = inTransaction(log, "Item closed on the request", (req, session) =>
+    StockItemRequestService.closeLine(req.params.id, req.params.lineId, req.body?.reason, actingUser(req), session, req.dataAccess)
   );
 
   static issue = inTransaction(log, "Items issued", (req, session) =>
@@ -32,6 +44,10 @@ export default class StockItemRequestController {
 
   static receive = inTransaction(log, "Items received back", (req, session) =>
     StockItemRequestService.receive(req.params.id, req.body, actingUser(req), session, req.dataAccess)
+  );
+
+  static swap = inTransaction(log, "Item replaced", (req, session) =>
+    StockItemRequestService.swap(req.params.id, req.body, actingUser(req), session, req.dataAccess)
   );
 
   static shortClose = inTransaction(log, "Item request short-closed", (req, session) =>
@@ -61,6 +77,7 @@ const EXTERNAL = ITEM_REQUEST_CHANNEL.EXTERNAL_API;
 export class StockExternalItemRequestController {
   static branches = handled(log, "Branches fetched successfully", () => StockItemRequestService.catalogBranches());
   static categories = handled(log, "Categories fetched successfully", () => StockItemRequestService.catalogCategories());
+  static reasons = handled(log, "Reasons fetched successfully", () => StockItemRequestService.catalogReasons());
 
   // What a subscriber holds — to pick a Return / Replace from.
   static holdings = handled(log, "Subscriber items fetched successfully", (req) =>
@@ -72,6 +89,10 @@ export class StockExternalItemRequestController {
     "Item request created",
     (req, session) => StockItemRequestService.createRequest(req.body, EXTERNAL, session),
     { status: 201 }
+  );
+
+  static withdraw = inTransaction(log, "Item request withdrawn", (req, session) =>
+    StockItemRequestService.withdrawRequest(req.params.id, req.body, EXTERNAL, session)
   );
 
   static resend = inTransaction(log, "Item request sent again", (req, session) =>
