@@ -1,6 +1,7 @@
 import StockAlertContactModel from "../models/stock.alert.contact.model.js";
 import StockAlertGroupModel from "../models/stock.alert.group.model.js";
 import StockVendorModel from "../models/stock.vendor.model.js";
+import StockAlertBranchAccessService from "./stock.alert.branch.access.service.js";
 import {
   ALERT_CHANNEL,
   ALERT_GROUP_TYPE,
@@ -57,7 +58,8 @@ export default class StockAlertRecipientService {
   /**
    * @param channel     ALERT_CHANNEL
    * @param recipients  rule recipients [{ type, refId, address }]
-   * @param context     { owner: { userId, name, phone, email }, vendorId, vendorLine: "TO"|"CC" }
+   * @param context     { owner: { userId, name, phone, email }, vendorId, vendorLine: "TO"|"CC",
+   *                      branchId, accessModule }  — the last two for BRANCH_USERS
    */
   static async resolve(channel, recipients = [], context = {}) {
     const targets = [];
@@ -141,6 +143,19 @@ export default class StockAlertRecipientService {
             skipped.push({ name: vendor?.name || "Vendor", reason: `no vendor contact marked ${line}` });
           }
           people.forEach((c) => push(contactTarget(channel, { ...c, _id: null, name: `${c.name} (${vendor.name})` })));
+          break;
+        }
+        case ALERT_RECIPIENT_TYPE.BRANCH_USERS: {
+          if (!context.branchId || !context.accessModule) {
+            skipped.push({ name: "People with branch access", reason: "record has no branch" });
+            break;
+          }
+          const found = await StockAlertBranchAccessService.contactsFor(context.branchId, context.accessModule);
+          skipped.push(...found.skipped);
+          if (!found.contacts.length) {
+            skipped.push({ name: "People with branch access", reason: "nobody linked to a login has access to this branch" });
+          }
+          found.contacts.forEach((c) => push(contactTarget(channel, c)));
           break;
         }
         case ALERT_RECIPIENT_TYPE.ADDRESS: {

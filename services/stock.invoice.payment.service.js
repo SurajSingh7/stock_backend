@@ -416,6 +416,7 @@ export default class StockInvoicePaymentService {
         paymentApproval: inv.paymentApproval || null,
         payments: inv.payments || [],
         invoiceFile: inv.invoiceFile || "",
+        companyUse: !!inv.companyUse,
         // Misc as entered (with its In bill / Note flag), for the edit form.
         extraCharges: inv.extraCharges || [],
         miscEdits: inv.miscEdits || [],

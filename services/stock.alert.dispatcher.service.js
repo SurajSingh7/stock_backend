@@ -35,7 +35,7 @@ export const setSenderKick = (fn) => {
   A branch condition on a record that has no branch (quotations) never
   matches — better silent than sent to the wrong branch's team.
 */
-const matchesConditions = (rule, ctx) => {
+export const matchesConditions = (rule, ctx) => {
   const c = rule.conditions || {};
   if (c.branchIds?.length && !(ctx.branchId && c.branchIds.map(String).includes(String(ctx.branchId)))) return false;
   if (c.vendorIds?.length && !c.vendorIds.map(String).some((v) => (ctx.vendorIds || []).includes(v))) return false;
@@ -166,7 +166,7 @@ export default class StockAlertDispatcherService {
       const rendered = renderAlertTemplate(template, vars);
       const attachments = template.attachDocument && ctx.document ? [ctx.document] : [];
 
-      const recipientCtx = { owner: ctx.owner, vendorId: ctx.vendorId };
+      const recipientCtx = { owner: ctx.owner, vendorId: ctx.vendorId, branchId: ctx.branchId, accessModule: event.branchAccessModule };
       const { targets, skipped } = await StockAlertRecipientService.resolve(send.channel, send.to, {
         ...recipientCtx,
         vendorLine: CONTACT_RECIPIENT_TYPE.TO,

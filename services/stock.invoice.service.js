@@ -15,6 +15,7 @@ import StockVendorModel from "../models/stock.vendor.model.js";
 import StockQuotationModel from "../models/stock.quotation.model.js";
 import StockItemIdentityService from "./stock.item.identity.service.js";
 import StockItemMovementService from "./stock.item.movement.service.js";
+import StockInvoiceScanService from "./stock.invoice.scan.service.js";
 import { warrantyEndDate } from "../helpers/stock.warranty.helper.js";
 
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
@@ -503,12 +504,12 @@ export default class StockInvoiceService {
   /* ---------------------------------------------------------------------- */
 
   /*
-    What the uploaded invoice says. For now DUMMY values worked out from the
-    PO — every product at its still-uninvoiced quantity, priced at the PO
-    rate with GST. The Claude API reading the actual file replaces this body
-    later; the screen already treats the result as a suggestion to correct.
+    What the uploaded invoice says — read by Claude (stock.invoice.scan.service.js)
+    against this PO's products and what is still uninvoiced on each. The
+    screen treats the result as a suggestion to check and correct.
   */
-  static async readInvoiceFile(trackingOrderId, dataAccess) {
+  static async readInvoiceFile(trackingOrderId, file, user, dataAccess) {
+    if (!file?.buffer?.length) throw new Error("Invoice file is required");
     const tracking = await StockTrackingOrderModel.findOne({ _id: trackingOrderId, isActive: true }).lean();
     if (!tracking || !isWithinDataScope(tracking, dataAccess, "tracking-orders")) {
       throw new Error("Tracking order not found");
@@ -516,28 +517,24 @@ export default class StockInvoiceService {
     const po = await StockPurchaseOrderModel.findOne({ _id: tracking.poId, isActive: true }).lean();
     if (!po) throw new Error("Purchase order not found for this tracking order");
 
-    const invoiced = await StockInvoiceService._invoicedQtyByLine(trackingOrderId, null);
-    const lines = (po.items || []).map((it) => ({
+    const [invoiced, vendor] = await Promise.all([
+      StockInvoiceService._invoicedQtyByLine(trackingOrderId, null),
+      po.vendorId ? StockVendorModel.findById(po.vendorId).select("name gst.gstNumber").lean() : null,
+    ]);
+    const poItems = (po.items || []).map((it) => ({
       quotationItemId: it.quotationItemId,
       productName: it.productName,
-      invoiceQuantity: Math.max(0, (it.quantity || 0) - (invoiced.get(String(it.quotationItemId)) || 0)),
+      unit: it.unit || "",
+      remaining: Math.max(0, (it.quantity || 0) - (invoiced.get(String(it.quotationItemId)) || 0)),
+      unitPrice: it.unitPrice || 0,
+      gstRate: it.gstRate || 0,
     }));
-    const invoiceAmount = round2(
-      (po.items || []).reduce((s, it) => {
-        const qty = lines.find((l) => String(l.quotationItemId) === String(it.quotationItemId)).invoiceQuantity;
-        return s + qty * (it.unitPrice || 0) * (1 + (it.gstRate || 0) / 100);
-      }, 0)
+    return StockInvoiceScanService.scan(
+      file,
+      poItems,
+      { name: vendor?.name || po.vendorName || "", gstin: vendor?.gst?.gstNumber || "" },
+      { trackingOrderId, user }
     );
-    const today = new Date();
-    const p = (x) => String(x).padStart(2, "0");
-    const ymdCompact = `${today.getFullYear()}${p(today.getMonth() + 1)}${p(today.getDate())}`;
-    return {
-      source: "DUMMY",
-      invoiceNumber: `DUMMY-${ymdCompact}`,
-      invoiceDate: `${today.getFullYear()}-${p(today.getMonth() + 1)}-${p(today.getDate())}`,
-      invoiceAmount,
-      lines,
-    };
   }
 
   /* ---------------------------------------------------------------------- */
@@ -597,6 +594,7 @@ export default class StockInvoiceService {
           branchId,
           receivedByName: body.receivedByName || user?.name || "",
           notes: String(body.notes || "").trim(),
+          companyUse: body.companyUse === true,
           extraCharges,
           lines,
           amount: StockInvoiceService._computeAmount(lines, extraCharges),
@@ -737,6 +735,10 @@ export default class StockInvoiceService {
       const next = String(body.notes || "").trim();
       note("Notes", invoice.notes || "", next);
       invoice.notes = next;
+    }
+    if (body.companyUse !== undefined) {
+      note("Company use", invoice.companyUse ? "Yes" : "No", body.companyUse ? "Yes" : "No");
+      invoice.companyUse = body.companyUse;
     }
     if (body.extraCharges !== undefined) {
       const next = StockInvoiceService._normalizeCharges(body.extraCharges);

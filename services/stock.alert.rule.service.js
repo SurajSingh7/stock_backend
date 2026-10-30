@@ -3,7 +3,7 @@ import StockAlertRuleModel from "../models/stock.alert.rule.model.js";
 import StockAlertTemplateModel from "../models/stock.alert.template.model.js";
 import StockAlertEscalationModel from "../models/stock.alert.escalation.model.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
-import { getAlertEvent } from "../config/alert.event.catalog.js";
+import { getAlertEvent, eventAllowsVendor } from "../config/alert.event.catalog.js";
 import {
   ALERT_CHANNEL,
   ALERT_CHANNEL_ARRAY,
@@ -23,7 +23,7 @@ const isId = (x) => mongoose.isValidObjectId(x);
   event with no "pending" gets no later steps, every template matches its
   send's channel AND the rule's event.
 */
-const cleanRecipients = (list, where, { allowVendor }) => {
+const cleanRecipients = (list, where, { allowVendor, allowBranchUsers }) => {
   if (list === undefined || list === null) return [];
   if (!Array.isArray(list)) throw new Error(`${where}: recipients must be a list`);
   return list.map((r) => {
@@ -36,6 +36,9 @@ const cleanRecipients = (list, where, { allowVendor }) => {
     }
     if (r.type === ALERT_RECIPIENT_TYPE.VENDOR && !allowVendor) {
       throw new Error(`${where}: this event has no single vendor to send to`);
+    }
+    if (r.type === ALERT_RECIPIENT_TYPE.BRANCH_USERS && !allowBranchUsers) {
+      throw new Error(`${where}: "people with access to the branch" is not available for this event`);
     }
     return { type: r.type, refId: r.refId || null, address: String(r.address || "").trim() };
   });
@@ -64,7 +67,8 @@ const cleanRule = async (body, current = {}) => {
   const event = getAlertEvent(next.eventKey);
   if (!event) throw new Error("Invalid event");
   next.kind = event.kind === "MANUAL" ? ALERT_RULE_KIND.MANUAL : ALERT_RULE_KIND.AUTOMATIC;
-  const allowVendor = event.recordType !== "Quotation";
+  const allowVendor = eventAllowsVendor(event);
+  const allowBranchUsers = !!event.branchAccessModule;
 
   const steps = Array.isArray(next.steps) ? next.steps : [];
   if (!steps.length) throw new Error("A rule needs at least its first message");
@@ -94,7 +98,7 @@ const cleanRule = async (body, current = {}) => {
         seenChannels.add(send.channel);
         if (!isId(send.templateId)) throw new Error(`${where}: pick a ${send.channel} template`);
         templateIds.add(String(send.templateId));
-        const to = cleanRecipients(send.to, `${where} (${send.channel})`, { allowVendor });
+        const to = cleanRecipients(send.to, `${where} (${send.channel})`, { allowVendor, allowBranchUsers });
         // MANUAL rules may leave To empty: the dialog fills it from the vendor.
         if (!to.length && next.kind !== ALERT_RULE_KIND.MANUAL) throw new Error(`${where} (${send.channel}): add at least one recipient`);
         return {
@@ -103,7 +107,7 @@ const cleanRule = async (body, current = {}) => {
           enabled: send.enabled === undefined ? true : !!send.enabled,
           templateId: send.templateId,
           to,
-          cc: send.channel === ALERT_CHANNEL.EMAIL ? cleanRecipients(send.cc, `${where} (CC)`, { allowVendor }) : [],
+          cc: send.channel === ALERT_CHANNEL.EMAIL ? cleanRecipients(send.cc, `${where} (CC)`, { allowVendor, allowBranchUsers }) : [],
         };
       }),
     };

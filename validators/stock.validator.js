@@ -898,6 +898,9 @@ export const validateUpdateInvoice = (body) => {
   if (body.lines !== undefined) validateInvoiceLines(body.lines);
   validateExtraCharges(body.extraCharges);
   if (body.notes !== undefined && typeof body.notes !== "string") throw new Error("Notes must be text");
+  if (body.companyUse !== undefined && typeof body.companyUse !== "boolean") {
+    throw new Error("companyUse must be true or false");
+  }
 };
 
 export const validateCreateInvoice = (body) => {

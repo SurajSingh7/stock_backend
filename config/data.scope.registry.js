@@ -36,6 +36,8 @@ export const DATA_SCOPE_REGISTRY = {
   // The GST slab ladder — the same rows for the whole company. No branch,
   // entity or ownership dimension exists to scope them on.
   "gst-rates": {},
+  // One company-wide setting (which Claude model reads invoices) and its scan log.
+  "ai-settings": {},
 
   // ── Branch-scoped ────────────────────────────────────────────────────────
   // A branch record IS a branch, so it scopes on its own _id. The unscoped

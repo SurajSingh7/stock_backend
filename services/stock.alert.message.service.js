@@ -5,8 +5,9 @@ import StockAlertTemplateModel from "../models/stock.alert.template.model.js";
 import StockAlertSettingsService from "./stock.alert.settings.service.js";
 import StockAlertDispatcherService from "./stock.alert.dispatcher.service.js";
 import { runSender } from "./stock.alert.worker.js";
-import { normalizePhone } from "./stock.alert.recipient.service.js";
-import { sampleVarsFor } from "../config/alert.event.catalog.js";
+import StockAlertRecipientService, { normalizePhone } from "./stock.alert.recipient.service.js";
+import StockAlertRuleModel from "../models/stock.alert.rule.model.js";
+import { sampleVarsFor, getAlertEvent } from "../config/alert.event.catalog.js";
 import { renderAlertTemplate } from "../helpers/alert.render.helper.js";
 import { getAlertProvider } from "../helpers/alert.providers/index.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
@@ -15,6 +16,7 @@ import {
   ALERT_ESCALATION_STATUS,
   ALERT_MESSAGE_STATUS as S,
   ALERT_TRIGGER,
+  CONTACT_RECIPIENT_TYPE,
 } from "../constants/stock.enums.js";
 
 const escapeRegex = (s = "") => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -64,7 +66,7 @@ export class StockAlertMessageService {
     const m = await StockAlertMessageModel.findById(id).lean();
     if (!m) throw new Error("Message not found");
     if ([S.QUEUED, S.SENDING].includes(m.status)) throw new Error("This message is still on its way");
-    if (!m.to?.address) throw new Error("This message had no address — fix the contact and let the rule send again");
+    if (!m.to?.address) return StockAlertMessageService._retryMissed(m, actor);
 
     const settings = await StockAlertSettingsService.get();
     const row = StockAlertDispatcherService.prepareRow(
@@ -99,6 +101,78 @@ export class StockAlertMessageService {
     await StockAuditLogService.recordAudit({ entityType: "alert_messages", entityId: doc._id, action: "RESEND", actor, after: { resendOf: m._id } });
     runSender().catch(() => {});
     return doc;
+  }
+
+  /*
+    A row skipped for want of a recipient ("no WhatsApp number", "nobody
+    linked to a login has access to this branch") has nobody to repeat it to.
+    Trying again resolves the rule's recipients afresh — picking up the number
+    added or the contact linked since — and sends the same text to whoever it
+    now finds that this record's rule hasn't already reached on this channel.
+  */
+  static async _retryMissed(m, actor) {
+    if (!m.ruleId || !m.body) throw new Error("This message had no address — fix the contact and let the rule send again");
+    const rule = await StockAlertRuleModel.findOne({ _id: m.ruleId, isActive: true }).lean();
+    const send = rule?.steps?.[m.stepIndex ?? 0]?.sends?.find((x) => x.channel === m.channel);
+    if (!send) throw new Error("The rule (or this channel in it) no longer exists");
+    const event = getAlertEvent(m.eventKey);
+    const doc = event && m.recordId ? await event.load(m.recordId) : null;
+    if (!doc) throw new Error("The record this message was about no longer exists");
+    const ctx = event.build(doc);
+
+    const recipientCtx = { owner: ctx.owner, vendorId: ctx.vendorId, branchId: ctx.branchId, accessModule: event.branchAccessModule };
+    const { targets, skipped } = await StockAlertRecipientService.resolve(m.channel, send.to, { ...recipientCtx, vendorLine: CONTACT_RECIPIENT_TYPE.TO });
+    const cc = m.channel === ALERT_CHANNEL.EMAIL && send.cc?.length
+      ? (await StockAlertRecipientService.resolve(ALERT_CHANNEL.EMAIL, send.cc, { ...recipientCtx, vendorLine: CONTACT_RECIPIENT_TYPE.CC })).targets.map((t) => t.address)
+      : [];
+
+    // Who already has it — the sandbox rewrites `to`, so the real address is in sandboxedFrom.
+    const sent = await StockAlertMessageModel.find({
+      ruleId: m.ruleId, recordId: m.recordId, channel: m.channel, status: { $nin: [S.SKIPPED, S.FAILED, S.CANCELLED] },
+    }).select("to sandboxedFrom").lean();
+    const reached = (t) => sent.some((x) => x.to?.address === t.address || String(x.sandboxedFrom || "").includes(t.address));
+    const fresh = targets.filter((t) => !reached(t));
+    if (!fresh.length) {
+      const why = targets.length ? "everyone it finds has already received it" : skipped.map((s) => `${s.name}: ${s.reason}`).join("; ") || "nobody to send to";
+      throw new Error(`Still nobody new to send to — ${why}`);
+    }
+
+    const settings = await StockAlertSettingsService.get();
+    const channelOn = !!settings.channels?.[m.channel]?.enabled;
+    const rows = fresh.map((to) =>
+      StockAlertDispatcherService.prepareRow(
+        {
+          trigger: ALERT_TRIGGER.RESEND,
+          eventKey: m.eventKey,
+          ruleId: m.ruleId,
+          ruleName: m.ruleName,
+          escalationId: m.escalationId,
+          stepIndex: m.stepIndex,
+          stepType: m.stepType,
+          recordType: m.recordType,
+          recordId: m.recordId,
+          recordRef: m.recordRef,
+          link: m.link,
+          channel: m.channel,
+          provider: getAlertProvider(m.channel)?.name || "",
+          templateId: m.templateId,
+          to,
+          cc,
+          subject: m.subject,
+          body: m.body,
+          attachments: m.attachments,
+          resendOf: m._id,
+          triggeredBy: triggeredBySnapshot(actor),
+        },
+        { settings, channelOn }
+      )
+    );
+    const docs = await StockAlertMessageModel.insertMany(
+      rows.map((r) => ({ ...r, log: [{ at: new Date(), event: r.status, detail: r.skipReason || "Tried again after a skip" }] }))
+    );
+    await StockAuditLogService.recordAudit({ entityType: "alert_messages", entityId: m._id, action: "RESEND", actor, after: { retried: docs.map((d) => d._id) } });
+    if (docs.some((d) => d.status === S.QUEUED)) runSender().catch(() => {});
+    return { queued: docs.filter((d) => d.status === S.QUEUED).length, skipped: docs.filter((d) => d.status === S.SKIPPED).length, to: fresh.map((t) => t.name) };
   }
 
   static async cancel(id, actor) {

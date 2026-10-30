@@ -151,6 +151,10 @@ const invoiceSchema = new Schema(
     // Free-text remarks from whoever received the goods.
     notes: { type: String, trim: true, default: "" },
 
+    // The goods are for the company's own use, not for sale. A label only
+    // for now — the items still go through stock like any other invoice.
+    companyUse: { type: Boolean, default: false },
+
     // "Misc (Extra Charges)" — entered with the invoice, editable later by
     // accounts on Payments (see miscEdits). Outside Billing: Billing + Misc.
     extraCharges: { type: [extraChargeSchema], default: [] },

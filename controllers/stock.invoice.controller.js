@@ -31,12 +31,11 @@ function parseBody(req) {
 }
 
 export default class StockInvoiceController {
-  // Add Invoice → upload: what the invoice says. Dummy values for now; the
-  // Claude API reads req.file here later.
+  // Add Invoice → upload: what the invoice says, read by Claude.
   static async readInvoiceFile(req, res) {
     try {
       if (!req.file) throw new Error("Upload the invoice file first");
-      const data = await StockInvoiceService.readInvoiceFile(req.params.id, req.dataAccess);
+      const data = await StockInvoiceService.readInvoiceFile(req.params.id, req.file, req.user, req.dataAccess);
       successResponseHandler(res, data, "Invoice read");
     } catch (error) {
       log.error("Error reading invoice file", error);

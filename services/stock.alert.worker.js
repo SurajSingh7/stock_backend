@@ -8,6 +8,7 @@ import { getAlertProvider } from "../helpers/alert.providers/index.js";
 import { nextOfficeTime } from "../helpers/alert.office.hours.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockAlertDigestService from "./stock.alert.digest.service.js";
+import StockLowStockService from "./stock.low.stock.service.js";
 import {
   ALERT_ESCALATION_STATUS,
   ALERT_MESSAGE_STATUS as S,
@@ -25,6 +26,7 @@ import {
     status poll  asks the provider what became of handed-over WhatsApp messages
     escalations  sends due steps / closes finished chains
     sweep        resolves chains whose work got done, frees crashed claims
+    low stock    compares every branch's stock with its thresholds (LOW_STOCK)
 */
 const log = getLogger(import.meta.url);
 const MIN = 60 * 1000;
@@ -35,6 +37,8 @@ const SENDER_EVERY_MS = 5000;
 const STATUS_EVERY_MS = 60 * 1000;
 const ESCALATION_EVERY_MS = 60 * 1000;
 const SWEEP_EVERY_MS = 10 * MIN;
+// How late a low-stock alert may be. Each check reads the whole stock picture once.
+const LOW_STOCK_EVERY_MS = Math.max(1, Number(process.env.LOW_STOCK_CHECK_MINUTES) || 5) * MIN;
 const CLAIM_MS = 2 * MIN;
 const STATUS_WINDOW_MS = 3 * 24 * HOUR; // stop asking after 3 days
 
@@ -276,6 +280,7 @@ export function startAlertWorker() {
   every(ESCALATION_EVERY_MS, runEscalations, "escalation");
   every(SWEEP_EVERY_MS, runSweep, "sweep");
   every(60 * 1000, () => StockAlertDigestService.runIfDue(), "digest");
+  every(LOW_STOCK_EVERY_MS, () => StockLowStockService.checkAll(), "low-stock");
   log.info("Alert worker started");
 }
 

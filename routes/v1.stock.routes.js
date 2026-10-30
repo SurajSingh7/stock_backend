@@ -12,6 +12,8 @@ import StockTrackingOrderController from "../controllers/stock.tracking.order.co
 import StockBranchController from "../controllers/stock.branch.controller.js";
 import StockGstRateController from "../controllers/stock.gst.rate.controller.js";
 import StockFaultyItemController from "../controllers/stock.faulty.item.controller.js";
+import StockLowStockController from "../controllers/stock.low.stock.controller.js";
+import StockAiSettingsController from "../controllers/stock.ai.settings.controller.js";
 import StockInvoiceController from "../controllers/stock.invoice.controller.js";
 import { uploadInvoiceFile, uploadInvoiceForReading } from "../helpers/stock.invoice.upload.helper.js";
 import StockTransferRequestController from "../controllers/stock.transfer.request.controller.js";
@@ -136,6 +138,9 @@ router.get("/inventory-items/cards", authenticate, requirePermission("inventory-
 router.get("/inventory-items/product-summary", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getProductInventorySummary);
 router.get("/inventory-items/history/:defId", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getReceivingHistory);
 router.get("/inventory-items/summary/:defId", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getStockSummary);
+// Low Stock — same READ and branch scope as the inventory screens, so whoever
+// sees a branch's stock sees (and is alerted about) what is low in it.
+router.get("/low-stock", authenticate, requirePermission("inventory-items", "READ"), StockLowStockController.getList);
 router.get("/inventory-items/:id/timeline", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getItemTimeline);
 router.get("/inventory-items/:id", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getInventoryItemById);
 router.put("/inventory-items/:id", authenticate, requirePermission("inventory-items", "UPDATE"), StockInventoryItemController.updateInventoryItem);
@@ -181,7 +186,7 @@ router.patch("/tracking-orders/:id/reopen", authenticate, requirePermission("tra
 router.patch("/tracking-orders/:id/reset", authenticate, requirePermission("purchase-orders", "RESET_ORDER"), StockTrackingOrderController.resetOrder);
 router.get("/not-required", authenticate, requirePermission("not-required", "READ"), StockTrackingOrderController.getNotRequired);
 router.get("/tracking-orders/:id", authenticate, requirePermission("tracking-orders", "READ"), StockTrackingOrderController.getDetail);
-// Add Invoice → upload: read the details off the file (dummy for now).
+// Add Invoice → upload: Claude reads the details off the file (model from AI Settings).
 router.post(
   "/tracking-orders/:id/invoices/read",
   authenticate,
@@ -366,6 +371,15 @@ router.get("/gst-rates/:id", authenticate, requirePermission("gst-rates", "READ"
 router.put("/gst-rates/:id", authenticate, requirePermission("gst-rates", "UPDATE"), StockGstRateController.updateGstRate);
 router.delete("/gst-rates/:id", authenticate, requirePermission("gst-rates", "DELETE"), StockGstRateController.softDeleteGstRate);
 router.patch("/gst-rates/:id/restore", authenticate, requirePermission("gst-rates", "RESTORE"), StockGstRateController.restoreGstRate);
+
+// ─── AI Settings ──────────────────────────────────────────────────────────────
+// Which Claude model reads invoices. The key stays in .env; nothing here exposes it.
+router.get("/ai-settings", authenticate, requirePermission("ai-settings", "READ"), StockAiSettingsController.get);
+router.put("/ai-settings", authenticate, requirePermission("ai-settings", "UPDATE"), StockAiSettingsController.update);
+router.post("/ai-settings/test", authenticate, requirePermission("ai-settings", "TEST"), StockAiSettingsController.test);
+router.get("/ai-settings/usage", authenticate, requirePermission("ai-settings", "READ"), StockAiSettingsController.usage);
+// Add Invoice shows which model will read the file — anyone who may add an invoice.
+router.get("/ai-settings/invoice-scan", authenticate, requirePermission("invoices", "CREATE"), StockAiSettingsController.get);
 
 // ─── Opening Stock ─────────────────────────────────────────────────────────────
 // Stock that was on hand before this system. Static paths before /:id.

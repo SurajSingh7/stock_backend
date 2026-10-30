@@ -14,6 +14,7 @@ import {
   MAIL_REACHED_VENDOR,
 } from "../constants/stock.enums.js";
 import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
+import StockLowStockNoticeModel from "../models/stock.low.stock.notice.model.js";
 
 /*
   Alerts & Escalations — the event catalog.
@@ -39,6 +40,9 @@ import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
     build(doc)        → { ref, link, vars, amount, branchId, vendorIds,
                           owner, vendorId, document }
     isPending(doc)    → true while the work is not done (escalation goes on)
+    noVendor          (optional) the record has no vendor to send to
+    branchAccessModule (optional) module whose branch scope decides who the
+                      "people with access to the branch" recipient reaches
 */
 
 const APP_URL = () => (process.env.APP_PUBLIC_URL || "http://localhost:3000").trim().replace(/\/+$/, "");
@@ -232,6 +236,51 @@ const DEBIT_NOTE_VARS = [
 
 const REJECTED_VAR = { key: "rejectedReason", label: "Rejection reason", sample: "Rate higher than last purchase" };
 
+// ─── Low stock ──────────────────────────────────────────────────────────────
+const LIST_MAX = 15; // a WhatsApp listing 200 products helps nobody — the page has them all
+const qty = (n, unit) => `${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 3 })}${unit === "meter" ? " m" : ""}`;
+export const lowStockLine = (it) =>
+  it.level === "OUT"
+    ? `🔴 ${it.productName} — OUT of stock (min ${qty(it.threshold, it.unit)})`
+    : `🟡 ${it.productName} — ${qty(it.available, it.unit)} left (min ${qty(it.threshold, it.unit)})`;
+
+const loadLowStockNotice = (id) => StockLowStockNoticeModel.findById(id).lean();
+const buildLowStockNotice = (n) => {
+  const items = n.items || [];
+  // OUT first: that is the one to act on.
+  const sorted = [...items].sort((a, b) => (a.level === b.level ? a.productName.localeCompare(b.productName) : a.level === "OUT" ? -1 : 1));
+  const lines = sorted.slice(0, LIST_MAX).map(lowStockLine);
+  if (sorted.length > LIST_MAX) lines.push(`…and ${sorted.length - LIST_MAX} more`);
+  const outCount = items.filter((i) => i.level === "OUT").length;
+  return {
+    ref: `Low stock · ${n.branchName || "branch"}`,
+    link: `${APP_URL()}/stock/low-stock?branchId=${n.branchId}`,
+    amount: 0,
+    branchId: n.branchId,
+    vendorIds: [],
+    owner: null,
+    vars: {
+      branchName: n.branchName || "",
+      itemCount: String(items.length),
+      lowCount: String(items.length - outCount),
+      outCount: String(outCount),
+      itemsList: lines.join("\n"),
+      createdAt: date(n.createdAt),
+    },
+  };
+};
+const LOW_STOCK_VARS = [
+  { key: "branchName", label: "Branch", sample: "Noida" },
+  { key: "itemCount", label: "Products in this alert", sample: "3" },
+  { key: "lowCount", label: "Products low", sample: "2" },
+  { key: "outCount", label: "Products out of stock", sample: "1" },
+  {
+    key: "itemsList",
+    label: "Product list (one per line)",
+    sample: "🔴 Cat6 Cable Box — OUT of stock (min 2)\n🟡 HP 680 Cartridge — 3 left (min 5)\n🟡 TP-Link Router — 2 left (min 4)",
+  },
+];
+
 // ─── The catalog ────────────────────────────────────────────────────────────
 const EVENTS = [
   // Tier 1 — somebody has to approve
@@ -378,6 +427,24 @@ const EVENTS = [
     isPending: (dn) => dn.status === DEBIT_NOTE_STATUS.REVIEW_REJECTED,
   },
 
+  // Stock — raised by the low-stock check (stock.low.stock.service.js), one
+  // record per branch per check, listing what went LOW or OUT in it.
+  {
+    key: "LOW_STOCK",
+    label: "Stock low / out in a branch",
+    group: "Stock",
+    recordType: "Low Stock",
+    kind: "AUTOMATIC",
+    // Nothing to wait on: the morning summary lists what is still low.
+    pendingLabel: null,
+    noVendor: true,
+    branchAccessModule: "inventory-items",
+    variables: withCommon(LOW_STOCK_VARS),
+    load: loadLowStockNotice,
+    build: buildLowStockNotice,
+    isPending: null,
+  },
+
   // Manual — a person sends it from the PO screen (phase 4)
   {
     key: "PO_SEND_TO_VENDOR",
@@ -407,18 +474,23 @@ const BY_KEY = new Map(EVENTS.map((e) => [e.key, e]));
 
 export const getAlertEvent = (key) => BY_KEY.get(key) || null;
 
+// A quotation spans many vendors; a stock notice has none.
+export const eventAllowsVendor = (ev) => ev.recordType !== "Quotation" && !ev.noVendor;
+
 /** What the admin screens show — no functions. */
 export const listAlertEvents = () =>
-  EVENTS.map(({ key, label, group, recordType, kind, pendingLabel, variables, hasDocument }) => ({
-    key,
-    label,
-    group,
-    recordType,
-    kind,
-    pendingLabel,
-    supportsEscalation: !!pendingLabel,
-    hasDocument: !!hasDocument,
-    variables,
+  EVENTS.map((ev) => ({
+    key: ev.key,
+    label: ev.label,
+    group: ev.group,
+    recordType: ev.recordType,
+    kind: ev.kind,
+    pendingLabel: ev.pendingLabel,
+    supportsEscalation: !!ev.pendingLabel,
+    hasDocument: !!ev.hasDocument,
+    allowsVendor: eventAllowsVendor(ev),
+    allowsBranchUsers: !!ev.branchAccessModule,
+    variables: ev.variables,
   }));
 
 /** Sample values for Preview / Send Test. */

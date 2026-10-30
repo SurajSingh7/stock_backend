@@ -752,8 +752,19 @@ export const ALERT_RECIPIENT_TYPE = {
   CREATOR: "CREATOR",
   VENDOR: "VENDOR",
   ADDRESS: "ADDRESS",
+  // Everyone (linked to a login) whose data scope on the event's module covers
+  // the record's branch — OWN / SELECTED / ALL, exactly as the screens apply it.
+  BRANCH_USERS: "BRANCH_USERS",
 };
 export const ALERT_RECIPIENT_TYPE_ARRAY = Object.values(ALERT_RECIPIENT_TYPE);
+
+// A product's stock in one branch against its alert threshold.
+export const STOCK_LEVEL = {
+  OK: "OK",
+  LOW: "LOW", // 0 < available ≤ threshold
+  OUT: "OUT", // nothing available
+};
+export const STOCK_LEVEL_ARRAY = Object.values(STOCK_LEVEL);
 
 export const ALERT_GROUP_TYPE = { LIST: "LIST", WHATSAPP_GROUP: "WHATSAPP_GROUP" };
 export const ALERT_GROUP_TYPE_ARRAY = Object.values(ALERT_GROUP_TYPE);

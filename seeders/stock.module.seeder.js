@@ -74,6 +74,9 @@ const MODULE_DEFINITIONS = [
   { key: "account-summary", name: "Vendor Outstanding Overview", actions: withMenu(["READ"]) },
   { key: "branches", name: "Branches", actions: withMenu(STANDARD_ACTIONS) },
   { key: "gst-rates", name: "GST Rates", actions: withMenu(STANDARD_ACTIONS) },
+  // Which Claude model reads uploaded invoices. UPDATE also gates the
+  // "Change model" button next to Re-scan on Add Invoice.
+  { key: "ai-settings", name: "AI Settings", actions: withMenu(["READ", "UPDATE", "TEST"]) },
   { key: "transfer-requests", name: "Transfer Requests", actions: withMenu(["CREATE", "READ", "PROCESS", "REJECT"]) },
   // Stock that was already on hand before this system. POST is its own action
   // because it is the step that actually creates stock — the person typing up
