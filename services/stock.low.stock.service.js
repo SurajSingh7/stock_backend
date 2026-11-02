@@ -54,7 +54,7 @@ export default class StockLowStockService {
     const branchList = branches.map((b) => b._id);
 
     const [products, stock] = await Promise.all([
-      StockProductDefinitionModel.find({ isActive: true, status: "ACTIVE" })
+      StockProductDefinitionModel.find({ isActive: true })
         .select("name unit categoryId defaultStockAlertThreshold branchThresholds")
         .lean(),
       StockInventoryItemModel.aggregate([

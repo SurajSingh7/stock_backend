@@ -187,20 +187,27 @@ export default class StockVendorService {
 
  static async getAllVendors(query, dataAccess) {
     try {
-      const { search, showInactive, categoryId, productId, group, parentId } = query;
+      const { search, showInactive, status, categoryId, productId, branchId, group, parentId } = query;
       const { skip, limit, page } = paginate(query);
 
       const filter = {};
-      // NOTE (known constraint — same as Field Definitions / Product
-      // Definitions, Section 8.2/14): showInactive only supports "show
-      // everything" vs "active only" here. There is no server-side
-      // "inactive only" mode — that tab is handled client-side in Vendors.jsx.
-      if (showInactive !== "true") filter.isActive = true;
+      // status=ACTIVE|INACTIVE filters here, so paging and totals are right for
+      // either tab (filtering one page in the browser lost deleted vendors that
+      // sat on a later page). Without it: showInactive=true is "everything",
+      // anything else "active only" — what the pickers send.
+      if (status === "INACTIVE") filter.isActive = false;
+      else if (status === "ACTIVE" || showInactive !== "true") filter.isActive = true;
       applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
 
       if (search) {
         const regex = new RegExp(escapeRegex(search.trim()), "i");
-        filter.$or = [{ name: regex }, { vendorCode: regex }, { "gst.gstNumber": regex }];
+        filter.$or = [{ name: regex }, { vendorCode: regex }, { "gst.gstNumber": regex }, { "contacts.phone": regex }];
+      }
+
+      // The branch a vendor belongs to (the list's Branch filter).
+      if (branchId) {
+        if (!mongoose.Types.ObjectId.isValid(branchId)) return paginateReturn([], 0, page, limit);
+        filter.branchId = new mongoose.Types.ObjectId(branchId);
       }
 
       // RULE 23 — dropdown/picker filters are applied in the SERVICE layer.
@@ -235,7 +242,9 @@ export default class StockVendorService {
       if (parentId) {
         if (!mongoose.Types.ObjectId.isValid(parentId)) return paginateReturn([], 0, page, limit);
         filter.parentVendorId = new mongoose.Types.ObjectId(parentId);
-      } else if (group === "mains" || (group === "top" && !search)) {
+      } else if (group === "mains" || (group === "top" && !search && status !== "INACTIVE")) {
+        // (The Inactive tab lists every deleted vendor flat — a deleted child
+        // firm has no main vendor row there to sit under.)
         filter.parentVendorId = null;
       } else if (group === "groups") {
         const parents = await StockVendorModel.distinct("parentVendorId", { isActive: true, parentVendorId: { $ne: null } });
@@ -261,9 +270,18 @@ export default class StockVendorService {
         ? await StockVendorModel.find({ _id: { $in: parentIds } }).select("name").lean()
         : [];
       const parentName = new Map(parents.map((p) => [String(p._id), p.name]));
+      // The branch each vendor belongs to, by name, for the list's Branch column.
+      const branchIds = [...new Set(data.map((v) => v.branchId).filter(Boolean).map(String))];
+      const branches = branchIds.length
+        ? await mongoose.model("branches").find({ _id: { $in: branchIds } }).select("name code").lean()
+        : [];
+      const branchById = new Map(branches.map((b) => [String(b._id), b]));
       data.forEach((v) => {
         v.childCount = countBy.get(String(v._id)) || 0;
         v.parentVendorName = v.parentVendorId ? parentName.get(String(v.parentVendorId)) || "" : "";
+        const b = v.branchId ? branchById.get(String(v.branchId)) : null;
+        v.branchName = b?.name || "";
+        v.branchCode = b?.code || "";
       });
 
       return paginateReturn(data, total, page, limit);

@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-import { TERMS_STATUS_ARRAY } from "../constants/stock.enums.js";
 import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 
 const { Schema } = mongoose;
@@ -19,12 +18,9 @@ const stockTermsConditionSchema = new Schema(
     // Rich text (HTML) authored via the master's formatting toolbar.
     termsContent: { type: String, required: true },
 
-    status: {
-      type: String,
-      enum: TERMS_STATUS_ARRAY,
-      default: "ACTIVE",
-    },
-
+    // The only on/off: false = deleted (restorable) and never applied to a PO.
+    // A separate ACTIVE/INACTIVE status existed until 2026-11-02
+    // (scripts/remove-terms-status.js).
     isActive: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null },
     deletedBy: { type: Schema.Types.ObjectId, default: null },
@@ -34,7 +30,7 @@ const stockTermsConditionSchema = new Schema(
 
 stockTermsConditionSchema.index({ isDefault: 1 });
 stockTermsConditionSchema.index({ applicableVendors: 1 });
-stockTermsConditionSchema.index({ isActive: 1, status: 1 });
+stockTermsConditionSchema.index({ isActive: 1 });
 
 // DB-level guard alongside the service-layer "auto-demote previous default"
 // logic — only one ACTIVE document can have isDefault: true.

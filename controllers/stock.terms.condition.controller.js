@@ -32,12 +32,13 @@ export default class StockTermsConditionController {
   static async getAllTermsConditions(req, res) {
     try {
       const { skip, limit, page } = paginate(req.query);
-      const { search, status, showInactive } = req.query;
+      const { search, status, showInactive, vendorId } = req.query;
       const { data, total } = await StockTermsConditionService.getAllTermsConditions({
         skip,
         limit,
         search,
         status,
+        vendorId,
         showInactive: showInactive === "true",
       });
       successResponseHandler(

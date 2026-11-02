@@ -1,7 +1,8 @@
 import StockTermsConditionModel from "../models/stock.terms.condition.model.js";
 import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
-import { TERMS_STATUS, TERMS_SOURCE } from "../constants/stock.enums.js";
+import mongoose from "mongoose";
+import { TERMS_SOURCE } from "../constants/stock.enums.js";
 
 const ENTITY_TYPE = "terms-conditions";
 
@@ -24,7 +25,7 @@ export default class StockTermsConditionService {
 
   static async createTermsCondition(body, actor, session) {
     try {
-      const { termName, isDefault, applicableVendors, termsContent, status } = body;
+      const { termName, isDefault, applicableVendors, termsContent } = body;
       const wantsDefault = !!isDefault;
 
       // Only one ACTIVE default term at a time — demote whatever currently
@@ -44,7 +45,6 @@ export default class StockTermsConditionService {
             isDefault: wantsDefault,
             applicableVendors: wantsDefault ? [] : applicableVendors || [],
             termsContent: sanitizeRichText(termsContent),
-            status: status || TERMS_STATUS.ACTIVE,
           },
         ],
         { session }
@@ -60,11 +60,18 @@ export default class StockTermsConditionService {
 
   // ─── List ────────────────────────────────────────────────────────────────
 
-  static async getAllTermsConditions({ skip, limit, search, status, showInactive }) {
+  // status=ACTIVE|INACTIVE filters on isActive (paging stays right for either
+  // tab); vendorId = the terms that apply to that vendor — its own, and the default.
+  static async getAllTermsConditions({ skip, limit, search, status, showInactive, vendorId }) {
     try {
       const filter = showInactive ? {} : { isActive: true };
+      if (status === "INACTIVE") filter.isActive = false;
+      else if (status === "ACTIVE") filter.isActive = true;
       if (search) filter.termName = { $regex: escapeRegex(search.trim()), $options: "i" };
-      if (status) filter.status = status;
+      if (vendorId) {
+        if (!mongoose.Types.ObjectId.isValid(vendorId)) return { data: [], total: 0 };
+        filter.$or = [{ applicableVendors: new mongoose.Types.ObjectId(vendorId) }, { isDefault: true }];
+      }
 
       const [data, total] = await Promise.all([
         StockTermsConditionModel.find(filter)
@@ -104,7 +111,7 @@ export default class StockTermsConditionService {
       if (!term) throw new Error("Terms & Conditions not found");
       const before = term.toObject();
 
-      const { termName, isDefault, applicableVendors, termsContent, status } = body;
+      const { termName, isDefault, applicableVendors, termsContent } = body;
       const nextIsDefault = isDefault !== undefined ? !!isDefault : term.isDefault;
 
       if (nextIsDefault && !term.isDefault) {
@@ -119,7 +126,6 @@ export default class StockTermsConditionService {
       term.isDefault = nextIsDefault;
       term.applicableVendors = nextIsDefault ? [] : applicableVendors || [];
       if (termsContent !== undefined) term.termsContent = sanitizeRichText(termsContent);
-      if (status !== undefined) term.status = status;
 
       await term.save({ session });
       await StockAuditLogService.recordAudit({
@@ -197,7 +203,6 @@ export default class StockTermsConditionService {
       if (vendorId) {
         const vendorTerm = await StockTermsConditionModel.findOne({
           isActive: true,
-          status: TERMS_STATUS.ACTIVE,
           isDefault: false,
           applicableVendors: vendorId,
         })
@@ -210,7 +215,6 @@ export default class StockTermsConditionService {
 
       const defaultTerm = await StockTermsConditionModel.findOne({
         isActive: true,
-        status: TERMS_STATUS.ACTIVE,
         isDefault: true,
       })
         .session(session ?? null)
@@ -234,7 +238,6 @@ export default class StockTermsConditionService {
       return await StockTermsConditionModel.findOne({
         _id: id,
         isActive: true,
-        status: TERMS_STATUS.ACTIVE,
       })
         .session(session ?? null)
         .lean();

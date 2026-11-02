@@ -1,0 +1,445 @@
+[
+  {
+    "collection": "alert_inbox",
+    "_id": "6ada6ea0bea3f99118382388",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "QTN-2026-0023 · Amit Batra\nhttp://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_inbox",
+    "_id": "6adc9e2bdecf886a26c6c891",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "QTN-2026-0024 · Amit Batra\nhttp://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_inbox",
+    "_id": "6ae34595f8cc2ec671e7cb5a",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a77231d0874bd820afac413"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ada6cd8bea3f99118382116",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0022",
+      "body": "🔔 *Quotation approval pending*\nQTN-2026-0022 · TECHNOLOGY NEXT\n1 categories · ₹590\nCreated by Amit Batra, 23 Oct 2026, 1:36 am\n\n👉 Open: http://localhost:3000/stock/quotations?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ada6cd8bea3f99118382117",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0022",
+      "body": "🔔 *Quotation approval pending*\nQTN-2026-0022 · TECHNOLOGY NEXT\n1 categories · ₹590\nCreated by Amit Batra, 23 Oct 2026, 1:36 am\n\n👉 Open: http://localhost:3000/stock/quotations?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ada6cd8bea3f99118382118",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0022",
+      "body": "QTN-2026-0022 · Amit Batra\nhttp://localhost:3000/stock/quotations?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ada6cd8bea3f99118382119",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0022",
+      "body": "QTN-2026-0022 · Amit Batra\nhttp://localhost:3000/stock/quotations?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ada6ea0bea3f9911838237c",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "🔔 *Quotation approval pending*\nQTN-2026-0023 · cloud infotec\n1 categories · ₹790.6\nCreated by Amit Batra, 23 Oct 2026, 1:44 am\n\n👉 Open: http://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ada6ea0bea3f9911838237d",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "🔔 *Quotation approval pending*\nQTN-2026-0023 · cloud infotec\n1 categories · ₹790.6\nCreated by Amit Batra, 23 Oct 2026, 1:44 am\n\n👉 Open: http://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ada6ea0bea3f9911838237e",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "🔔 *Quotation approval pending*\nQTN-2026-0023 · cloud infotec\n1 categories · ₹790.6\nCreated by Amit Batra, 23 Oct 2026, 1:44 am\n\n👉 Open: http://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ada6ea0bea3f9911838237f",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "QTN-2026-0023 · Amit Batra\nhttp://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ada6ea0bea3f99118382380",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "QTN-2026-0023 · Amit Batra\nhttp://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ada6ea0bea3f99118382381",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "QTN-2026-0023 · Amit Batra\nhttp://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adafb1fbea3f9911838240d",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0022",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0022 is waiting for 10 h (since 23 Oct 2026, 1:36 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adafb1fbea3f9911838240e",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0022",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0022 is waiting for 10 h (since 23 Oct 2026, 1:36 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adafb1fbea3f9911838240f",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0022",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0022 is waiting for 10 h (since 23 Oct 2026, 1:36 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adafb20bea3f99118382419",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0023 is waiting for 10 h (since 23 Oct 2026, 1:44 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adafb20bea3f9911838241a",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0023 is waiting for 10 h (since 23 Oct 2026, 1:44 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adafb20bea3f9911838241b",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0023 is waiting for 10 h (since 23 Oct 2026, 1:44 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adb3373dc4ba383a8809831",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0022",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0022 is waiting for 14 h (since 23 Oct 2026, 1:36 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adb3373dc4ba383a8809832",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0022",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0022 is waiting for 14 h (since 23 Oct 2026, 1:36 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adb3373dc4ba383a8809833",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0022",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0022 is waiting for 14 h (since 23 Oct 2026, 1:36 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adb3373dc4ba383a880983f",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0023 is waiting for 14 h (since 23 Oct 2026, 1:44 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adb3373dc4ba383a8809840",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0023 is waiting for 14 h (since 23 Oct 2026, 1:44 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adb3373dc4ba383a8809841",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations?search=QTN-2026-0023",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0023 is waiting for 14 h (since 23 Oct 2026, 1:44 am).\n\n👉 http://localhost:3000/stock/quotations?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adc504edecf886a26c6a281",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0022",
+      "body": "⚠️ *Escalation: quotation approval pending*\nQTN-2026-0022 · TECHNOLOGY NEXT\n1 categories · ₹590\nNo action for 34 h. Created by Amit Batra.\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adc504edecf886a26c6a282",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0022",
+      "body": "⚠️ *Escalation: quotation approval pending*\nQTN-2026-0022 · TECHNOLOGY NEXT\n1 categories · ₹590\nNo action for 34 h. Created by Amit Batra.\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0022"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adc504fdecf886a26c6a28b",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0023",
+      "body": "⚠️ *Escalation: quotation approval pending*\nQTN-2026-0023 · cloud infotec\n1 categories · ₹790.6\nNo action for 34 h. Created by Amit Batra.\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adc504fdecf886a26c6a28c",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0023",
+      "body": "⚠️ *Escalation: quotation approval pending*\nQTN-2026-0023 · cloud infotec\n1 categories · ₹790.6\nNo action for 34 h. Created by Amit Batra.\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0023"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adc9e2bdecf886a26c6c859",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "🔔 *Quotation approval pending*\nQTN-2026-0024 · Go ip  global\n1 categories · ₹811.84\nCreated by Amit Batra, 24 Oct 2026, 5:31 pm\n\n👉 Open: http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adc9e2bdecf886a26c6c85a",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "🔔 *Quotation approval pending*\nQTN-2026-0024 · Go ip  global\n1 categories · ₹811.84\nCreated by Amit Batra, 24 Oct 2026, 5:31 pm\n\n👉 Open: http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adc9e2bdecf886a26c6c85b",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "🔔 *Quotation approval pending*\nQTN-2026-0024 · Go ip  global\n1 categories · ₹811.84\nCreated by Amit Batra, 24 Oct 2026, 5:31 pm\n\n👉 Open: http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adc9e2bdecf886a26c6c85c",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "QTN-2026-0024 · Amit Batra\nhttp://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adc9e2bdecf886a26c6c85d",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "QTN-2026-0024 · Amit Batra\nhttp://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adc9e2bdecf886a26c6c85e",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "QTN-2026-0024 · Amit Batra\nhttp://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adef2d6decf886a26c6deaf",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0024 is waiting for 42 h (since 24 Oct 2026, 5:31 pm).\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adef2d6decf886a26c6deb0",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0024 is waiting for 42 h (since 24 Oct 2026, 5:31 pm).\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adef2d6decf886a26c6deb1",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0024 is waiting for 42 h (since 24 Oct 2026, 5:31 pm).\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adf2b4fdecf886a26c6fbd1",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0024 is waiting for 46 h (since 24 Oct 2026, 5:31 pm).\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adf2b4fdecf886a26c6fbd2",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0024 is waiting for 46 h (since 24 Oct 2026, 5:31 pm).\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6adf2b4fdecf886a26c6fbd3",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "⏰ *Reminder: quotation approval pending*\nQTN-2026-0024 is waiting for 46 h (since 24 Oct 2026, 5:31 pm).\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae043868aba5c2986c308f2",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "⚠️ *Escalation: quotation approval pending*\nQTN-2026-0024 · Go ip  global\n1 categories · ₹811.84\nNo action for 66 h. Created by Amit Batra.\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae043868aba5c2986c308f3",
+    "before": {
+      "link": "http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024",
+      "body": "⚠️ *Escalation: quotation approval pending*\nQTN-2026-0024 · Go ip  global\n1 categories · ₹811.84\nNo action for 66 h. Created by Amit Batra.\n\n👉 http://localhost:3000/stock/quotations/approval?search=QTN-2026-0024"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb1e",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a8207bafa46b6a752d70771"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb1f",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a8207bafa46b6a752d70771",
+      "body": "⚠️ *Low stock — chandigarh*\n\n🔴 16wire-tnt — OUT of stock (min 9 m)\n🔴 CAT-5 — OUT of stock (min 100 m)\n🔴 CAT-6 — OUT of stock (min 300 m)\n🔴 single-sy-2010 — OUT of stock (min 5)\n🔴 Single-Ub-5020-Guvd — OUT of stock (min 3)\n🔴 wire32core — OUT of stock (min 9 m)\n\n👉 http://localhost:3000/stock/low-stock?branchId=6a8207bafa46b6a752d70771"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb20",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a8207bafa46b6a752d70771",
+      "body": "These products are at or below their stock alert threshold in chandigarh:<br><br>🔴 16wire-tnt — OUT of stock (min 9 m)<br>🔴 CAT-5 — OUT of stock (min 100 m)<br>🔴 CAT-6 — OUT of stock (min 300 m)<br>🔴 single-sy-2010 — OUT of stock (min 5)<br>🔴 Single-Ub-5020-Guvd — OUT of stock (min 3)<br>🔴 wire32core — OUT of stock (min 9 m)<br><br>See everything that is low: http://localhost:3000/stock/low-stock?branchId=6a8207bafa46b6a752d70771"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb47",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a82db5cd4e3ba7f7bf4e06f"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb48",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a82db5cd4e3ba7f7bf4e06f",
+      "body": "⚠️ *Low stock — Zirakhpur*\n\n🔴 16wire-tnt — OUT of stock (min 8 m)\n🔴 CAT-5 — OUT of stock (min 80 m)\n🔴 CAT-6 — OUT of stock (min 300 m)\n🔴 single-sy-2010 — OUT of stock (min 5)\n🔴 Single-Ub-5020-Guvd — OUT of stock (min 4)\n🔴 wire32core — OUT of stock (min 6 m)\n\n👉 http://localhost:3000/stock/low-stock?branchId=6a82db5cd4e3ba7f7bf4e06f"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb49",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a82db5cd4e3ba7f7bf4e06f",
+      "body": "These products are at or below their stock alert threshold in Zirakhpur:<br><br>🔴 16wire-tnt — OUT of stock (min 8 m)<br>🔴 CAT-5 — OUT of stock (min 80 m)<br>🔴 CAT-6 — OUT of stock (min 300 m)<br>🔴 single-sy-2010 — OUT of stock (min 5)<br>🔴 Single-Ub-5020-Guvd — OUT of stock (min 4)<br>🔴 wire32core — OUT of stock (min 6 m)<br><br>See everything that is low: http://localhost:3000/stock/low-stock?branchId=6a82db5cd4e3ba7f7bf4e06f"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb4c",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a77231d0874bd820afac413"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb4d",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a77231d0874bd820afac413",
+      "body": "⚠️ *Low stock — Main Branch Azapur*\n\n🔴 CAT-5 — OUT of stock (min 200 m)\n🔴 CAT-6 — OUT of stock (min 400 m)\n🔴 Single-Ub-5020-Guvd — OUT of stock (min 5)\n\n👉 http://localhost:3000/stock/low-stock?branchId=6a77231d0874bd820afac413"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb4e",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a77231d0874bd820afac413",
+      "body": "These products are at or below their stock alert threshold in Main Branch Azapur:<br><br>🔴 CAT-5 — OUT of stock (min 200 m)<br>🔴 CAT-6 — OUT of stock (min 400 m)<br>🔴 Single-Ub-5020-Guvd — OUT of stock (min 5)<br><br>See everything that is low: http://localhost:3000/stock/low-stock?branchId=6a77231d0874bd820afac413"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb56",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a82db2cd4e3ba7f7bf4e06a"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb57",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a82db2cd4e3ba7f7bf4e06a",
+      "body": "⚠️ *Low stock — kundali*\n\n🔴 16wire-tnt — OUT of stock (min 11 m)\n🔴 CAT-5 — OUT of stock (min 80 m)\n🔴 CAT-6 — OUT of stock (min 300 m)\n🔴 single-sy-2010 — OUT of stock (min 5)\n🔴 Single-Ub-5020-Guvd — OUT of stock (min 3)\n🔴 wire32core — OUT of stock (min 10 m)\n\n👉 http://localhost:3000/stock/low-stock?branchId=6a82db2cd4e3ba7f7bf4e06a"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae34595f8cc2ec671e7cb58",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a82db2cd4e3ba7f7bf4e06a",
+      "body": "These products are at or below their stock alert threshold in kundali:<br><br>🔴 16wire-tnt — OUT of stock (min 11 m)<br>🔴 CAT-5 — OUT of stock (min 80 m)<br>🔴 CAT-6 — OUT of stock (min 300 m)<br>🔴 single-sy-2010 — OUT of stock (min 5)<br>🔴 Single-Ub-5020-Guvd — OUT of stock (min 3)<br>🔴 wire32core — OUT of stock (min 10 m)<br><br>See everything that is low: http://localhost:3000/stock/low-stock?branchId=6a82db2cd4e3ba7f7bf4e06a"
+    }
+  },
+  {
+    "collection": "alert_messages",
+    "_id": "6ae3483bd457fd45d9661c50",
+    "before": {
+      "link": "http://localhost:3000/stock/low-stock?branchId=6a77231d0874bd820afac413",
+      "body": "⚠️ *Low stock — Main Branch Azapur*\n\n🔴 CAT-5 — OUT of stock (min 200 m)\n🔴 CAT-6 — OUT of stock (min 400 m)\n🔴 Single-Ub-5020-Guvd — OUT of stock (min 5)\n\n👉 http://localhost:3000/stock/low-stock?branchId=6a77231d0874bd820afac413"
+    }
+  }
+]

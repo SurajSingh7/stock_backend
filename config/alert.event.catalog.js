@@ -80,7 +80,7 @@ const buildQuotation = (q) => {
   return {
     ref: q.quotationNumber || "",
     // Pending → straight to the approval screen; decided → the list.
-    link: link(q.status === QUOTATION_STATUS.PENDING ? "/stock/quotations/approval" : "/stock/quotations/list", q.quotationNumber),
+    link: link(q.status === QUOTATION_STATUS.PENDING ? "/stock/approval/quotations" : "/stock/purchase/quotations", q.quotationNumber),
     amount,
     branchId: null,
     vendorIds: uniq(items.map((it) => it.vendorId)),
@@ -111,7 +111,7 @@ const QUOTATION_VARS = [
 const loadPo = (id) => StockPurchaseOrderModel.findOne({ _id: id, isActive: true }).lean();
 const buildPo = (po) => ({
   ref: po.poNumber || "",
-  link: link("/stock/purchase-orders", po.poNumber),
+  link: link("/stock/accounts/po-approval", po.poNumber),
   amount: Number(po.grandTotal || 0),
   branchId: null,
   vendorIds: uniq([po.vendorId]),
@@ -142,7 +142,7 @@ const buildInvoice = (inv) => {
   const rejectedEntry = [...(inv.entries || [])].reverse().find((e) => e.status === INVOICE_ENTRY_STATUS.REJECTED);
   return {
     ref: inv.invoiceNumber || "",
-    link: link("/stock/invoice-approval", inv.invoiceNumber),
+    link: link("/stock/accounts/invoice-approval", inv.invoiceNumber),
     amount: Number(inv.invoiceAmount || inv.amount || 0),
     branchId: inv.branchId || null,
     vendorIds: uniq([inv.vendorId]),
@@ -178,7 +178,7 @@ const buildPayment = (inv) => {
   return {
     ...base,
     link: link(
-      inv.paymentApprovalStatus === PAYMENT_APPROVAL_STATUS.PENDING ? "/stock/payment-approval" : "/stock/payments",
+      inv.paymentApprovalStatus === PAYMENT_APPROVAL_STATUS.PENDING ? "/stock/approval/payments" : "/stock/accounts/payments",
       inv.invoiceNumber
     ),
     amount: Number(pa.payableAtRequest || base.amount),
@@ -208,7 +208,7 @@ const buildDebitNote = (dn) => {
   const ref = dn.dnNumber ? `DN-${dn.dnNumber}` : `DN · ${dn.invoiceNumber || ""}`;
   return {
     ref,
-    link: link(dn.status === DEBIT_NOTE_STATUS.APPROVAL_PENDING ? "/stock/payment-approval" : "/stock/payments", dn.invoiceNumber),
+    link: link(dn.status === DEBIT_NOTE_STATUS.APPROVAL_PENDING ? "/stock/approval/payments" : "/stock/accounts/payments", dn.invoiceNumber),
     amount: Number(dn.amount || 0),
     branchId: dn.branchId || null,
     vendorIds: uniq([dn.vendorId]),
@@ -254,7 +254,7 @@ const buildLowStockNotice = (n) => {
   const outCount = items.filter((i) => i.level === "OUT").length;
   return {
     ref: `Low stock · ${n.branchName || "branch"}`,
-    link: `${APP_URL()}/stock/low-stock?branchId=${n.branchId}`,
+    link: `${APP_URL()}/stock/inventory/low-stock?branchId=${n.branchId}`,
     amount: 0,
     branchId: n.branchId,
     vendorIds: [],

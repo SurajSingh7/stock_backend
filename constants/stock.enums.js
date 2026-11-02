@@ -304,12 +304,6 @@ export const CATEGORY_TYPES = {
 
 export const CATEGORY_TYPES_ARRAY = Object.values(CATEGORY_TYPES);
 
-export const PRODUCT_DEF_STATUS = {
-  ACTIVE: "ACTIVE",
-  DRAFT: "DRAFT",
-};
-
-export const PRODUCT_DEF_STATUS_ARRAY = Object.values(PRODUCT_DEF_STATUS);
 
 // Only two units exist. Unit and trackingMethod are independent — the
 // client picks both explicitly (e.g. Group+Pieces for bottles, Individual+
@@ -379,11 +373,6 @@ export const SHIPMENT_PREFERENCE_OPTIONS = [
 ];
 
 // ─── Terms & Conditions master ─────────────────────────────────────────────
-export const TERMS_STATUS = {
-  ACTIVE: "ACTIVE",
-  INACTIVE: "INACTIVE",
-};
-export const TERMS_STATUS_ARRAY = Object.values(TERMS_STATUS);
 
 // Where a PO's terms snapshot came from at create time — a vendor-specific
 // term, the single Default term, or (nothing configured yet) none.

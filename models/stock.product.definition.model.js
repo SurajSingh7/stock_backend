@@ -2,7 +2,6 @@ import mongoose from "mongoose";
 import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
 import {
   TRACKING_METHODS_ARRAY,
-  PRODUCT_DEF_STATUS_ARRAY,
   UNIT_TYPES_ARRAY,
 } from "../constants/stock.enums.js";
 
@@ -151,11 +150,9 @@ const stockProductDefinitionSchema = new mongoose.Schema(
     },
     // ──────────────────────────
 
-    status: {
-      type: String,
-      enum: PRODUCT_DEF_STATUS_ARRAY,
-      default: "ACTIVE",
-    },
+    // The only on/off: false = deleted (restorable). A separate ACTIVE/DRAFT
+    // status existed until 2026-11-02; it changed nothing but the low-stock
+    // check, so it was removed (scripts/remove-product-draft-status.js).
     isActive: {
       type: Boolean,
       default: true,

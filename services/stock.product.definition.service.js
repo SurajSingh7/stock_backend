@@ -90,7 +90,6 @@ export default class StockProductDefinitionService {
         name,
         trackingMethod,
         selectedFields,
-        status,
         gstRate,
         unit,
         defaultStockAlertThreshold,
@@ -128,7 +127,6 @@ export default class StockProductDefinitionService {
         name,
         trackingMethod,
         selectedFields,
-        status: status ?? "ACTIVE",
         gstRate: normalizedGstRate,
         // Independent of trackingMethod — validated (required, pieces/meter)
         // in validateCreateProductDefinition.
@@ -264,7 +262,6 @@ export default class StockProductDefinitionService {
         "name",
         "trackingMethod",
         "selectedFields",
-        "status",
         "gstRate",
         "unit",
         "defaultStockAlertThreshold",

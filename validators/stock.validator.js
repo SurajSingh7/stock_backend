@@ -5,7 +5,6 @@ import {
   CATEGORY_TYPES_ARRAY,
   UNIT_TYPES_ARRAY,
   CATEGORY_APPROVAL_STATUS_ARRAY,
-  TERMS_STATUS_ARRAY,
   BRANCH_ROLE_ARRAY,
   ADJUSTMENT_TYPE_ARRAY,
   PAYMENT_MODE_ARRAY,
@@ -485,7 +484,7 @@ export const validateRejectPurchaseOrder = (body) => {
 // ─── Terms & Conditions Validators ───────────────────────────────────────────
 
 export const validateCreateTermsCondition = (body) => {
-  const { termName, isDefault, applicableVendors, termsContent, status } = body || {};
+  const { termName, isDefault, applicableVendors, termsContent } = body || {};
 
   if (!termName || !String(termName).trim()) throw new Error("termName is required");
   if (!stripTags(termsContent)) throw new Error("termsContent is required");
@@ -495,14 +494,10 @@ export const validateCreateTermsCondition = (body) => {
       throw new Error("applicableVendors is required when Default is No");
     }
   }
-
-  if (status !== undefined && !TERMS_STATUS_ARRAY.includes(status)) {
-    throw new Error(`status must be one of: ${TERMS_STATUS_ARRAY.join(", ")}`);
-  }
 };
 
 export const validateUpdateTermsCondition = (body) => {
-  const { termName, isDefault, applicableVendors, termsContent, status } = body || {};
+  const { termName, isDefault, applicableVendors, termsContent } = body || {};
 
   if (termName !== undefined && !String(termName).trim()) throw new Error("termName cannot be empty");
   if (termsContent !== undefined && !stripTags(termsContent)) {
@@ -513,10 +508,6 @@ export const validateUpdateTermsCondition = (body) => {
     if (!Array.isArray(applicableVendors) || applicableVendors.length === 0) {
       throw new Error("applicableVendors is required when Default is No");
     }
-  }
-
-  if (status !== undefined && !TERMS_STATUS_ARRAY.includes(status)) {
-    throw new Error(`status must be one of: ${TERMS_STATUS_ARRAY.join(", ")}`);
   }
 };
 
