@@ -1,0 +1,30 @@
+[
+  {
+    "_id": "6acc96ac640b0f70a3d40f84",
+    "status": "FULLY_CLOSED"
+  },
+  {
+    "_id": "6ab4ffde10ed832de9113853",
+    "status": "IN_PROGRESS"
+  },
+  {
+    "_id": "6ab51f7e47860ef1e8292bef",
+    "status": "IN_PROGRESS"
+  },
+  {
+    "_id": "6ab51f7e47860ef1e8292bf2",
+    "status": "IN_PROGRESS"
+  },
+  {
+    "_id": "6abb8fe5c19c30e22f9b5ea4",
+    "status": "IN_PROGRESS"
+  },
+  {
+    "_id": "6ac384a7a4a654783378adbf",
+    "status": "PARTIAL"
+  },
+  {
+    "_id": "6acf4d9bfa100ff11c2517da",
+    "status": "PARTIAL"
+  }
+]

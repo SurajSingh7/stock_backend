@@ -76,7 +76,7 @@ export default class StockTrackingOrderController {
   static async getNotRequired(req, res) {
     try {
       const data = await StockTrackingOrderService.getNotRequired(req.query, req.dataAccess);
-      successResponseHandler(res, data, "Not Required register fetched");
+      successResponseHandler(res, data, "Skipped orders fetched");
     } catch (error) {
       log.error("Error fetching Not Required register", error);
       errorResponseHandler(res, error);
@@ -101,7 +101,7 @@ export default class StockTrackingOrderController {
       validateClosureDecision(req.body);
       return StockTrackingOrderService.shortCloseOrder(req.params.id, req.body, req.user, session, req.dataAccess);
     },
-    "Order short closed"
+    "Order closed short"
   );
 
   static reopenOrder = StockTrackingOrderController.txn(

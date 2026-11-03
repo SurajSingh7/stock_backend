@@ -188,7 +188,7 @@ const invoiceSchema = new Schema(
     status: {
       type: String,
       enum: INVOICE_STATUS_ARRAY,
-      default: INVOICE_STATUS.ADDED,
+      default: INVOICE_STATUS.UPLOADED,
     },
 
     /*

@@ -346,7 +346,7 @@ router.get("/vendor-ledger/:vendorId/month", authenticate, requirePermission("ve
 router.get(
   "/scoped-branches",
   authenticate,
-  requirePermissionForQueryModule(["invoices", "inventory-items", "item-requests", "repairs", "employee-items", "stock-reports", "vendors"], "READ"),
+  requirePermissionForQueryModule(["invoices", "inventory-items", "item-requests", "repairs", "employee-items", "stock-reports", "vendors", "tracking-orders", "purchase-orders"], "READ"),
   StockBranchController.getScopedBranches
 );
 

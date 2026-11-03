@@ -108,12 +108,11 @@ export default class StockPurchaseOrderService {
 
 
   static async getBoard(query = {}, dataAccess) {
-    const { search, vendorId, categoryId, productId, entityAlias, status, dateFrom, dateTo } = query;
+    const { search, vendorId, categoryId, productId, entityAlias, status, dateFrom, dateTo, branchId } = query;
 
     // Every vendor order, assembled once. Shared with the Tracking Orders
     // board — see services/stock.vendor.order.reader.js.
     const vendorOrders = await readVendorOrders({ sourceQuotationId: query.sourceQuotationId });
-    console.info(vendorOrders);
 
     // A vendor row belongs on THIS board only once its tracking order has
     // moved past ENTITY_PENDING — and never once it is NOT_REQUIRED.
@@ -121,10 +120,10 @@ export default class StockPurchaseOrderService {
       TRACKING_STATUS.PO_PENDING,
       TRACKING_STATUS.PO_GENERATED,
       TRACKING_STATUS.PO_APPROVED,
-      TRACKING_STATUS.IN_PROGRESS,
-      TRACKING_STATUS.PARTIAL,
-      TRACKING_STATUS.FULLY_CLOSED,
-      TRACKING_STATUS.SHORT_CLOSED,
+      TRACKING_STATUS.AWAITING_DELIVERY,
+      TRACKING_STATUS.PARTLY_RECEIVED,
+      TRACKING_STATUS.FULLY_RECEIVED,
+      TRACKING_STATUS.CLOSED_SHORT,
       TRACKING_STATUS.REJECTED,
     ]);
 
@@ -201,6 +200,8 @@ export default class StockPurchaseOrderService {
           resets: tracking.resets || [],
           activity: tracking.activity || [],
           vendorId: vId, vendorName: row.vendorName, phone: row.phone, email: row.email, contactName: row.contactName,
+          // The branch the vendor belongs to (vendor master) — the Branch filter.
+          branchId: v.branchId || null,
           mailTo: row.mailTo || [], mailCc: row.mailCc || [],
           gstNumber: row.gstNumber, address: row.address, state: row.state, stateCode: row.stateCode,
           paymentTerms: row.paymentTerms,
@@ -235,6 +236,7 @@ export default class StockPurchaseOrderService {
       if (!ignoreStatus && status && row.status !== status) return false;
       if (vendorId && String(row.vendorId) !== String(vendorId)) return false;
       if (entityAlias && (row.entityAlias || "") !== entityAlias) return false;
+      if (branchId && String(row.branchId || "") !== String(branchId)) return false;
       // This board is assembled in memory from quotations + tracking orders,
       // so the scope is applied to the built row rather than to a Mongo filter.
       // Rows with no entity yet stay visible — that is the ENTITY_PENDING work

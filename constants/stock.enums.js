@@ -393,14 +393,17 @@ export const TRACKING_STATUS = {
   PO_PENDING: "PO_PENDING",             // entity assigned — ready for PO creation
   PO_GENERATED: "PO_GENERATED",         // PO created (mirrors PO_STATUS.GENERATED)
   PO_APPROVED: "PO_APPROVED",           // PO approved + mailed (mirrors PO_STATUS.APPROVED)
-  IN_PROGRESS: "IN_PROGRESS",           // an invoice submitted, none approved yet
-  PARTIAL: "PARTIAL",                   // >=1 invoice approved, 0 < received < ordered
-  // The two END states, deliberately named as a pair so a board reader can see
-  // at a glance that both mean "nothing more is coming", and what the
-  // difference is. FULLY_CLOSED is reached on its own; SHORT_CLOSED is a
-  // person's decision, taken from PARTIAL when the rest will never arrive.
-  FULLY_CLOSED: "FULLY_CLOSED",         // received == ordered on every PO line
-  SHORT_CLOSED: "SHORT_CLOSED",         // closed early with less than ordered — see closures[]
+  // Named for what has arrived, so the status reads on its own (2026-11-03;
+  // were IN_PROGRESS / PARTIAL / FULLY_CLOSED / SHORT_CLOSED — see
+  // scripts/rename-tracking-statuses.js).
+  AWAITING_DELIVERY: "AWAITING_DELIVERY", // PO approved, nothing received (approved) yet
+  PARTLY_RECEIVED: "PARTLY_RECEIVED",     // >=1 invoice approved, 0 < received < ordered
+  // The two END states, named as a pair so a board reader sees at a glance
+  // that both mean "nothing more is coming", and what the difference is.
+  // FULLY_RECEIVED is reached on its own; CLOSED_SHORT is a person's
+  // decision, taken from PARTLY_RECEIVED when the rest will never arrive.
+  FULLY_RECEIVED: "FULLY_RECEIVED",       // received == ordered on every PO line
+  CLOSED_SHORT: "CLOSED_SHORT",           // closed early with less than ordered — see closures[]
   REJECTED: "REJECTED",                 // PO rejected (mirrors PO_STATUS.REJECTED)
   NOT_REQUIRED: "NOT_REQUIRED",         // vendor marked "Not Required"
 };
@@ -408,13 +411,14 @@ export const TRACKING_STATUS_ARRAY = Object.values(TRACKING_STATUS);
 
 
 // ─── Invoice (goods receiving) — ADD to constants/stock.enums.js ──────────────
-// ADDED  — the invoice is uploaded (number, date, quantities), no item entered
+// UPLOADED — the invoice is uploaded (number, date, quantities), no item entered
+//            (was ADDED until 2026-11-03 — see scripts/rename-invoice-added.js)
 // DRAFT  — items are being entered and saved as a draft, not submitted yet
 // PENDING — every invoiced unit is entered and submitted for approval
 // IN_PROGRESS — partial submit only: entries are being entered/approved one
 //               by one and not every invoiced unit is approved yet
 export const INVOICE_STATUS = {
-  ADDED: "ADDED",
+  UPLOADED: "UPLOADED",
   DRAFT: "DRAFT",
   PENDING: "PENDING",
   IN_PROGRESS: "IN_PROGRESS",

@@ -27,7 +27,7 @@ export default class StockTrackingOrderService {
   /* ---------------------------------------------------------------------- */
   /* Create — one ENTITY_PENDING doc per winning vendor on a reviewed        */
   /* quotation. Called from StockQuotationService.reviewQuotation once the   */
-  /* computed doc status is APPROVED / PARTIALLY_APPROVED.                   */
+  /* computed doc status is APPROVED / PARTIALLY_APPROVED.                         */
   /* ---------------------------------------------------------------------- */
 
   static async createForQuotationVendors(quotation, vendorIds, session) {
@@ -58,7 +58,7 @@ export default class StockTrackingOrderService {
   /* ---------------------------------------------------------------------- */
 
   static async getBoard(query = {}, dataAccess) {
-    const { search, vendorId, status, dateFrom, dateTo } = query;
+    const { search, vendorId, status, dateFrom, dateTo, branchId, entityAlias, categoryId } = query;
 
     // Every vendor order, assembled once. Shared with the PO board — see
     // services/stock.vendor.order.reader.js for why this is not done here.
@@ -88,6 +88,17 @@ export default class StockTrackingOrderService {
       { $group: { _id: "$trackingOrderId", at: { $max: "$updatedAt" } } },
     ]);
     const lastInvoiceAt = new Map(invoiceActivity.map((a) => [String(a._id), a.at]));
+
+    // Every live invoice number of each order — search matches on them.
+    const invoiceNumbers = await StockInvoiceModel.find({ trackingOrderId: { $in: trackingIds }, isActive: true })
+      .select("trackingOrderId invoiceNumber")
+      .lean();
+    const invoiceNumbersByTracking = new Map();
+    invoiceNumbers.forEach((inv) => {
+      const k = String(inv.trackingOrderId);
+      if (!invoiceNumbersByTracking.has(k)) invoiceNumbersByTracking.set(k, []);
+      if (inv.invoiceNumber) invoiceNumbersByTracking.get(k).push(inv.invoiceNumber);
+    });
     const latestOf = (...dates) =>
       dates.filter(Boolean).reduce((m, d) => (!m || new Date(d) > new Date(m) ? d : m), null);
 
@@ -139,6 +150,10 @@ export default class StockTrackingOrderService {
         rows.push({
           trackingOrderId: tracking._id,
           vendorId: vId, vendorName: entry.vendorName,
+          // The branch the vendor belongs to (vendor master) — the board's
+          // Branch filter. An order has no branch of its own.
+          branchId: v.branchId || null,
+          invoiceNumbers: invoiceNumbersByTracking.get(String(tracking._id)) || [],
           phone: primary.phone || "", email: primary.email || "", contactName: primary.name || "",
           vendorStateCode: v.gst?.state?.code || v.address?.state?.code || "",
           poId: po?._id || null, poNumber: po?.poNumber || "", poDate,
@@ -189,6 +204,11 @@ export default class StockTrackingOrderService {
     const rowPass = (row, quotationNumber, ignoreStatus) => {
       if (!ignoreStatus && status && row.status !== status) return false;
       if (vendorId && String(row.vendorId) !== String(vendorId)) return false;
+      if (branchId && String(row.branchId || "") !== String(branchId)) return false;
+      // By the parent entity (alias — every state of it). Entity is known only
+      // once assigned, so Entity Pending rows drop out of this filter.
+      if (entityAlias && String(row.entityAlias || "").toUpperCase() !== String(entityAlias).toUpperCase()) return false;
+      if (categoryId && !row.items.some((it) => String(it.categoryId || "") === String(categoryId))) return false;
       // Rows still at ENTITY_PENDING have no alias and stay visible to
       // everyone — they are precisely the ones waiting to be assigned.
       if (!isWithinDataScope({ buyerEntity: { alias: row.entityAlias } }, dataAccess, SCOPE_MODULE_KEY)) return false;
@@ -197,7 +217,8 @@ export default class StockTrackingOrderService {
           (quotationNumber || "").toLowerCase().includes(t) ||
           (row.poNumber || "").toLowerCase().includes(t) ||
           (row.vendorName || "").toLowerCase().includes(t) ||
-          row.items.some((it) => (it.productName || "").toLowerCase().includes(t));
+          row.items.some((it) => (it.productName || "").toLowerCase().includes(t)) ||
+          row.invoiceNumbers.some((n) => n.toLowerCase().includes(t));
         if (!hit) return false;
       }
       if (from && (!row.filterDate || new Date(row.filterDate) < from)) return false;
@@ -214,10 +235,10 @@ export default class StockTrackingOrderService {
       PO_PENDING: 0,
       PO_GENERATED: 0,
       PO_APPROVED: 0,
-      IN_PROGRESS: 0,
-      PARTIAL: 0,
-      FULLY_CLOSED: 0,
-      SHORT_CLOSED: 0,
+      AWAITING_DELIVERY: 0,
+      PARTLY_RECEIVED: 0,
+      FULLY_RECEIVED: 0,
+      CLOSED_SHORT: 0,
       REJECTED: 0,
     };
     fullBoard.forEach((q) =>
@@ -312,7 +333,7 @@ export default class StockTrackingOrderService {
     quotation rather than from anything stored here.
   */
   static async getNotRequired(query = {}, dataAccess) {
-    const { search, vendorId, dateTo, dateFrom } = query;
+    const { search, vendorId, dateTo, dateFrom, entityAlias } = query;
 
     const trackingOrders = await StockTrackingOrderModel.find({
       isActive: true,
@@ -352,6 +373,8 @@ export default class StockTrackingOrderService {
       // register reads empty for every user who is not entity-unrestricted.
       const alias = t.buyerEntity?.alias || "";
       if (alias && !isWithinDataScope(t, dataAccess, SCOPE_MODULE_KEY)) return;
+      // The buying entity (alias). A card with no entity yet belongs to none.
+      if (entityAlias && alias.toUpperCase() !== String(entityAlias).toUpperCase()) return;
 
       const quotationNumber = t.sourceQuotationId?.quotationNumber || "";
       const vendorName = t.vendorId?.name || "";
@@ -636,7 +659,7 @@ export default class StockTrackingOrderService {
       // send people looking in the wrong place.
       throw new Error(
         tracking.status === TRACKING_STATUS.NOT_REQUIRED
-          ? "This vendor is marked Not Required — use Mark as Required on the Not Required page to bring it back"
+          ? "This vendor order is skipped — use Mark as Required on the Skipped Orders page to bring it back"
           : "This order has moved to the PO board — it has to be reset before these products can change"
       );
     }
@@ -780,7 +803,7 @@ export default class StockTrackingOrderService {
   /* Recalculate status from approved-invoice received quantities, per PO    */
   /* line (quotationItemId). Called after invoice create/approve/reject —    */
   /* never set directly by a route. Only touches tracking orders already in  */
-  /* the receiving flow (PO_APPROVED/IN_PROGRESS/PARTIAL/FULLY_CLOSED).      */
+  /* the receiving flow (PO_APPROVED/AWAITING_DELIVERY/PARTLY_RECEIVED/FULLY_RECEIVED).      */
   /* ---------------------------------------------------------------------- */
 
 /*
@@ -790,7 +813,7 @@ export default class StockTrackingOrderService {
 
     "Open" = every status before an end state: ENTITY_PENDING / PO_PENDING (the
     decision to buy is made, no PO yet), PO_GENERATED / PO_APPROVED,
-    IN_PROGRESS, PARTIAL. FULLY_CLOSED, SHORT_CLOSED, REJECTED and NOT_REQUIRED
+    AWAITING_DELIVERY, PARTLY_RECEIVED. FULLY_RECEIVED, CLOSED_SHORT, REJECTED and NOT_REQUIRED
     are done. With a PO, lines come from the PO and "received" from approved
     (and partly approved) invoices; without one, from the quotation's approved
     selections for that vendor, less any line marked Not Required.
@@ -807,8 +830,8 @@ export default class StockTrackingOrderService {
       TRACKING_STATUS.PO_PENDING,
       TRACKING_STATUS.PO_GENERATED,
       TRACKING_STATUS.PO_APPROVED,
-      TRACKING_STATUS.IN_PROGRESS,
-      TRACKING_STATUS.PARTIAL,
+      TRACKING_STATUS.AWAITING_DELIVERY,
+      TRACKING_STATUS.PARTLY_RECEIVED,
     ];
     const filter = { isActive: true, status: { $in: OPEN } };
     if (excludeQuotationId) filter.sourceQuotationId = { $ne: excludeQuotationId };
@@ -918,14 +941,14 @@ export default class StockTrackingOrderService {
     }).session(session);
     if (!tracking) return null;
 
-    // SHORT_CLOSED is deliberately absent. It is a person's decision, and only
+    // CLOSED_SHORT is deliberately absent. It is a person's decision, and only
     // reopenOrder may undo it — if it were listed here, approving any invoice
-    // would quietly drag the order back to PARTIAL and nobody would be told.
+    // would quietly drag the order back to PARTLY_RECEIVED and nobody would be told.
     const RECEIVING_STATUSES = new Set([
       TRACKING_STATUS.PO_APPROVED,
-      TRACKING_STATUS.IN_PROGRESS,
-      TRACKING_STATUS.PARTIAL,
-      TRACKING_STATUS.FULLY_CLOSED,
+      TRACKING_STATUS.AWAITING_DELIVERY,
+      TRACKING_STATUS.PARTLY_RECEIVED,
+      TRACKING_STATUS.FULLY_RECEIVED,
     ]);
     if (!RECEIVING_STATUSES.has(tracking.status)) return tracking;
 
@@ -959,10 +982,10 @@ export default class StockTrackingOrderService {
     });
 
     tracking.status = allComplete
-      ? TRACKING_STATUS.FULLY_CLOSED
+      ? TRACKING_STATUS.FULLY_RECEIVED
       : anyReceived
-      ? TRACKING_STATUS.PARTIAL
-      : TRACKING_STATUS.IN_PROGRESS;
+      ? TRACKING_STATUS.PARTLY_RECEIVED
+      : TRACKING_STATUS.AWAITING_DELIVERY;
 
     await tracking.save({ session });
     return tracking;
@@ -1001,8 +1024,8 @@ export default class StockTrackingOrderService {
     Close an order early: the rest of the goods will never arrive, so stop
     waiting for them.
 
-    Only from PARTIAL. An order at IN_PROGRESS has received nothing yet, and
-    FULLY_CLOSED has received everything — neither is a case of "we got some of
+    Only from PARTLY_RECEIVED. An order at AWAITING_DELIVERY has received nothing yet, and
+    FULLY_RECEIVED has received everything — neither is a case of "we got some of
     it and that is all we are getting".
 
     A PENDING invoice blocks this outright. Closing while someone is still
@@ -1021,8 +1044,8 @@ export default class StockTrackingOrderService {
       throw new Error("Tracking order not found");
     }
 
-    if (tracking.status !== TRACKING_STATUS.PARTIAL) {
-      throw new Error("Only a partially received order can be short closed");
+    if (tracking.status !== TRACKING_STATUS.PARTLY_RECEIVED) {
+      throw new Error("Only a partly received order can be closed short");
     }
 
     // Checked here, not just by hiding the button: an invoice can be submitted
@@ -1032,14 +1055,14 @@ export default class StockTrackingOrderService {
     const pendingCount = await StockInvoiceModel.countDocuments({
       trackingOrderId: tracking._id,
       $or: [
-        { status: { $in: [INVOICE_STATUS.ADDED, INVOICE_STATUS.DRAFT, INVOICE_STATUS.PENDING, INVOICE_STATUS.IN_PROGRESS] } },
+        { status: { $in: [INVOICE_STATUS.UPLOADED, INVOICE_STATUS.DRAFT, INVOICE_STATUS.PENDING, INVOICE_STATUS.IN_PROGRESS] } },
         { "entries.status": { $in: ["DRAFT", "PENDING"] } },
       ],
       isActive: true,
     }).session(session);
     if (pendingCount > 0) {
       throw new Error(
-        `${pendingCount} invoice${pendingCount > 1 ? "s are" : " is"} still being entered or awaiting approval — finish ${pendingCount > 1 ? "them" : "it"} before short closing this order`
+        `${pendingCount} invoice${pendingCount > 1 ? "s are" : " is"} still being entered or awaiting approval — finish ${pendingCount > 1 ? "them" : "it"} before closing this order short`
       );
     }
 
@@ -1055,13 +1078,13 @@ export default class StockTrackingOrderService {
       byName: actor?.name || "",
       at: new Date(),
     });
-    tracking.status = TRACKING_STATUS.SHORT_CLOSED;
+    tracking.status = TRACKING_STATUS.CLOSED_SHORT;
     await tracking.save({ session });
 
     await StockAuditLogService.recordAudit({
       entityType: ENTITY_TYPE, entityId: tracking._id, action: "SHORT_CLOSE",
       actor, before, after: tracking.toObject(),
-      reason: `Short closed at ${receivedQty}/${orderedQty}: ${String(reason || "").trim()}`,
+      reason: `Closed short at ${receivedQty}/${orderedQty}: ${String(reason || "").trim()}`,
     });
     return tracking;
   }
@@ -1069,9 +1092,9 @@ export default class StockTrackingOrderService {
   /*
     Undo a short close and let the order receive again.
 
-    The status is not hardcoded back to PARTIAL — recalculateStatus works it out
+    The status is not hardcoded back to PARTLY_RECEIVED — recalculateStatus works it out
     from the invoices, so the rule for what each status means stays in one
-    place. In practice it lands on PARTIAL every time, because nothing can move
+    place. In practice it lands on PARTLY_RECEIVED every time, because nothing can move
     while an order is short closed: Add Items is refused for the status, and
     short closing required that no invoice was left pending.
   */
@@ -1083,8 +1106,8 @@ export default class StockTrackingOrderService {
       throw new Error("Tracking order not found");
     }
 
-    if (tracking.status !== TRACKING_STATUS.SHORT_CLOSED) {
-      throw new Error("Only a short closed order can be reopened");
+    if (tracking.status !== TRACKING_STATUS.CLOSED_SHORT) {
+      throw new Error("Only an order closed short can be reopened");
     }
 
     const before = tracking.toObject();
@@ -1099,9 +1122,9 @@ export default class StockTrackingOrderService {
       byName: actor?.name || "",
       at: new Date(),
     });
-    // PARTIAL first so recalculateStatus, whose guard excludes SHORT_CLOSED on
+    // PARTLY_RECEIVED first so recalculateStatus, whose guard excludes CLOSED_SHORT on
     // purpose, will act on this order instead of returning it untouched.
-    tracking.status = TRACKING_STATUS.PARTIAL;
+    tracking.status = TRACKING_STATUS.PARTLY_RECEIVED;
     await tracking.save({ session });
 
     const updated = await StockTrackingOrderService.recalculateStatus(tracking._id, session);

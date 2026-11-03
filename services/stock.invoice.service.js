@@ -71,8 +71,8 @@ const ENTITY_TYPE = "invoices";
 
 const RECEIVABLE_TRACKING_STATUSES = new Set([
   TRACKING_STATUS.PO_APPROVED,
-  TRACKING_STATUS.IN_PROGRESS,
-  TRACKING_STATUS.PARTIAL,
+  TRACKING_STATUS.AWAITING_DELIVERY,
+  TRACKING_STATUS.PARTLY_RECEIVED,
 ]);
 
 export default class StockInvoiceService {
@@ -538,7 +538,7 @@ export default class StockInvoiceService {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Add Invoice — upload, check the details, save (status ADDED)            */
+  /* Add Invoice — upload, check the details, save (status UPLOADED)         */
   /* ---------------------------------------------------------------------- */
 
   static async createInvoice(trackingOrderId, body, user, session, dataAccess) {
@@ -598,7 +598,7 @@ export default class StockInvoiceService {
           extraCharges,
           lines,
           amount: StockInvoiceService._computeAmount(lines, extraCharges),
-          status: INVOICE_STATUS.ADDED,
+          status: INVOICE_STATUS.UPLOADED,
         },
       ],
       { session }
@@ -630,7 +630,7 @@ export default class StockInvoiceService {
     if (invoice.partialSubmit) {
       return StockInvoiceService._saveEntry(invoice, body, user, session, { submit });
     }
-    const editable = [INVOICE_STATUS.ADDED, INVOICE_STATUS.DRAFT, INVOICE_STATUS.REJECTED];
+    const editable = [INVOICE_STATUS.UPLOADED, INVOICE_STATUS.DRAFT, INVOICE_STATUS.REJECTED];
     if (!editable.includes(invoice.status)) {
       throw new Error("Items can't be changed now — this invoice is already submitted");
     }
@@ -665,7 +665,7 @@ export default class StockInvoiceService {
       invoice.reviewedBy = null;
       invoice.reviewedByName = "";
       invoice.reviewedAt = null;
-    } else if (invoice.status === INVOICE_STATUS.ADDED) {
+    } else if (invoice.status === INVOICE_STATUS.UPLOADED) {
       invoice.status = INVOICE_STATUS.DRAFT;
     }
 
@@ -853,7 +853,7 @@ export default class StockInvoiceService {
   static _statusFromEntries(invoice) {
     const approvedAll = invoice.lines.every((l) => (l.receivedQuantity || 0) >= (l.invoiceQuantity || 0));
     if (invoice.lines.length && approvedAll) return INVOICE_STATUS.APPROVED;
-    return (invoice.entries || []).length ? INVOICE_STATUS.IN_PROGRESS : INVOICE_STATUS.ADDED;
+    return (invoice.entries || []).length ? INVOICE_STATUS.IN_PROGRESS : INVOICE_STATUS.UPLOADED;
   }
 
   /*
@@ -974,7 +974,7 @@ export default class StockInvoiceService {
     const before = invoice.toObject();
 
     if (on) {
-      if (![INVOICE_STATUS.ADDED, INVOICE_STATUS.DRAFT, INVOICE_STATUS.REJECTED].includes(invoice.status)) {
+      if (![INVOICE_STATUS.UPLOADED, INVOICE_STATUS.DRAFT, INVOICE_STATUS.REJECTED].includes(invoice.status)) {
         throw new Error("Items on this invoice are already submitted — partial submit can't be turned on now");
       }
       // Items from a rejected whole-invoice submission were never stock.
@@ -1019,7 +1019,7 @@ export default class StockInvoiceService {
       ? StockInvoiceService._statusFromEntries(invoice)
       : invoice.lines.some((l) => (l.receivedQuantity || 0) > 0)
         ? INVOICE_STATUS.DRAFT
-        : INVOICE_STATUS.ADDED;
+        : INVOICE_STATUS.UPLOADED;
     invoice.editHistory.push({
       at: new Date(), by: user?.id || user?._id || null, byName: user?.name || "",
       changes: [{ field: "Partial submit", from: on ? "OFF" : "ON", to: on ? "ON" : "OFF" }],
@@ -1398,14 +1398,17 @@ export default class StockInvoiceService {
   // Serves both the Tracking Order card's invoice table (pass trackingOrderId,
   // no status tab) and the Invoice Approval page (status tab + filters).
   static async getBoard(query = {}, dataAccess) {
-    const { trackingOrderId, status, search, vendorId, categoryId, productId, dateFrom, dateTo } = query;
+    const { trackingOrderId, status, search, vendorId, categoryId, productId, dateFrom, dateTo, branchId, entityAlias } = query;
 
     const filter = { isActive: true };
     if (trackingOrderId) filter.trackingOrderId = trackingOrderId;
     if (vendorId) filter.vendorId = vendorId;
     if (categoryId) filter["lines.categoryId"] = categoryId;
     if (productId) filter["lines.productDefinitionId"] = productId;
-    
+    // The receiving branch, and the buying entity (alias — every state of it).
+    if (branchId) filter.branchId = branchId;
+    if (entityAlias) filter.entityAlias = String(entityAlias).toUpperCase();
+
     applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
     if (dateFrom || dateTo) {
       filter.invoiceDate = {};
@@ -1447,7 +1450,7 @@ export default class StockInvoiceService {
 
     // Counted off the rows already loaded: an aggregate $match would not cast
     // the id filters (trackingOrderId, vendorId …) and silently count 0.
-    const countMap = { ALL: 0, ADDED: 0, DRAFT: 0, PENDING: 0, IN_PROGRESS: 0, APPROVED: 0, REJECTED: 0 };
+    const countMap = { ALL: 0, UPLOADED: 0, DRAFT: 0, PENDING: 0, IN_PROGRESS: 0, APPROVED: 0, REJECTED: 0 };
     allRows.forEach((r) => {
       if (countMap[tabOf(r)] !== undefined) countMap[tabOf(r)] += 1;
       countMap.ALL += 1;

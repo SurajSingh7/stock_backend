@@ -41,36 +41,68 @@ const fmtDate = (d) => {
   return `${p(dt.getDate())}-${p(dt.getMonth() + 1)}-${dt.getFullYear()}`;
 };
 
-// po.terms is rich text (HTML) from the Terms & Conditions master — pdfkit's
-// doc.text() only renders plain strings, so flatten block/list tags to
-// newlines and "• " bullets, then strip whatever markup is left.
-const stripHtmlForPdf = (html) =>
-  String(html || "")
-    .replace(/<li[^>]*>/gi, "• ")
-    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+// HTML entities the rich-text editor writes (&rsquo; and friends), as characters.
+const ENTITIES = {
+  nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'",
+  rsquo: "\u2019", lsquo: "\u2018", rdquo: "\u201D", ldquo: "\u201C",
+  ndash: "\u2013", mdash: "\u2014", hellip: "\u2026", bull: "\u2022", rupee: "\u20B9",
+};
+const decodeEntities = (s) =>
+  String(s || "")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
+    .replace(/&([a-z]+);/gi, (m, name) => ENTITIES[name.toLowerCase()] ?? m);
+
+/*
+  po.terms is rich text (HTML) from the Terms & Conditions master. pdfkit only
+  draws plain strings, so it is turned into blocks — one per paragraph, list
+  item or heading — each a list of runs that are bold or not (<strong>/<b>).
+  That keeps the shape the author gave it: paragraphs apart, bullets, and the
+  words they bolded, bold.
+*/
+const termsBlocks = (html) => {
+  const BREAK = "\u0001";
+  const marked = String(html || "")
+    .replace(/\r?\n/g, " ")
+    .replace(/<li[^>]*>/gi, BREAK + "\u2022  ")
+    .replace(/<(p|div|h[1-6])[^>]*>/gi, BREAK)
+    .replace(/<\/(p|div|li|h[1-6]|ul|ol)>/gi, BREAK)
+    .replace(/<br\s*\/?>/gi, BREAK);
+  return marked
+    .split(BREAK)
+    .map((block) => {
+      const runs = [];
+      const re = /<(strong|b)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi;
+      let last = 0;
+      let m;
+      while ((m = re.exec(block))) {
+        runs.push({ bold: false, text: block.slice(last, m.index) });
+        runs.push({ bold: true, text: m[2] });
+        last = re.lastIndex;
+      }
+      runs.push({ bold: false, text: block.slice(last) });
+      return runs
+        .map((r) => ({ bold: r.bold, text: decodeEntities(r.text.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ") }))
+        .filter((r) => r.text.trim());
+    })
+    .filter((runs) => runs.length);
+};
 
 /* ── palette — kept minimal on purpose ─────────────────────────────────── */
 const C = {
-  ink: "#1a1a1a",
-  muted: "#6b7280",
-  rule: "#d8dade",
+  ink: "#111827",
+  muted: "#374151", // secondary text — dark enough to read comfortably in print
+  rule: "#cbd5e1",
   accent: "#2b2f77", // used only for the title + section labels
-  rowAlt: "#fafafa",
+  rowAlt: "#f8fafc",
+  headBg: "#eef2f7", // items table header band
 };
 
 const PAGE_W = 595.28; // A4 pt
 const PAGE_H = 841.89;
 const MARGIN = 40;
 const CONTENT_W = PAGE_W - MARGIN * 2;
-const FOOTER_RESERVE = 20; // space always kept clear at the bottom for the footer note
+const FOOTER_RESERVE = 10; // a little space always kept clear at the bottom of each page
 const BOTTOM = PAGE_H - MARGIN - FOOTER_RESERVE;
 
 /*
@@ -171,11 +203,20 @@ export const generatePOPdf = (po) =>
       ySup = line(po.vendorPhone, MARGIN, ySup, 250);
 
       let yDel = supplierTop + 12;
-      doc.fillColor(C.muted).font("Helvetica").fontSize(8.5);
-      yDel = line(`${buyer.name || ""}, ${buyer.state || ""}`, 310, yDel, 245);
-      yDel = line(`Shipment: ${po.shipmentPreference || "-"}`, 310, yDel, 245);
-      yDel = line(`Payment: ${PAYMENT_TERMS_MAP[po.paymentTerms] || "-"}`, 310, yDel, 245);
-      yDel = line(`Requester: ${po.requester || "-"}`, 310, yDel, 245);
+      doc.fillColor(C.ink).font("Helvetica-Bold").fontSize(9);
+      yDel = line(`${buyer.name || ""}, ${buyer.state || ""}`, 310, yDel, 245, { gap: 3 });
+      // "Label: value" with the label bold, measured as one line.
+      const labelled = (label, value) => {
+        const text = `${label}: ${value || "-"}`;
+        doc.font("Helvetica").fontSize(8.5);
+        const h = doc.heightOfString(text, { width: 245 });
+        doc.fillColor(C.ink).font("Helvetica-Bold").text(`${label}: `, 310, yDel, { width: 245, continued: true });
+        doc.fillColor(C.muted).font("Helvetica").text(value || "-");
+        yDel += h + 2;
+      };
+      labelled("Shipment", po.shipmentPreference);
+      labelled("Payment", PAYMENT_TERMS_MAP[po.paymentTerms]);
+      labelled("Requester", po.requester);
 
       y = Math.max(ySup, yDel) + 14;
 
@@ -195,7 +236,8 @@ export const generatePOPdf = (po) =>
       ];
 
       const drawTableHeader = (headerY) => {
-        doc.fillColor(C.muted).font("Helvetica-Bold").fontSize(7.5);
+        doc.rect(MARGIN, headerY - 4, CONTENT_W, 16).fill(C.headBg);
+        doc.fillColor(C.ink).font("Helvetica-Bold").fontSize(8);
         cols.forEach((c) => doc.text(c.label, c.x, headerY, { width: c.w, align: c.align }));
         const ny = headerY + 12;
         doc.moveTo(MARGIN, ny).lineTo(MARGIN + CONTENT_W, ny).strokeColor(C.rule).lineWidth(1).stroke();
@@ -248,7 +290,7 @@ export const generatePOPdf = (po) =>
       const rightLabel = (label, val, bold = false) => {
         y = ensureSpace(y, totalsRowH);
         doc
-          .fillColor(bold ? C.ink : C.muted)
+          .fillColor(C.ink)
           .font(bold ? "Helvetica-Bold" : "Helvetica")
           .fontSize(bold ? 10.5 : 9)
           .text(label, 350, y, { width: 120, align: "left" });
@@ -273,33 +315,36 @@ export const generatePOPdf = (po) =>
       y += 8;
       rightLabel("Grand total", po.grandTotal, true);
 
-      // ── Terms + signatory ────────────────────────────────────────────────
-      y += 16;
-      const termsText = stripHtmlForPdf(po.terms) || "-";
-      const termsW = 330;
-      doc.font("Helvetica").fontSize(8.5);
-      const termsH = doc.heightOfString(termsText, { width: termsW });
-      const signBlockH = 70; // label + rule + "Authorized signatory"
-      y = ensureSpace(y, Math.max(termsH, signBlockH) + 14);
+      // ── Terms and conditions — full width, paragraph by paragraph ────────
+      const blocks = termsBlocks(po.terms);
+      y += 18;
+      y = ensureSpace(y, 40);
+      doc.fillColor(C.accent).font("Helvetica-Bold").fontSize(8).text("TERMS AND CONDITIONS", MARGIN, y);
+      y += 12;
+      doc.moveTo(MARGIN, y).lineTo(MARGIN + CONTENT_W, y).strokeColor(C.rule).lineWidth(1).stroke();
+      y += 8;
 
-      doc.fillColor(C.accent).font("Helvetica-Bold").fontSize(7.5).text("TERMS AND CONDITIONS", MARGIN, y);
-      const termsBottom = line(termsText, MARGIN, y + 12, termsW);
+      const TERMS_SIZE = 8.5;
+      if (!blocks.length) {
+        doc.fillColor(C.muted).font("Helvetica").fontSize(TERMS_SIZE).text("-", MARGIN, y);
+      }
+      blocks.forEach((runs) => {
+        // Measured with the bold face — slightly wider, so the block never
+        // ends up taller than the space set aside for it.
+        const plain = runs.map((r) => r.text).join("");
+        doc.font(runs.some((r) => r.bold) ? "Helvetica-Bold" : "Helvetica").fontSize(TERMS_SIZE);
+        const h = doc.heightOfString(plain, { width: CONTENT_W, lineGap: 1.5 });
+        y = ensureSpace(y, h);
 
-      doc
-        .fillColor(C.muted)
-        .font("Helvetica")
-        .fontSize(9)
-        .text(`For ${buyer.alias || buyer.name || ""}`, 400, y + 12, { align: "right", width: 155 });
-      doc.moveTo(400, y + 55).lineTo(MARGIN + CONTENT_W, y + 55).strokeColor(C.rule).lineWidth(1).stroke();
-      doc.fillColor(C.muted).fontSize(8).text("Authorized signatory", 400, y + 60, { align: "right", width: 155 });
-
-      // ── footer note — flows after whatever came before it, never a fixed y
-      const footerY = Math.max(termsBottom, y + 72) + 10;
-      doc
-        .fillColor(C.muted)
-        .font("Helvetica")
-        .fontSize(7)
-        .text("This is a system-generated purchase order.", MARGIN, footerY, { width: CONTENT_W, align: "center" });
+        doc.fillColor(C.ink);
+        runs.forEach((r, i) => {
+          doc.font(r.bold ? "Helvetica-Bold" : "Helvetica").fontSize(TERMS_SIZE);
+          const opts = { width: CONTENT_W, lineGap: 1.5, continued: i < runs.length - 1 };
+          if (i === 0) doc.text(r.text, MARGIN, y, opts);
+          else doc.text(r.text, opts);
+        });
+        y = doc.y + 5;
+      });
 
       doc.end();
 

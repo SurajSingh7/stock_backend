@@ -54,7 +54,12 @@ const vendorScopeFilter = (dataAccess) => {
 };
 
 const pairKey = (vendorId, productId) => `${vendorId}::${productId}`;
-const EMPTY_HISTORY = Object.freeze({ previousQuantity: null, previousPrice: null, averageRating: null });
+const EMPTY_HISTORY = Object.freeze({
+  previousQuantity: null,
+  previousPrice: null,
+  previousPurchaseDate: null,
+  averageRating: null,
+});
 
 // A vendor's own warranty for a product: its assignment override, else the
 // product's default. Null when the vendor does not supply the product.
@@ -87,7 +92,7 @@ export default class StockQuotationService {
     });
   }
 
-  // Latest purchase (qty + price) and average rating for every (vendor,
+  // Latest purchase (qty, price, date) and average rating for every (vendor,
   // product) pair among the given ids — two queries in total, not two per
   // pair. Returns Map pairKey -> { previousQuantity, previousPrice, averageRating };
   // pairs with no history are simply absent (use EMPTY_HISTORY).
@@ -119,6 +124,7 @@ export default class StockQuotationService {
           _id: groupId,
           receivedQuantity: { $first: "$receivedQuantity" },
           purchasePrice: { $first: "$purchasePrice" },
+          purchaseDate: { $first: "$purchaseDate" },
         },
       },
     ]).session(session);
@@ -126,6 +132,7 @@ export default class StockQuotationService {
       const e = entry(r._id);
       e.previousQuantity = r.receivedQuantity;
       e.previousPrice = r.purchasePrice;
+      e.previousPurchaseDate = r.purchaseDate;
     });
 
     const ratings = await StockVendorReviewModel.aggregate([

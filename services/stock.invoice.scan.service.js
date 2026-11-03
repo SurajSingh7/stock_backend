@@ -101,7 +101,7 @@ export default class StockInvoiceScanService {
    */
   static async scan(file, poItems, vendor, { trackingOrderId = null, user = null } = {}) {
     const settings = await StockAiSettingsService.get();
-    if (!settings.invoiceScan.enabled) throw new Error("AI invoice scan is switched off in AI Settings — enter the details by hand");
+    if (!settings.invoiceScan.enabled) throw new Error("AI invoice scan is switched off in AI Settings");
     const model = settings.invoiceScan.model;
     const modelInfo = aiModelById(model);
     if (!modelInfo) throw new Error("Invalid AI model");
