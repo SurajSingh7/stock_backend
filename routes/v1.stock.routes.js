@@ -136,6 +136,10 @@ router.patch("/terms-conditions/:id/restore", authenticate, requirePermission("t
 router.get("/inventory-items", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getAllInventoryItems);
 router.get("/inventory-items/cards", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getInventoryCards);
 router.get("/inventory-items/product-summary", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getProductInventorySummary);
+// Product Inventory (took over Low Stock): stock vs threshold per branch, and a product's history.
+router.get("/inventory-items/product-stock", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getProductStock);
+router.get("/inventory-items/stock-summary", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getStockSummaryReport);
+router.get("/inventory-items/product-stock/:defId/history", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getProductStockHistory);
 router.get("/inventory-items/history/:defId", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getReceivingHistory);
 router.get("/inventory-items/summary/:defId", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getStockSummary);
 // Low Stock — same READ and branch scope as the inventory screens, so whoever

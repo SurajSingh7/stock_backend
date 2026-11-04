@@ -5,6 +5,7 @@ export const successResponseHandler = (res, data, message = "Success", statusCod
     if (data && data.pagination) {
       response.data = data.data;
       response.pagination = data.pagination;
+      if (data.meta) response.meta = data.meta;
     } else {
       response.data = data;
     }

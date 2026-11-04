@@ -184,16 +184,18 @@ export default class StockInventoryItemService {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Item Inventory (card view) — one card per PHYSICAL UNIT for individual- */
-  /* tracked products, but exactly one card per (product, branch) for     */
-  /* group-tracked products — batches are summed, never shown as separate    */
-  /* rows. Fetches broadly (this system's inventory volumes are small) and   */
-  /* merges + paginates in memory so a group card's total is never split     */
-  /* across pages.                                                           */
+  /* Item Inventory — one row per PHYSICAL UNIT for individual-tracked      */
+  /* products, and one row per (product, branch) for batch-tracked ones,    */
+  /* their batches summed. Grouped and paged in the database, so the page   */
+  /* stays quick with tens of thousands of units.                           */
+  /*                                                                        */
+  /* meta.listFields: the "Show in list" fields used by any product in the  */
+  /* whole result — the screen gives each its own column, the same on every */
+  /* page.                                                                  */
   /* ---------------------------------------------------------------------- */
 
   static async getInventoryCards(
-    { skip, limit, search, categoryId, productDefinitionId, branchId, status, sourceType, condition },
+    { skip, limit, search, categoryId, productDefinitionId, branchId, status, sourceType, condition, vendorId, warranty, from, to },
     dataAccess
   ) {
     const filter = {
@@ -203,29 +205,98 @@ export default class StockInventoryItemService {
     };
     if (branchId) filter.branchId = branchId;
     if (productDefinitionId) filter.productDefinitionId = productDefinitionId;
+    if (vendorId && mongoose.isValidObjectId(vendorId)) filter.vendorId = vendorId;
     applyOriginFilters(filter, { sourceType, condition });
-    applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
+
+    // Warranty: ACTIVE beyond 30 days, ENDING within 30, EXPIRED, NONE recorded.
+    const now = new Date();
+    const soon = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    if (warranty === "ACTIVE") filter["warranty.endDate"] = { $gt: soon };
+    else if (warranty === "ENDING") filter["warranty.endDate"] = { $gte: now, $lte: soon };
+    else if (warranty === "EXPIRED") filter["warranty.endDate"] = { $lt: now };
+    else if (warranty === "NONE") filter["warranty.endDate"] = null;
+
+    if (from || to) {
+      filter.receivedAt = {};
+      if (from) filter.receivedAt.$gte = new Date(from);
+      if (to) { const d = new Date(to); d.setHours(23, 59, 59, 999); filter.receivedAt.$lte = d; }
+    }
 
     if (categoryId) {
       const defIds = await StockProductDefinitionModel.find({ categoryId, isActive: true }).distinct("_id");
       filter.productDefinitionId = filter.productDefinitionId ? filter.productDefinitionId : { $in: defIds };
     }
 
-    if (search) filter.$or = await searchClause(search);
+    // Serial, MAC and the other identity fields — or the product's name.
+    if (search) {
+      const byName = await StockProductDefinitionModel.find({ name: { $regex: escapeRegex(search), $options: "i" } }).distinct("_id");
+      filter.$or = [...(await searchClause(search)), ...(byName.length ? [{ productDefinitionId: { $in: byName } }] : [])];
+    }
 
-    const items = await StockInventoryItemModel.find(filter)
-      .populate({
+    applyDataScope(filter, dataAccess, SCOPE_MODULE_KEY);
+    // aggregate() does not cast like find() does.
+    const match = StockInventoryItemModel.find(filter).cast();
+
+    const batchDefIds = await StockProductDefinitionModel.find({ trackingMethod: TRACKING_METHODS.QUANTITY }).distinct("_id");
+    const isBatch = { $in: ["$productDefinitionId", batchDefIds] };
+
+    const [[grouped], usedDefIds] = await Promise.all([
+      StockInventoryItemModel.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: {
+              $cond: [
+                isBatch,
+                { $concat: [{ $toString: "$productDefinitionId" }, "::", { $toString: { $ifNull: ["$branchId", "none"] } }] },
+                { $toString: "$_id" },
+              ],
+            },
+            doc: { $first: "$$ROOT" },
+            batch: { $max: isBatch },
+            totalQty: { $sum: { $ifNull: ["$quantity", 0] } },
+            batchCount: { $sum: 1 },
+            latestReceivedAt: { $max: "$receivedAt" },
+            sortAt: { $max: { $ifNull: ["$createdAt", "$receivedAt"] } },
+            values: { $push: "$fieldValues" },
+          },
+        },
+        { $sort: { sortAt: -1, _id: 1 } },
+        { $facet: { rows: [{ $skip: skip }, { $limit: limit }], total: [{ $count: "n" }] } },
+      ]),
+      StockInventoryItemModel.distinct("productDefinitionId", match),
+    ]);
+    const rows = grouped?.rows || [];
+    const total = grouped?.total?.[0]?.n || 0;
+
+    // The columns: every "Show in list" field any product in the result uses.
+    const usedDefs = await StockProductDefinitionModel.find({ _id: { $in: usedDefIds } })
+      .select("selectedFields")
+      .populate({ path: "selectedFields.fieldDefId", select: "code label showList" })
+      .lean();
+    const listFields = [];
+    const seen = new Set();
+    for (const d of usedDefs) {
+      for (const sf of d.selectedFields || []) {
+        const fd = sf.fieldDefId;
+        if (fd?.showList && !seen.has(fd.code)) { seen.add(fd.code); listFields.push({ code: fd.code, label: fd.label }); }
+      }
+    }
+
+    const docs = rows.map((r) => r.doc);
+    await StockInventoryItemModel.populate(docs, [
+      {
         path: "productDefinitionId",
         select: "name trackingMethod unit selectedFields categoryId",
+        options: { lean: true },
         populate: { path: "selectedFields.fieldDefId", select: "code label inputType optionsSource showList isFilterable" },
-      })
-      .populate({ path: "branchId", select: "name code" })
-      .populate({ path: "vendorId", select: "name" })
-      .populate({ path: "invoiceId", select: "invoiceNumber receivedByName" })
-      .sort({ createdAt: -1 })
-      .lean();
+      },
+      { path: "branchId", select: "name code", options: { lean: true } },
+      { path: "vendorId", select: "name", options: { lean: true } },
+      { path: "invoiceId", select: "invoiceNumber receivedByName", options: { lean: true } },
+    ]);
 
-    const categoryIds = [...new Set(items.map((it) => String(it.productDefinitionId?.categoryId)).filter(Boolean))];
+    const categoryIds = [...new Set(docs.map((it) => String(it.productDefinitionId?.categoryId)).filter(Boolean))];
     const categoryDocs = await StockCategoryModel.find({ _id: { $in: categoryIds } }).select("path").lean();
     const pathByCategoryId = new Map(categoryDocs.map((c) => [String(c._id), c.path]));
     const displayPathCache = new Map();
@@ -239,19 +310,18 @@ export default class StockInventoryItemService {
       return displayPathCache.get(key);
     };
 
-    const individualCards = [];
-    const groupCardByKey = new Map();
-
-    for (const item of items) {
+    const data = [];
+    for (const r of rows) {
+      const item = r.doc;
       const def = item.productDefinitionId;
       if (!def) continue;
-      const categoryPath = await categoryPathFor(def.categoryId);
+      const productDefinitionId = { ...def, categoryPath: await categoryPathFor(def.categoryId) };
 
-      if (def.trackingMethod === TRACKING_METHODS.INDIVIDUAL) {
-        individualCards.push({
+      if (!r.batch) {
+        data.push({
           cardType: "individual",
           _id: item._id,
-          productDefinitionId: { ...def, categoryPath },
+          productDefinitionId,
           branchId: item.branchId,
           vendorId: item.vendorId,
           invoiceId: item.invoiceId,
@@ -266,62 +336,43 @@ export default class StockInventoryItemService {
           assignedTo: item.assignedTo,
           receivedAt: item.receivedAt,
           createdAt: item.createdAt,
-          sortAt: item.createdAt || item.receivedAt,
         });
-      } else {
-        const key = `${def._id}::${item.branchId?._id || "none"}`;
-        if (!groupCardByKey.has(key)) {
-          groupCardByKey.set(key, {
-            cardType: "group",
-            _id: key,
-            productDefinitionId: { ...def, categoryPath },
-            branchId: item.branchId,
-            totalQty: 0,
-            batchCount: 0,
-            latestReceivedAt: null,
-            sortAt: null,
-            // Filled in after the loop from _valuesByCode below.
-            fieldValues: {},
-            variedFields: [],
-            _valuesByCode: new Map(),
-          });
-        }
-        const card = groupCardByKey.get(key);
-        card.totalQty += item.quantity || 0;
-        card.batchCount += 1;
-        // A group card rolls up every batch of this product at this branch, and
-        // each batch carries its own tracked values — two deliveries can hold
-        // two different unique numbers. So a code is only shown on the card
-        // when EVERY batch agrees on it; the rest are reported as varying, and
-        // the per-batch numbers stay in the batch breakdown where they belong.
-        Object.entries(item.fieldValues || {}).forEach(([code, val]) => {
+        continue;
+      }
+
+      // A batch row rolls up every batch of this product at this branch, and
+      // each batch carries its own tracked values — so a code is shown only
+      // when every batch agrees; the rest are reported as varying.
+      const valuesByCode = new Map();
+      for (const fv of r.values) {
+        Object.entries(fv || {}).forEach(([code, val]) => {
           if (val === undefined || val === null || val === "") return;
-          if (!card._valuesByCode.has(code)) card._valuesByCode.set(code, new Set());
-          card._valuesByCode.get(code).add(String(val));
+          if (!valuesByCode.has(code)) valuesByCode.set(code, new Set());
+          valuesByCode.get(code).add(String(val));
         });
-        const at = item.receivedAt || item.createdAt;
-        if (!card.latestReceivedAt || new Date(at) > new Date(card.latestReceivedAt)) {
-          card.latestReceivedAt = at;
-          card.sortAt = item.createdAt || item.receivedAt;
-        }
       }
+      const fieldValues = {};
+      const variedFields = [];
+      for (const [code, values] of valuesByCode) {
+        if (values.size === 1) fieldValues[code] = [...values][0];
+        else variedFields.push(code);
+      }
+      data.push({
+        cardType: "group",
+        _id: r._id,
+        productDefinitionId,
+        branchId: item.branchId,
+        totalQty: r.totalQty,
+        batchCount: r.batchCount,
+        latestReceivedAt: r.latestReceivedAt,
+        receivedAt: r.latestReceivedAt,
+        condition: item.condition,
+        fieldValues,
+        variedFields,
+      });
     }
 
-    for (const card of groupCardByKey.values()) {
-      for (const [code, values] of card._valuesByCode) {
-        if (values.size === 1) card.fieldValues[code] = [...values][0];
-        else card.variedFields.push(code);
-      }
-      delete card._valuesByCode;
-    }
-
-    const combined = [...individualCards, ...groupCardByKey.values()].sort(
-      (a, b) => new Date(b.sortAt || 0) - new Date(a.sortAt || 0)
-    );
-
-    const total = combined.length;
-    const data = combined.slice(skip, skip + limit);
-    return { data, total };
+    return { data, total, listFields };
   }
 
   /* ---------------------------------------------------------------------- */

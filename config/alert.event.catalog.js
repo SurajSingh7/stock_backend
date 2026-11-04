@@ -254,7 +254,7 @@ const buildLowStockNotice = (n) => {
   const outCount = items.filter((i) => i.level === "OUT").length;
   return {
     ref: `Low stock · ${n.branchName || "branch"}`,
-    link: `${APP_URL()}/stock/inventory/low-stock?branchId=${n.branchId}`,
+    link: `${APP_URL()}/stock/inventory/products?branchId=${n.branchId}`,
     amount: 0,
     branchId: n.branchId,
     vendorIds: [],
