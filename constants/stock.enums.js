@@ -33,6 +33,12 @@ export const ITEM_STATUS = {
   ASSIGNED: "ASSIGNED",
   IN_REPAIR: "IN_REPAIR",
   SCRAPPED: "SCRAPPED",
+  /*
+    Sent to another branch and not yet received by it (Stock Transfer). Still
+    on the SENDING branch (branchId unchanged) and out of everyone's Available
+    until the receiver presses All Received — or the sender takes it off in
+    Correct & Resend, which puts it straight back to AVAILABLE.
+  */
   IN_TRANSIT: "IN_TRANSIT",
   /*
     Came in, was accepted into stock, was found defective — and a debit note
@@ -136,6 +142,12 @@ export const ITEM_MOVEMENT_TYPE = {
   SCRAPPED: "SCRAPPED",
   // Given to one of our employees (Employee Items).
   ASSIGNED: "ASSIGNED",
+  // Stock Transfer. TRANSFERRED (above) is written when the receiver confirms
+  // and the stock actually changes branch; these are the steps around it.
+  TRANSFER_SENT: "TRANSFER_SENT",
+  // Taken off in Correct & Resend — it never went, so it is AVAILABLE again
+  // at the sending branch.
+  TRANSFER_REMOVED: "TRANSFER_REMOVED",
 };
 
 // Who an ASSIGNED unit is with: a customer (via an Item Request) or one of our
@@ -152,6 +164,8 @@ export const ITEM_MOVEMENT_REF = {
   INVOICE: "INVOICE",
   OPENING_STOCK: "OPENING_STOCK",
   TRANSFER_REQUEST: "TRANSFER_REQUEST",
+  // A Stock Transfer (TRF-…) — the stock that actually travelled.
+  TRANSFER: "TRANSFER",
   ITEM_REQUEST: "ITEM_REQUEST",
   // A warranty claim with a vendor — refNumber is the vendor's docket / RMA no.
   WARRANTY_CLAIM: "WARRANTY_CLAIM",
@@ -456,18 +470,34 @@ export const BRANCH_ROLE = {
 };
 export const BRANCH_ROLE_ARRAY = Object.values(BRANCH_ROLE);
 
-// ─── Inventory Transfer Request — one-shot request/fulfil workflow ─────────
-// A request is PENDING until the source branch acts on it exactly once:
-//   - process (full or partial transfer) -> COMPLETED, any shortfall auto-closed
-//   - reject (nothing transferred)       -> REJECTED
-// There is no further action once a request leaves PENDING — a still-needed
-// remainder must be raised as a brand-new request.
+// ─── Stock Transfer ────────────────────────────────────────────────────────
+// A REQUEST is one branch asking another for stock — and, once sent, the
+// whole story of that stock until it lands. The stock itself travels on a
+// transfer (TRF-…) the request points at; the request's status is the one
+// both branches see:
+//
+//   PENDING ── Send ──► ON_THE_WAY ── All Received ──► RECEIVED
+//      │                   ▲  │
+//      │  Correct & Resend │  └─ Report Problem ─► MISMATCH
+//      │                   └──────────────────────────────┘
+//      └── Decline ──► DECLINED
 export const TRANSFER_REQUEST_STATUS = {
   PENDING: "PENDING",
-  COMPLETED: "COMPLETED",
-  REJECTED: "REJECTED",
+  ON_THE_WAY: "ON_THE_WAY",
+  MISMATCH: "MISMATCH",
+  RECEIVED: "RECEIVED",
+  DECLINED: "DECLINED",
 };
 export const TRANSFER_REQUEST_STATUS_ARRAY = Object.values(TRANSFER_REQUEST_STATUS);
+// Finished — what Transfer History lists (My Requests / Requests to Us show every status).
+export const TRANSFER_REQUEST_CLOSED = [TRANSFER_REQUEST_STATUS.RECEIVED, TRANSFER_REQUEST_STATUS.DECLINED];
+
+// One step in a transfer's back-and-forth, kept on the transfer.
+export const TRANSFER_EVENT = {
+  PROBLEM_REPORTED: "PROBLEM_REPORTED",
+  CORRECTED: "CORRECTED",
+};
+export const TRANSFER_EVENT_ARRAY = Object.values(TRANSFER_EVENT);
 
 export const CONSUMPTION_REF_TYPE = {
   PROJECT: "PROJECT",

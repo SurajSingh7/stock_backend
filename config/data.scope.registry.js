@@ -33,6 +33,14 @@ export const DATA_SCOPE_REGISTRY = {
   vendors: { branch: "branchId" },
   "terms-conditions": {},
   notifications: {},
+  // Alerts & Escalations set-up — company-wide configuration, no branch,
+  // entity or owner to scope on.
+  "alert-channels": {},
+  "alert-contacts": {},
+  "alert-templates": {},
+  "alert-rules": {},
+  "alert-escalations": {},
+  "alert-log": {},
   // The GST slab ladder — the same rows for the whole company. No branch,
   // entity or ownership dimension exists to scope them on.
   "gst-rates": {},
@@ -44,7 +52,11 @@ export const DATA_SCOPE_REGISTRY = {
   // dropdown a transfer needs (you must be able to pick the OTHER branch)
   // is a separate service method, not a hole in this rule.
   branches: { branch: "_id" },
-  "inventory-items": { branch: "branchId" },
+  // The Stock pages (Available Product / Available Item / Product Summary)
+  // read inventory items — each scoped to the branch the stock sits in.
+  "available-products": { branch: "branchId" },
+  "available-items": { branch: "branchId" },
+  "product-summary": { branch: "branchId" },
   // An entry belongs to the branch whose stock it counts in.
   "opening-stock": { branch: "branchId" },
   "opening-issued-stock": { branch: "branchId" },
@@ -59,7 +71,12 @@ export const DATA_SCOPE_REGISTRY = {
   "stock-reports": { branch: "branchId" },
   // 🧪 TEST ONLY — the simulator's pretend subscribers belong to no branch.
   "test-simulator": {},
-  "transfer-requests": { branch: ["requestingBranchId", "sourceBranchId"] },
+  // Stock Transfer. A request belongs to the branch that asked (My
+  // Requests) or the branch asked (Requests to Us); Transfer History shows it
+  // to both. Each action still checks its own side (asker / sender).
+  "my-stock-requests": { branch: "requestingBranchId" },
+  "stock-requests-to-us": { branch: "sourceBranchId" },
+  "stock-transfer-history": { branch: ["requestingBranchId", "sourceBranchId"] },
 
   // ── Ownership-scoped ─────────────────────────────────────────────────────
   quotations: { ownership: "createdBy.userId" },

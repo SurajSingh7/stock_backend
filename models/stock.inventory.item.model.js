@@ -105,6 +105,22 @@ const repairSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/*
+  The transfer a unit is travelling on — set while it is IN_TRANSIT, cleared
+  once the receiver accepts it or the sender takes it off a rejected transfer.
+*/
+const transitSchema = new mongoose.Schema(
+  {
+    transferId: { type: mongoose.Schema.Types.ObjectId, ref: "inventory_transfers", default: null },
+    transferNumber: { type: String, trim: true, default: "" },
+    toBranchId: { type: mongoose.Schema.Types.ObjectId, ref: "branches", default: null },
+    sentAt: { type: Date, default: null },
+    // The sender's note on this unit ("box damaged").
+    note: { type: String, trim: true, default: "" },
+  },
+  { _id: false }
+);
+
 const stockInventoryItemSchema = new mongoose.Schema(
   {
     productDefinitionId: {
@@ -173,6 +189,7 @@ const stockInventoryItemSchema = new mongoose.Schema(
     purchaseDate: { type: Date, default: null },
     assignedTo: { type: assignedToSchema, default: null },
     fault: { type: faultSchema, default: null },
+    transit: { type: transitSchema, default: null },
     repair: { type: repairSchema, default: null },
     // A vendor swap links both ways: the faulty unit points at the unit sent
     // in its place, and that one (source VENDOR_REPLACEMENT) back at it.
@@ -239,6 +256,7 @@ stockInventoryItemSchema.index({ "assignedTo.subscriberId": 1 }, { sparse: true 
 stockInventoryItemSchema.index({ "assignedTo.requestId": 1 }, { sparse: true });
 stockInventoryItemSchema.index({ "assignedTo.kind": 1, "assignedTo.employeeCode": 1 }, { sparse: true });
 stockInventoryItemSchema.index({ "source.refId": 1 });
+stockInventoryItemSchema.index({ "transit.transferId": 1 }, { sparse: true });
 
 // 3rd arg pins the collection explicitly — no pluralization guessing.
 // who created / last touched this — see the plugin for why it is a hook

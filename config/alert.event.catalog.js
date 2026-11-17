@@ -12,9 +12,13 @@ import {
   DEBIT_NOTE_STATUS,
   ADJUSTMENT_TYPE,
   MAIL_REACHED_VENDOR,
+  TRANSFER_REQUEST_STATUS,
+  TRANSFER_REQUEST_CLOSED,
+  TRANSFER_EVENT,
 } from "../constants/stock.enums.js";
 import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
 import StockLowStockNoticeModel from "../models/stock.low.stock.notice.model.js";
+import StockTransferRequestModel from "../models/stock.transfer.request.model.js";
 
 /*
   Alerts & Escalations — the event catalog.
@@ -281,6 +285,66 @@ const LOW_STOCK_VARS = [
   },
 ];
 
+// ─── Stock Transfer ────────────────────────────────────────────────────────
+// Every event is raised on the request and goes to the OTHER branch — the one
+// that has to act or wants to know — through "People with access to the
+// branch" (branchId below). The link opens that branch's page on the request.
+const TRANSFER_ROUTE = "/stock/inventory/transfers";
+const TRANSFER_PAGE = { requesting: "my-requests", source: "requests-to-us" };
+const qtyText = (n, unit) => `${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 3 })}${unit === "meter" ? " m" : ""}`;
+const linesList = (lines, name, pick) => lines.map((l) => `• ${name(l)} — ${qtyText(pick(l), l.unit)}`).join("\n");
+
+const loadStockRequest = (id) =>
+  StockTransferRequestModel.findOne({ _id: id, isActive: true })
+    .populate({ path: "requestingBranchId", select: "name" })
+    .populate({ path: "sourceBranchId", select: "name" })
+    .populate({ path: "transferId", select: "lines.productName lines.sentQty lines.unit note sentByName receivedByName history" })
+    .lean();
+// branch: "requesting" (the branch that asked) | "source" (the branch asked).
+const buildStockRequest = (r, branch) => {
+  const t = r.transferId || {};
+  const problem = [...(t.history || [])].reverse().find((h) => h.type === TRANSFER_EVENT.PROBLEM_REPORTED);
+  const page = TRANSFER_REQUEST_CLOSED.includes(r.status) ? "history" : TRANSFER_PAGE[branch];
+  return {
+    ref: r.requestNumber || "",
+    link: link(`${TRANSFER_ROUTE}/${page}`, r.requestNumber),
+    amount: 0,
+    branchId: branch === "source" ? r.sourceBranchId?._id : r.requestingBranchId?._id,
+    vendorIds: [],
+    owner: r.requestedBy ? { userId: r.requestedBy, name: r.requestedByName || "", phone: "", email: "" } : null,
+    vars: {
+      requestNo: r.requestNumber || "",
+      requestingBranch: r.requestingBranchId?.name || "",
+      sendingBranch: r.sourceBranchId?.name || "",
+      itemsList: linesList(r.lines || [], (l) => l.categoryPath, (l) => l.requestedQty),
+      remarks: r.remarks || "",
+      reason: r.reason || "",
+      declinedBy: r.processedByName || "",
+      sentList: linesList(t.lines || [], (l) => l.productName, (l) => l.sentQty),
+      sentBy: t.sentByName || "",
+      note: t.note || "",
+      problemNote: problem?.note || "",
+      problemBy: problem?.byName || "",
+      receivedBy: t.receivedByName || "",
+      createdBy: r.requestedByName || "",
+      createdAt: date(r.requestedAt || r.createdAt),
+    },
+  };
+};
+const STOCK_REQUEST_VARS = [
+  { key: "requestNo", label: "Request number", sample: "SR-2026-0045" },
+  { key: "requestingBranch", label: "Branch that asked", sample: "Zirakpur" },
+  { key: "sendingBranch", label: "Branch asked (sends)", sample: "Azadpur" },
+  { key: "itemsList", label: "Categories asked for (one per line)", sample: "• Router / Dual Band — 50\n• Cable / Cat6 — 50 m" },
+  { key: "remarks", label: "Remarks", sample: "Needed for new connections" },
+];
+const STOCK_SENT_VARS = [
+  ...STOCK_REQUEST_VARS,
+  { key: "sentList", label: "Products on the way (one per line)", sample: "• TP-Link Router — 40\n• Cat6 Cable — 40 m" },
+  { key: "sentBy", label: "Sent by", sample: "Ramesh Kumar" },
+  { key: "note", label: "Sender's note", sample: "Sent by courier" },
+];
+
 // ─── The catalog ────────────────────────────────────────────────────────────
 const EVENTS = [
   // Tier 1 — somebody has to approve
@@ -438,10 +502,93 @@ const EVENTS = [
     // Nothing to wait on: the morning summary lists what is still low.
     pendingLabel: null,
     noVendor: true,
-    branchAccessModule: "inventory-items",
+    // Whoever sees a branch's stock against its thresholds (Available Product).
+    branchAccessModule: "available-products",
     variables: withCommon(LOW_STOCK_VARS),
     load: loadLowStockNotice,
     build: buildLowStockNotice,
+    isPending: null,
+  },
+
+  // Stock Transfer — all raised on the request (SR-…)
+  {
+    key: "STOCK_REQUESTED",
+    label: "Stock requested by another branch",
+    group: "Stock Transfer",
+    recordType: "Stock Request",
+    kind: "AUTOMATIC",
+    pendingLabel: "until the stock is sent or the request is declined",
+    noVendor: true,
+    branchAccessModule: "stock-requests-to-us",
+    variables: withCommon(STOCK_REQUEST_VARS),
+    load: loadStockRequest,
+    build: (r) => buildStockRequest(r, "source"),
+    isPending: (r) => r.status === TRANSFER_REQUEST_STATUS.PENDING,
+  },
+  {
+    key: "STOCK_REQUEST_DECLINED",
+    label: "Stock request declined",
+    group: "Stock Transfer",
+    recordType: "Stock Request",
+    kind: "AUTOMATIC",
+    // A declined request is asked again as a new one — nothing to wait on.
+    pendingLabel: null,
+    noVendor: true,
+    branchAccessModule: "my-stock-requests",
+    variables: withCommon([
+      ...STOCK_REQUEST_VARS,
+      { key: "reason", label: "Reason", sample: "Out of stock" },
+      { key: "declinedBy", label: "Declined by", sample: "Suresh (Azadpur)" },
+    ]),
+    load: loadStockRequest,
+    build: (r) => buildStockRequest(r, "requesting"),
+    isPending: null,
+  },
+  {
+    key: "STOCK_SENT",
+    label: "Stock on the way — check and receive",
+    group: "Stock Transfer",
+    recordType: "Stock Request",
+    kind: "AUTOMATIC",
+    // Raised again after every Correct & Resend.
+    pendingLabel: "until the branch that asked says All Received or reports a problem",
+    noVendor: true,
+    branchAccessModule: "my-stock-requests",
+    variables: withCommon(STOCK_SENT_VARS),
+    load: loadStockRequest,
+    build: (r) => buildStockRequest(r, "requesting"),
+    isPending: (r) => r.status === TRANSFER_REQUEST_STATUS.ON_THE_WAY,
+  },
+  {
+    key: "STOCK_PROBLEM_REPORTED",
+    label: "Problem reported — correct and resend",
+    group: "Stock Transfer",
+    recordType: "Stock Request",
+    kind: "AUTOMATIC",
+    pendingLabel: "until the sending branch corrects and resends it",
+    noVendor: true,
+    branchAccessModule: "stock-requests-to-us",
+    variables: withCommon([
+      ...STOCK_SENT_VARS,
+      { key: "problemNote", label: "What is wrong", sample: "Only 30 routers arrived, 10 missing" },
+      { key: "problemBy", label: "Reported by", sample: "Anil (Zirakpur)" },
+    ]),
+    load: loadStockRequest,
+    build: (r) => buildStockRequest(r, "source"),
+    isPending: (r) => r.status === TRANSFER_REQUEST_STATUS.MISMATCH,
+  },
+  {
+    key: "STOCK_RECEIVED",
+    label: "Stock received by the branch that asked",
+    group: "Stock Transfer",
+    recordType: "Stock Request",
+    kind: "AUTOMATIC",
+    pendingLabel: null,
+    noVendor: true,
+    branchAccessModule: "stock-requests-to-us",
+    variables: withCommon([...STOCK_SENT_VARS, { key: "receivedBy", label: "Received by", sample: "Anil (Zirakpur)" }]),
+    load: loadStockRequest,
+    build: (r) => buildStockRequest(r, "source"),
     isPending: null,
   },
 

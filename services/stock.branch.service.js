@@ -109,7 +109,7 @@ export default class StockBranchService {
   // should land on.
   //
   // The module matters. Data scope is resolved per module, so the same user can
-  // be OWN_BRANCH on invoices and SELECTED on inventory-items — the caller's
+  // be OWN_BRANCH on invoices and SELECTED on available-items — the caller's
   // dataAccess already carries whichever one applies, and getScopedActiveBranches
   // applies it to the branch collection.
   //

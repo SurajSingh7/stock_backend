@@ -1509,7 +1509,8 @@ export default class StockItemRequestService {
     const match = applyDataScope(
       { status: ITEM_STATUS.ASSIGNED, isActive: true, "assignedTo.subscriberId": { $ne: null } },
       dataAccess,
-      "inventory-items"
+      // Served on item-requests; the units sit in that branch's stock.
+      "item-requests"
     );
     if (search) {
       const rx = { $regex: escapeRegex(String(search).trim()), $options: "i" };

@@ -59,8 +59,9 @@ const PAGES = [
   ["stock/stock-reports", "inventory/reports"],
   ["stock/opening-stock", "inventory/opening/in-store"],
   ["stock/opening-issued", "inventory/opening/with-people"],
-  ["stock/transfer-requests", "inventory/transfers/requests"],
-  ["stock/incoming-requests", "inventory/transfers/incoming"],
+  // The old pages: the requests we raised, and the ones raised with us.
+  ["stock/transfer-requests", "inventory/transfers/my-requests"],
+  ["stock/incoming-requests", "inventory/transfers/requests-to-us"],
   ["stock/transfer-history", "inventory/transfers/history"],
   ["stock/item-requests", "allotment/requests"],
   ["stock/subscriber-items", "allotment/subscribers"],

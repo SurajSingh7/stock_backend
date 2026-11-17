@@ -44,8 +44,12 @@ for (const key of Object.keys(DATA_SCOPE_REGISTRY)) {
 const MODEL_FILE = {
   branches: "stock.branch.model.js",
   vendors: "stock.vendor.model.js",
-  "inventory-items": "stock.inventory.item.model.js",
-  "transfer-requests": "stock.transfer.request.model.js",
+  "available-products": "stock.inventory.item.model.js",
+  "available-items": "stock.inventory.item.model.js",
+  "product-summary": "stock.inventory.item.model.js",
+  "my-stock-requests": "stock.transfer.request.model.js",
+  "stock-requests-to-us": "stock.transfer.request.model.js",
+  "stock-transfer-history": "stock.transfer.request.model.js",
   "opening-stock": "stock.opening.stock.model.js",
   "opening-issued-stock": "stock.opening.stock.model.js",
   "item-requests": "stock.item.request.model.js",
@@ -111,8 +115,12 @@ for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
 const SERVICE_FILE = {
   branches: "stock.branch.service.js",
   vendors: "stock.vendor.service.js",
-  "inventory-items": "stock.inventory.item.service.js",
-  "transfer-requests": "stock.transfer.request.service.js",
+  "available-items": "stock.inventory.item.service.js",
+  "available-products": "stock.product.stock.service.js",
+  "product-summary": "stock.product.stock.service.js",
+  "my-stock-requests": "stock.transfer.request.service.js",
+  "stock-requests-to-us": "stock.transfer.request.service.js",
+  "stock-transfer-history": "stock.transfer.request.service.js",
   "opening-stock": "stock.opening.stock.service.js",
   "opening-issued-stock": "stock.opening.stock.service.js",
   "item-requests": "stock.item.request.service.js",
@@ -231,8 +239,12 @@ for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
 const OWN_MODEL = {
   branches: "StockBranchModel",
   vendors: "StockVendorModel",
-  "inventory-items": "StockInventoryItemModel",
-  "transfer-requests": "StockTransferRequestModel",
+  "available-products": "StockInventoryItemModel",
+  "available-items": "StockInventoryItemModel",
+  "product-summary": "StockInventoryItemModel",
+  "my-stock-requests": "StockTransferRequestModel",
+  "stock-requests-to-us": "StockTransferRequestModel",
+  "stock-transfer-history": "StockTransferRequestModel",
   "opening-stock": "StockOpeningStockModel",
   "opening-issued-stock": "StockOpeningStockModel",
   "item-requests": "StockItemRequestModel",
@@ -267,7 +279,7 @@ const UNSCOPED_BY_DESIGN = {
     generateNextVendorCode: "sequence spans all branches",
     _resolveParent: "validates the main vendor picked on the form (the picker itself is scoped); one level only, checked across branches",
   },
-  "transfer-requests": { generateRequestNumber: "sequence spans all branches" },
+  "my-stock-requests": { getFormBranches: "the OTHER branch of a transfer is outside your scope by design" },
   quotations: { generateQuotationNumber: "sequence spans all users" },
   "purchase-orders": { generatePONumber: "sequence spans all entities" },
   "tracking-orders": {
@@ -296,7 +308,10 @@ const UNSCOPED_BY_DESIGN = {
   },
 };
 
-const SCOPE_CALL = /applyDataScope|isWithinDataScope|assertDataScope|resolveDimensionAllowList|unscopedInternalQuery/;
+// Wrappers around resolveDimensionAllowList: assertBranch (Stock Transfer —
+// each action checks its own side of a request) and visibleBranches (the
+// Stock pages — every product-stock read starts from the caller's branches).
+const SCOPE_CALL = /applyDataScope|isWithinDataScope|assertDataScope|resolveDimensionAllowList|assertBranch|visibleBranches|unscopedInternalQuery/;
 
 for (const [key, dims] of Object.entries(DATA_SCOPE_REGISTRY)) {
   if (!Object.keys(dims).length) continue;

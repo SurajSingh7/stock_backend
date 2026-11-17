@@ -20,7 +20,12 @@ const MODULE_DEFINITIONS = [
   { key: "product-definitions", name: "Product Definitions", actions: withMenu(STANDARD_ACTIONS) },
   { key: "vendors", name: "Vendors", actions: withMenu(STANDARD_ACTIONS) },
   { key: "terms-conditions", name: "Terms & Conditions", actions: withMenu(STANDARD_ACTIONS) },
-  { key: "inventory-items", name: "Inventory Items", actions: withMenu([...STANDARD_ACTIONS, "BULK_CREATE", "UPDATE_STATUS"]) },
+  // The Stock pages, one module each so each can be granted on its own (all
+  // read-only — stock is never edited by hand). Replaced "inventory-items" —
+  // scripts/migrate-stock-page-modules.js moves its grants across.
+  { key: "available-products", name: "Available Product", actions: withMenu(["READ"]) },
+  { key: "available-items", name: "Available Item", actions: withMenu(["READ"]) },
+  { key: "product-summary", name: "Product Summary", actions: withMenu(["READ"]) },
   // No UPDATE: a quotation is never edited — a mistake is rejected at review and
   // entered again as a new quotation. (scripts/remove-quotation-update-action.js
   // removes it from databases seeded before this.)
@@ -77,7 +82,18 @@ const MODULE_DEFINITIONS = [
   // Which Claude model reads uploaded invoices. UPDATE also gates the
   // "Change model" button next to Re-scan on Add Invoice.
   { key: "ai-settings", name: "AI Settings", actions: withMenu(["READ", "UPDATE", "TEST"]) },
-  { key: "transfer-requests", name: "Transfer Requests", actions: withMenu(["CREATE", "READ", "PROCESS", "REJECT"]) },
+  /*
+    Stock Transfer — one page each, every transfer starting as a request:
+      my-stock-requests      My Requests: ask another branch (CREATE); say
+                             All Received / Report Problem (RECEIVE)
+      stock-requests-to-us   Requests to Us: SEND (also Correct & Resend) or DECLINE
+      stock-transfer-history Transfer History: received and declined, both ways
+    Replaced "transfer-requests" — scripts/migrate-transfer-modules.js moves
+    its grants across.
+  */
+  { key: "my-stock-requests", name: "Stock Transfer · My Requests", actions: withMenu(["READ", "CREATE", "RECEIVE"]) },
+  { key: "stock-requests-to-us", name: "Stock Transfer · Requests to Us", actions: withMenu(["READ", "SEND", "DECLINE"]) },
+  { key: "stock-transfer-history", name: "Stock Transfer · Transfer History", actions: withMenu(["READ"]) },
   // Stock that was already on hand before this system. POST is its own action
   // because it is the step that actually creates stock — the person typing up
   // a 300-row draft need not be the one allowed to put it on the books. An

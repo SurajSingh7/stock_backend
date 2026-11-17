@@ -2,122 +2,152 @@ import mongoose from "mongoose";
 import { successResponseHandler, errorResponseHandler } from "../helpers/response.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import StockTransferRequestService from "../services/stock.transfer.request.service.js";
+import { emitAlertEvent, refreshAlerts } from "../services/stock.alert.dispatcher.service.js";
 import {
   validateCreateTransferRequest,
-  validateProcessTransferRequest,
-  validateRejectTransferRequest,
+  validateSendTransferRequest,
+  validateDeclineTransferRequest,
+  validateReportTransferProblem,
+  validateCorrectTransfer,
 } from "../validators/stock.validator.js";
 
 const log = getLogger(import.meta.url);
 
 // req.user already carries everything the audit trail wants — role, branch,
-// IP, user agent. This used to return only { id, name }, which is why the
-// purchase-order, quotation, invoice and transfer-request audit rows recorded
-// an empty role and no IP. `id` is kept alongside `_id` so older call sites
-// that read actor.id keep working.
+// IP, user agent. `id` is kept alongside `_id` for older call sites.
 const actingUser = (req) => (req.user ? { ...req.user, id: req.user._id } : null);
 
+/*
+  One write in one transaction. After it commits, the request's open alert
+  chains are re-checked and `event` (if any) goes out — every Stock Transfer
+  alert is raised on the request.
+*/
+const inTransaction = async (req, res, { validate, run, event, message, status = 200, label }) => {
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+    if (validate) validate(req.body);
+    const request = await run(session);
+    await session.commitTransaction();
+    refreshAlerts(request._id);
+    if (event) emitAlertEvent(event, request._id, { actor: req.user });
+    successResponseHandler(res, request, message, status);
+  } catch (error) {
+    await session.abortTransaction();
+    log.error(`Error ${label}`, error);
+    errorResponseHandler(res, error);
+  } finally {
+    await session.endSession();
+  }
+};
+
+const read = async (res, fn, message, label) => {
+  try {
+    successResponseHandler(res, await fn(), message);
+  } catch (error) {
+    log.error(`Error ${label}`, error);
+    errorResponseHandler(res, error);
+  }
+};
+
+const board = (side) => (req, res) =>
+  read(
+    res,
+    async () => {
+      const { rows, counts, total, page, limit } = await StockTransferRequestService.getBoard(side, req.query, req.dataAccess);
+      return { data: rows, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }, meta: { counts } };
+    },
+    "Stock requests fetched successfully",
+    `fetching ${side} stock requests`
+  );
+
+const byId = (side) => (req, res) =>
+  read(res, () => StockTransferRequestService.getById(side, req.params.id, req.dataAccess), "Stock request fetched successfully", "fetching stock request");
+
 export default class StockTransferRequestController {
-  static async createTransferRequest(req, res) {
-    const session = await mongoose.startSession();
-    try {
-      session.startTransaction();
-      validateCreateTransferRequest(req.body);
-      const data = await StockTransferRequestService.createTransferRequest(
-        req.body,
-        actingUser(req),
-        session,
-        req.dataAccess
-      );
-      await session.commitTransaction();
-      log.info("Transfer request created");
-      successResponseHandler(res, data, "Transfer request created successfully", 201);
-    } catch (error) {
-      await session.abortTransaction();
-      log.error("Error creating transfer request", error);
-      errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
-    }
+  // Bootstraps the branch pickers — see StockTransferRequestService.getFormBranches.
+  static getFormBranches(req, res) {
+    return read(res, () => StockTransferRequestService.getFormBranches(req.dataAccess), "Transfer branches fetched successfully", "fetching transfer branches");
   }
 
-  // Bootstraps the transfer screens' branch pickers — see
-  // StockTransferRequestService.getFormBranches.
-  static async getFormBranches(req, res) {
-    try {
-      const data = await StockTransferRequestService.getFormBranches(req.dataAccess);
-      successResponseHandler(res, data, "Transfer branches fetched successfully");
-    } catch (error) {
-      log.error("Error fetching transfer branches", error);
-      errorResponseHandler(res, error);
-    }
+  static categories(req, res) {
+    return read(res, () => StockTransferRequestService.categories(), "Categories fetched successfully", "fetching request categories");
   }
 
-  static async getBoard(req, res) {
-    try {
-      const data = await StockTransferRequestService.getBoard(req.query, req.dataAccess);
-      successResponseHandler(res, data, "Transfer requests fetched successfully");
-    } catch (error) {
-      log.error("Error fetching transfer requests board", error);
-      errorResponseHandler(res, error);
-    }
+  // The Send page: products with their free stock, and one product's free units.
+  static sendOptions(req, res) {
+    return read(res, () => StockTransferRequestService.sendOptions(req.params.id, req.dataAccess), "Send options fetched successfully", "fetching send options");
   }
 
-  static async getTransferRequestById(req, res) {
-    try {
-      const data = await StockTransferRequestService.getTransferRequestById(req.params.id, req.dataAccess);
-      successResponseHandler(res, data, "Transfer request fetched successfully");
-    } catch (error) {
-      log.error("Error fetching transfer request", error);
-      errorResponseHandler(res, error);
-    }
+  static sendUnits(req, res) {
+    return read(res, () => StockTransferRequestService.sendUnits(req.params.id, req.query.productDefinitionId, req.dataAccess), "Units fetched successfully", "fetching units to send");
   }
 
-  static async processTransferRequest(req, res) {
-    const session = await mongoose.startSession();
-    try {
-      session.startTransaction();
-      validateProcessTransferRequest(req.body);
-      const data = await StockTransferRequestService.processTransferRequest(
-        req.params.id,
-        req.body,
-        actingUser(req),
-        session,
-        req.dataAccess
-      );
-      await session.commitTransaction();
-      log.info("Transfer request processed");
-      successResponseHandler(res, data, "Transfer request processed successfully");
-    } catch (error) {
-      await session.abortTransaction();
-      log.error("Error processing transfer request", error);
-      errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
-    }
+  static getMine = board("mine");
+  static getToUs = board("to-us");
+  static getHistory = board("history");
+  static getMineById = byId("mine");
+  static getToUsById = byId("to-us");
+  static getHistoryById = byId("history");
+
+  static create(req, res) {
+    return inTransaction(req, res, {
+      validate: validateCreateTransferRequest,
+      run: (session) => StockTransferRequestService.createTransferRequest(req.body, actingUser(req), session, req.dataAccess),
+      event: "STOCK_REQUESTED",
+      message: "Request sent",
+      status: 201,
+      label: "creating stock request",
+    });
   }
 
-  static async rejectTransferRequest(req, res) {
-    const session = await mongoose.startSession();
-    try {
-      session.startTransaction();
-      validateRejectTransferRequest(req.body);
-      const data = await StockTransferRequestService.rejectTransferRequest(
-        req.params.id,
-        req.body,
-        actingUser(req),
-        session,
-        req.dataAccess
-      );
-      await session.commitTransaction();
-      log.info("Transfer request rejected");
-      successResponseHandler(res, data, "Transfer request rejected");
-    } catch (error) {
-      await session.abortTransaction();
-      log.error("Error rejecting transfer request", error);
-      errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
-    }
+  static send(req, res) {
+    return inTransaction(req, res, {
+      validate: validateSendTransferRequest,
+      run: (session) => StockTransferRequestService.send(req.params.id, req.body, actingUser(req), session, req.dataAccess),
+      event: "STOCK_SENT",
+      message: "Stock sent",
+      label: "sending stock",
+    });
+  }
+
+  static decline(req, res) {
+    return inTransaction(req, res, {
+      validate: validateDeclineTransferRequest,
+      run: (session) => StockTransferRequestService.decline(req.params.id, req.body, actingUser(req), session, req.dataAccess),
+      event: "STOCK_REQUEST_DECLINED",
+      message: "Request declined",
+      label: "declining stock request",
+    });
+  }
+
+  static receive(req, res) {
+    return inTransaction(req, res, {
+      run: (session) => StockTransferRequestService.receive(req.params.id, actingUser(req), session, req.dataAccess),
+      event: "STOCK_RECEIVED",
+      message: "Stock received",
+      label: "receiving stock",
+    });
+  }
+
+  static reportProblem(req, res) {
+    return inTransaction(req, res, {
+      validate: validateReportTransferProblem,
+      run: (session) => StockTransferRequestService.reportProblem(req.params.id, req.body, actingUser(req), session, req.dataAccess),
+      event: "STOCK_PROBLEM_REPORTED",
+      message: "Problem reported",
+      label: "reporting a transfer problem",
+    });
+  }
+
+  // Back on the way — the requester is told again, as a fresh STOCK_SENT.
+  static correct(req, res) {
+    return inTransaction(req, res, {
+      validate: validateCorrectTransfer,
+      run: (session) => StockTransferRequestService.correct(req.params.id, req.body, actingUser(req), session, req.dataAccess),
+      event: "STOCK_SENT",
+      message: "Corrected and sent again",
+      label: "correcting transfer",
+    });
   }
 }

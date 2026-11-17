@@ -24,7 +24,9 @@ const { Schema } = mongoose;
  * old one. That is the correct answer for a history — it records who the
  * person was at the time. For the current details, look `userId` up in HRMS.
  */
-const actorSchema = new Schema(
+// Exported for a model that records a named step by its actor (e.g. a
+// stock request's closedBy) in the same shape as createdBy / updatedBy.
+export const actorSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, default: null },
     employeeCode: { type: String, trim: true, default: "" },

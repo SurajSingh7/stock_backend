@@ -1,7 +1,6 @@
 import {
   INPUT_TYPES_ARRAY,
   TRACKING_METHODS_ARRAY,
-  ITEM_STATUS_ARRAY,
   CATEGORY_TYPES_ARRAY,
   UNIT_TYPES_ARRAY,
   CATEGORY_APPROVAL_STATUS_ARRAY,
@@ -189,17 +188,6 @@ export const validateUpdateProductDefinition = (body) => {
   }
 
   validateProductDefinitionExtras(body);
-};
-
-// ─── Inventory Item Validators ────────────────────────────────────────────────
-// There is no direct "create item" any more: stock enters only through an
-// invoice or an Opening Stock Entry, each of which stamps the unit's origin.
-
-export const validateUpdateItemStatus = (body) => {
-  const { status } = body;
-  if (!status) throw new Error("status is required");
-  if (!ITEM_STATUS_ARRAY.includes(status))
-    throw new Error(`status must be one of: ${ITEM_STATUS_ARRAY.join(", ")}`);
 };
 
 // ─── Vendor Validators ────────────────────────────────────────────────────────
@@ -812,34 +800,49 @@ export const validateCreateTransferRequest = (body) => {
     throw new Error("At least one product line is required");
   lines.forEach((l, idx) => {
     const where = `Line ${idx + 1}`;
-    if (!isNonEmptyString(l?.productDefinitionId))
-      throw new Error(`${where}: productDefinitionId is required`);
+    if (!isNonEmptyString(l?.categoryId))
+      throw new Error(`${where}: choose a category`);
     if (!isPositiveNumber(l?.requestedQty))
       throw new Error(`${where}: requested quantity must be greater than 0`);
   });
 };
 
-export const validateProcessTransferRequest = (body) => {
+// Send against a request — quantities per request line; the service checks
+// them against what was asked and what is free.
+export const validateSendTransferRequest = (body) => {
   if (!body || typeof body !== "object") throw new Error("Request body is required");
-  const { lines } = body;
-  if (!Array.isArray(lines) || lines.length === 0) throw new Error("lines is required");
-
-  let anyTransferred = false;
-  lines.forEach((l, idx) => {
+  if (!Array.isArray(body.lines) || body.lines.length === 0) throw new Error("lines is required");
+  body.lines.forEach((l, idx) => {
     const where = `Line ${idx + 1}`;
     if (!isNonEmptyString(l?.lineId)) throw new Error(`${where}: lineId is required`);
-    if (typeof l?.transferQty !== "number" || l.transferQty < 0)
-      throw new Error(`${where}: transfer quantity must be 0 or greater`);
-    if (l.transferQty > 0) anyTransferred = true;
-    if (l.inventoryItemIds !== undefined && !Array.isArray(l.inventoryItemIds))
-      throw new Error(`${where}: inventoryItemIds must be an array`);
+    if (l.items !== undefined && !Array.isArray(l.items)) throw new Error(`Invalid: ${where} — items must be a list`);
+    (l.items || []).forEach((it, j) => {
+      if (!isNonEmptyString(it?.productDefinitionId)) throw new Error(`${where}, product ${j + 1}: choose a product`);
+      if (typeof it?.qty !== "number" || it.qty < 0) throw new Error(`Invalid: ${where}, product ${j + 1} — quantity must be 0 or more`);
+    });
   });
-  if (!anyTransferred)
-    throw new Error("At least one line must have a transfer quantity greater than 0 — use reject instead");
 };
 
-export const validateRejectTransferRequest = (body) => {
+export const validateDeclineTransferRequest = (body) => {
   if (!body?.reason || !String(body.reason).trim()) throw new Error("A reason is required");
+};
+
+// Send Stock — straight to another branch.
+export const validateReportTransferProblem = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!isNonEmptyString(body.note)) throw new Error("A note is required — say what is wrong");
+};
+
+export const validateCorrectTransfer = (body) => {
+  if (!body || typeof body !== "object") throw new Error("Request body is required");
+  if (!Array.isArray(body.lines)) throw new Error("lines is required");
+  body.lines.forEach((l, idx) => {
+    const where = `Line ${idx + 1}`;
+    if (!isNonEmptyString(l?.lineId)) throw new Error(`${where}: lineId is required`);
+    if (l.keepItemIds === undefined && l.keepQty === undefined) throw new Error(`${where}: keepItemIds or keepQty is required`);
+    if (l.keepItemIds !== undefined && !Array.isArray(l.keepItemIds)) throw new Error(`Invalid: ${where} — keepItemIds must be a list`);
+    if (l.keepQty !== undefined && !(typeof l.keepQty === "number" && l.keepQty >= 0)) throw new Error(`Invalid: ${where} — keepQty must be 0 or more`);
+  });
 };
 
 // ─── Invoice (goods receiving) Validators ────────────────────────────────────

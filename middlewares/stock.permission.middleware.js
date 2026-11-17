@@ -112,7 +112,7 @@ export function requirePermission(moduleKey, action) {
  * screen I am on" — a branch picker being the case that motivated it. The
  * answer genuinely differs per module, because data scope is resolved per
  * module (see the StockUserDataScopeModel lookup above): the same user can hold
- * OWN_BRANCH on invoices and SELECTED on inventory-items.
+ * OWN_BRANCH on invoices and SELECTED on available-items.
  *
  * Letting the caller name the module is not an escalation — requirePermission
  * still has to find that the caller actually holds the action on it, so a

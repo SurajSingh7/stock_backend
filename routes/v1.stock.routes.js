@@ -12,7 +12,6 @@ import StockTrackingOrderController from "../controllers/stock.tracking.order.co
 import StockBranchController from "../controllers/stock.branch.controller.js";
 import StockGstRateController from "../controllers/stock.gst.rate.controller.js";
 import StockFaultyItemController from "../controllers/stock.faulty.item.controller.js";
-import StockLowStockController from "../controllers/stock.low.stock.controller.js";
 import StockAiSettingsController from "../controllers/stock.ai.settings.controller.js";
 import StockInvoiceController from "../controllers/stock.invoice.controller.js";
 import { uploadInvoiceFile, uploadInvoiceForReading } from "../helpers/stock.invoice.upload.helper.js";
@@ -130,27 +129,19 @@ router.put("/terms-conditions/:id", authenticate, requirePermission("terms-condi
 router.delete("/terms-conditions/:id", authenticate, requirePermission("terms-conditions", "DELETE"), StockTermsConditionController.softDeleteTermsCondition);
 router.patch("/terms-conditions/:id/restore", authenticate, requirePermission("terms-conditions", "RESTORE"), StockTermsConditionController.restoreTermsCondition);
 
-// ─── Inventory Items ──────────────────────────────────────────────────────────
-// No POST: stock enters only through an invoice or an Opening Stock Entry, each
-// of which stamps where the unit came from (see /opening-stock below).
-router.get("/inventory-items", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getAllInventoryItems);
-router.get("/inventory-items/cards", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getInventoryCards);
-router.get("/inventory-items/product-summary", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getProductInventorySummary);
-// Product Inventory (took over Low Stock): stock vs threshold per branch, and a product's history.
-router.get("/inventory-items/product-stock", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getProductStock);
-router.get("/inventory-items/stock-summary", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getStockSummaryReport);
-router.get("/inventory-items/product-stock/:defId/history", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getProductStockHistory);
-router.get("/inventory-items/history/:defId", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getReceivingHistory);
-router.get("/inventory-items/summary/:defId", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getStockSummary);
-// Low Stock — same READ and branch scope as the inventory screens, so whoever
-// sees a branch's stock sees (and is alerted about) what is low in it.
-router.get("/low-stock", authenticate, requirePermission("inventory-items", "READ"), StockLowStockController.getList);
-router.get("/inventory-items/:id/timeline", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getItemTimeline);
-router.get("/inventory-items/:id", authenticate, requirePermission("inventory-items", "READ"), StockInventoryItemController.getInventoryItemById);
-router.put("/inventory-items/:id", authenticate, requirePermission("inventory-items", "UPDATE"), StockInventoryItemController.updateInventoryItem);
-router.patch("/inventory-items/:id/status", authenticate, requirePermission("inventory-items", "UPDATE_STATUS"), StockInventoryItemController.updateItemStatus);
-router.delete("/inventory-items/:id", authenticate, requirePermission("inventory-items", "DELETE"), StockInventoryItemController.softDeleteInventoryItem);
-router.patch("/inventory-items/:id/restore", authenticate, requirePermission("inventory-items", "RESTORE"), StockInventoryItemController.restoreInventoryItem);
+// ─── Stock pages ─────────────────────────────────────────────────────────────
+// Read-only, one module per page so each can be granted on its own. No POST /
+// PUT / DELETE: stock enters only through an invoice or an Opening Stock Entry
+// (see /opening-stock below) and moves through requests, repairs and transfers.
+// Available Product (took over Low Stock): stock vs threshold per branch, and a product's history.
+router.get("/inventory-items/product-stock", authenticate, requirePermission("available-products", "READ"), StockInventoryItemController.getProductStock);
+router.get("/inventory-items/product-stock/:defId/history", authenticate, requirePermission("available-products", "READ"), StockInventoryItemController.getProductStockHistory);
+// Available Item: the units in the store, a batch product's receipts, a unit's history.
+router.get("/inventory-items/cards", authenticate, requirePermission("available-items", "READ"), StockInventoryItemController.getInventoryCards);
+router.get("/inventory-items/history/:defId", authenticate, requirePermission("available-items", "READ"), StockInventoryItemController.getReceivingHistory);
+router.get("/inventory-items/:id/timeline", authenticate, requirePermission("available-items", "READ"), StockInventoryItemController.getItemTimeline);
+// Product Summary: everything received, and where it all is now.
+router.get("/inventory-items/stock-summary", authenticate, requirePermission("product-summary", "READ"), StockInventoryItemController.getStockSummaryReport);
 
 // ─── Quotations ────────────────────────────────────────────────────────────────
 router.post("/quotations", authenticate, requirePermission("quotations", "CREATE"), StockQuotationController.createQuotation);
@@ -350,7 +341,7 @@ router.get("/vendor-ledger/:vendorId/month", authenticate, requirePermission("ve
 router.get(
   "/scoped-branches",
   authenticate,
-  requirePermissionForQueryModule(["invoices", "inventory-items", "item-requests", "repairs", "employee-items", "stock-reports", "vendors", "tracking-orders", "purchase-orders"], "READ"),
+  requirePermissionForQueryModule(["invoices", "available-products", "available-items", "product-summary", "item-requests", "repairs", "employee-items", "stock-reports", "vendors", "tracking-orders", "purchase-orders"], "READ"),
   StockBranchController.getScopedBranches
 );
 
@@ -496,13 +487,37 @@ router.get("/test-simulator/requests/:requestId", authenticate, requirePermissio
 router.put("/test-simulator/requests/:requestId", authenticate, requirePermission("test-simulator", "REQUEST"), StockTestSimulatorController.resendRequest);
 router.post("/test-simulator/requests/:requestId/withdraw", authenticate, requirePermission("test-simulator", "REQUEST"), StockTestSimulatorController.withdrawRequest);
 
-// ─── Inventory Transfer Requests ──────────────────────────────────────────────
-router.post("/transfer-requests", authenticate, requirePermission("transfer-requests", "CREATE"), StockTransferRequestController.createTransferRequest);
-router.get("/transfer-requests/board", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getBoard);
-router.get("/transfer-requests/branches", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getFormBranches);
-router.get("/transfer-requests/:id", authenticate, requirePermission("transfer-requests", "READ"), StockTransferRequestController.getTransferRequestById);
-router.patch("/transfer-requests/:id/process", authenticate, requirePermission("transfer-requests", "PROCESS"), StockTransferRequestController.processTransferRequest);
-router.patch("/transfer-requests/:id/reject", authenticate, requirePermission("transfer-requests", "REJECT"), StockTransferRequestController.rejectTransferRequest);
+// ─── Stock Transfer ───────────────────────────────────────────────────────────
+/*
+  Stock Transfer — every transfer starts as a request; three pages, three
+  modules (see seeders/stock.module.seeder.js):
+    my-stock-requests      My Requests: ask (CREATE), All Received / Report Problem (RECEIVE)
+    stock-requests-to-us   Requests to Us: SEND (also Correct & Resend), DECLINE
+    stock-transfer-history Transfer History: READ
+  Each list and detail is served per module, so its data scope is that module's.
+*/
+// Branch pickers — every transfer screen, in the scope of the module it serves.
+router.get(
+  "/stock-transfer-branches",
+  authenticate,
+  requirePermissionForQueryModule(["my-stock-requests", "stock-requests-to-us", "stock-transfer-history"], "READ"),
+  StockTransferRequestController.getFormBranches
+);
+router.get("/stock-requests/categories", authenticate, requirePermission("my-stock-requests", "CREATE"), StockTransferRequestController.categories);
+router.post("/stock-requests", authenticate, requirePermission("my-stock-requests", "CREATE"), StockTransferRequestController.create);
+router.get("/stock-requests/mine", authenticate, requirePermission("my-stock-requests", "READ"), StockTransferRequestController.getMine);
+router.get("/stock-requests/mine/:id", authenticate, requirePermission("my-stock-requests", "READ"), StockTransferRequestController.getMineById);
+router.patch("/stock-requests/:id/receive", authenticate, requirePermission("my-stock-requests", "RECEIVE"), StockTransferRequestController.receive);
+router.patch("/stock-requests/:id/report-problem", authenticate, requirePermission("my-stock-requests", "RECEIVE"), StockTransferRequestController.reportProblem);
+router.get("/stock-requests/to-us", authenticate, requirePermission("stock-requests-to-us", "READ"), StockTransferRequestController.getToUs);
+router.get("/stock-requests/to-us/:id", authenticate, requirePermission("stock-requests-to-us", "READ"), StockTransferRequestController.getToUsById);
+router.get("/stock-requests/to-us/:id/send-options", authenticate, requirePermission("stock-requests-to-us", "SEND"), StockTransferRequestController.sendOptions);
+router.get("/stock-requests/to-us/:id/send-units", authenticate, requirePermission("stock-requests-to-us", "SEND"), StockTransferRequestController.sendUnits);
+router.patch("/stock-requests/:id/send", authenticate, requirePermission("stock-requests-to-us", "SEND"), StockTransferRequestController.send);
+router.patch("/stock-requests/:id/decline", authenticate, requirePermission("stock-requests-to-us", "DECLINE"), StockTransferRequestController.decline);
+router.patch("/stock-requests/:id/correct", authenticate, requirePermission("stock-requests-to-us", "SEND"), StockTransferRequestController.correct);
+router.get("/stock-requests/history", authenticate, requirePermission("stock-transfer-history", "READ"), StockTransferRequestController.getHistory);
+router.get("/stock-requests/history/:id", authenticate, requirePermission("stock-transfer-history", "READ"), StockTransferRequestController.getHistoryById);
 
 
 export default router;

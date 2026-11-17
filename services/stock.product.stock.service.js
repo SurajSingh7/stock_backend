@@ -214,7 +214,7 @@ export default class StockProductStockService {
       ]),
     ]);
 
-    const blank = () => ({ subscribers: 0, employees: 0, repair: 0, returned: 0, sent: 0, unrecorded: 0 });
+    const blank = () => ({ subscribers: 0, employees: 0, repair: 0, returned: 0, sent: 0, inTransit: 0, unrecorded: 0 });
     const receipts = new Map();
     const receipt = (key, seed) => {
       if (!receipts.has(key)) receipts.set(key, { refId: key === "none" ? null : key, received: 0, available: 0, now: blank(), held: 0, ...seed });
@@ -233,7 +233,8 @@ export default class StockProductStockService {
           if (g._id.kind === ASSIGNEE_KIND.EMPLOYEE) rec.now.employees += g.qty; else rec.now.subscribers += g.qty;
           break;
         case ITEM_STATUS.DEBITED: rec.now.returned += g.qty; break;
-        case ITEM_STATUS.IN_TRANSIT: rec.now.sent += g.qty; break;
+        // Sent to a branch, not accepted there yet — still ours here.
+        case ITEM_STATUS.IN_TRANSIT: rec.now.inTransit += g.qty; break;
         default: rec.now.repair += g.qty; // faulty, in repair, at vendor, scrapped, vendor replaced
       }
       rec.held += g.qty;
@@ -371,18 +372,35 @@ export default class StockProductStockService {
       ]),
       // Stock from before the log: no RECEIVED row and no source. (A batch split
       // off newer stock copies its parent's source, so it never lands here.)
+      // Counted at the branch it was FIRST at — the sender of its earliest
+      // transfer, else where it sits. Counting it where it sits now would
+      // count it twice at a branch it was transferred to: once here, once as
+      // "from branches".
       StockInventoryItemModel.aggregate([
         {
           $match: {
             productDefinitionId: { $in: pids },
             isActive: true,
             approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
-            branchId: { $in: branchIds },
+            "source.type": null,
             ...(dated ? { receivedAt: range } : {}),
           },
         },
         { $lookup: { from: "inventory_item_movements", localField: "_id", foreignField: "inventoryItemId", as: "m" } },
-        { $match: { "m.type": { $ne: ITEM_MOVEMENT_TYPE.RECEIVED }, "source.type": null } },
+        { $match: { "m.type": { $ne: ITEM_MOVEMENT_TYPE.RECEIVED } } },
+        {
+          $addFields: {
+            firstMove: {
+              $first: {
+                $sortArray: {
+                  input: { $filter: { input: "$m", cond: { $eq: ["$$this.type", ITEM_MOVEMENT_TYPE.TRANSFERRED] } } },
+                  sortBy: { at: 1 },
+                },
+              },
+            },
+          },
+        },
+        { $match: { $expr: { $in: [{ $ifNull: ["$firstMove.fromBranchId", "$branchId"] }, branchIds] } } },
         // The oldest units carry no source at all, only the invoice they came on.
         { $group: { _id: { product: "$productDefinitionId", source: { $ifNull: ["$source.type", { $cond: [{ $gt: ["$invoiceId", null] }, "PURCHASE", null] }] } }, qty: { $sum: { $ifNull: ["$quantity", 1] } } } },
       ]),
@@ -414,6 +432,8 @@ export default class StockProductStockService {
         case ITEM_STATUS.ASSIGNED:
           if (h._id.kind === ASSIGNEE_KIND.EMPLOYEE) t.employees += h.qty; else t.subscribers += h.qty;
           break;
+        // On the way to another branch (or rejected and back with the
+        // sender to fix) — held with the sender until it is accepted.
         case ITEM_STATUS.IN_TRANSIT: t.inTransit += h.qty; break;
         case ITEM_STATUS.DEBITED: t.returned += h.qty; break;
         default: t.repair += h.qty; // faulty, in repair, at vendor, scrapped, vendor replaced

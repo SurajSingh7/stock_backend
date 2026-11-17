@@ -1,13 +1,11 @@
 import mongoose from "mongoose";
 import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import StockProductDefinitionModel from "../models/stock.product.definition.model.js";
-import StockCategoryModel from "../models/stock.category.model.js";
 import StockBranchModel from "../models/stock.branch.model.js";
 import StockLowStockStateModel from "../models/stock.low.stock.state.model.js";
 import StockLowStockNoticeModel from "../models/stock.low.stock.notice.model.js";
 import StockAlertRuleModel from "../models/stock.alert.rule.model.js";
 import { emitAlertEvent } from "./stock.alert.dispatcher.service.js";
-import { resolveDimensionAllowList } from "../helpers/data.scope.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
 import { ITEM_STATUS, ITEM_APPROVAL_STATUS, STOCK_LEVEL, ALERT_RULE_KIND } from "../constants/stock.enums.js";
 
@@ -198,76 +196,5 @@ export default class StockLowStockService {
     const notices = await StockLowStockNoticeModel.insertMany([...byBranch.values()]);
     notices.forEach((n) => emitAlertEvent(LOW_STOCK_EVENT, n._id));
     return notices.length;
-  }
-
-  /* ---------------------------------------------------------------------- */
-  /* Low Stock page                                                          */
-  /* ---------------------------------------------------------------------- */
-
-  /*
-    Live, not from the state table — the page is right the moment stock
-    moves, the check may be minutes behind. "Low since" comes from the state
-    row when the check has seen the dip already.
-  */
-  static async list(query, dataAccess) {
-    const allow = resolveDimensionAllowList(dataAccess, "branch"); // null = every branch
-    let branchIds = allow;
-    if (query.branchId && mongoose.isValidObjectId(query.branchId)) {
-      if (allow !== null && !allow.includes(String(query.branchId))) branchIds = [];
-      else branchIds = [String(query.branchId)];
-    }
-    if (branchIds && !branchIds.length) {
-      return { rows: [], counts: { ALL: 0, LOW: 0, OUT: 0 }, total: 0, page: 1, limit: 20 };
-    }
-
-    let rows = (await StockLowStockService.computeLevels({ branchIds })).filter((r) => r.level !== STOCK_LEVEL.OK);
-
-    const search = String(query.search || "").trim().toLowerCase();
-    if (search) rows = rows.filter((r) => r.productName.toLowerCase().includes(search) || r.branchName.toLowerCase().includes(search));
-
-    const counts = {
-      ALL: rows.length,
-      LOW: rows.filter((r) => r.level === STOCK_LEVEL.LOW).length,
-      OUT: rows.filter((r) => r.level === STOCK_LEVEL.OUT).length,
-    };
-    if ([STOCK_LEVEL.LOW, STOCK_LEVEL.OUT].includes(query.level)) rows = rows.filter((r) => r.level === query.level);
-
-    // Worst first: out of stock, then by how far below the threshold.
-    rows.sort(
-      (a, b) =>
-        SEVERITY[b.level] - SEVERITY[a.level] ||
-        a.available / a.threshold - b.available / b.threshold ||
-        a.productName.localeCompare(b.productName)
-    );
-
-    const page = Math.max(1, parseInt(query.page, 10) || 1);
-    const limit = Math.min(200, Math.max(1, parseInt(query.limit, 10) || 20));
-    const pageRows = rows.slice((page - 1) * limit, page * limit);
-
-    const [states, categories] = await Promise.all([
-      pageRows.length
-        ? StockLowStockStateModel.find({
-            $or: pageRows.map((r) => ({ productDefinitionId: r.productDefinitionId, branchId: r.branchId })),
-          }).select("productDefinitionId branchId since").lean()
-        : [],
-      StockCategoryModel.find({ _id: { $in: [...new Set(pageRows.map((r) => String(r.categoryId)).filter((x) => x !== "null"))] } })
-        .select("name")
-        .lean(),
-    ]);
-    const sinceBy = new Map(states.map((s) => [`${s.productDefinitionId}:${s.branchId}`, s.since]));
-    const categoryBy = new Map(categories.map((c) => [String(c._id), c.name]));
-
-    return {
-      rows: pageRows.map((r) => ({
-        ...r,
-        categoryName: categoryBy.get(String(r.categoryId)) || "",
-        shortBy: round3(Math.max(0, r.threshold - r.available)),
-        since: sinceBy.get(`${r.productDefinitionId}:${r.branchId}`) || null,
-      })),
-      counts,
-      total: rows.length,
-      page,
-      limit,
-    };
   }
 }
