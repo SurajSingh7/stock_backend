@@ -27,9 +27,9 @@ const entryHandlers = (kind) => {
 
     list: handled(log, `${what} list fetched successfully`, async (req) => {
       const { skip, limit, page } = paginate(req.query);
-      const { status, branchId, search } = req.query;
-      const { data, total } = await StockOpeningStockService.list({ skip, limit, status, branchId, search, kind }, req.dataAccess);
-      return paginateReturn(data, total, page, limit);
+      const { status, branchId, search, from, to } = req.query;
+      const { data, total, counts } = await StockOpeningStockService.list({ skip, limit, status, branchId, search, from, to, kind }, req.dataAccess);
+      return { ...paginateReturn(data, total, page, limit), meta: { counts } };
     }),
 
     getById: handled(log, `${what} fetched successfully`, (req) => StockOpeningStockService.getById(req.params.id, kind, req.dataAccess)),

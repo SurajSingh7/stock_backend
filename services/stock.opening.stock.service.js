@@ -59,6 +59,7 @@ import {
 
 const ENTITY_TYPE = "opening-stock";
 const TEXT_MAX = 300;
+const round3 = (n) => Math.round((Number(n) + Number.EPSILON) * 1000) / 1000;
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const KIND = {
@@ -419,39 +420,75 @@ export default class StockOpeningStockService {
   /* CRUD                                                                   */
   /* ---------------------------------------------------------------------- */
 
-  static async list({ skip, limit, status, branchId, search, kind }, dataAccess) {
+  // counts: entries per status under the other filters, for the status chips.
+  static async list({ skip, limit, status, branchId, search, from, to, kind }, dataAccess) {
     const k = kindOf(kind);
-    const filter = { isActive: true, kind: kindFilter(k) };
-    if (status && Object.values(OPENING_STOCK_STATUS).includes(status)) filter.status = status;
-    if (branchId && mongoose.isValidObjectId(branchId)) filter.branchId = branchId;
+    const base = { isActive: true, kind: kindFilter(k) };
+    if (branchId && mongoose.isValidObjectId(branchId)) base.branchId = new mongoose.Types.ObjectId(branchId);
+    if (from || to) {
+      base.entryDate = {};
+      if (from) base.entryDate.$gte = new Date(from);
+      if (to) { const d = new Date(to); d.setHours(23, 59, 59, 999); base.entryDate.$lte = d; }
+    }
     if (search) {
       const rx = { $regex: escapeRegex(search), $options: "i" };
-      filter.$or =
+      base.$or =
         k === OPENING_STOCK_KIND.ISSUED
           ? [{ entryNumber: rx }, { "issuedTo.name": rx }, { "issuedTo.employeeCode": rx }, { "issuedTo.orderId": rx }, { "issuedTo.username": rx }]
           : [{ entryNumber: rx }];
     }
-    applyDataScope(filter, dataAccess, KIND[k].moduleKey);
+    // applyDataScope casts its own ids, so base is safe in $match below.
+    applyDataScope(base, dataAccess, KIND[k].moduleKey);
+    const filter = status && Object.values(OPENING_STOCK_STATUS).includes(status) ? { ...base, status } : base;
 
-    const [rows, total] = await Promise.all([
+    const [rows, total, byStatus] = await Promise.all([
       StockOpeningStockModel.find(filter)
-        .select("entryNumber kind branchId entryDate remarks status issuedTo issuedSince postedAt postedBy createdBy createdAt lines.quantity lines.trackingMethod lines.workingState")
+        .select("entryNumber kind branchId entryDate remarks status issuedTo issuedSince postedAt postedBy createdBy createdAt lines.productDefinitionId lines.productName lines.unit lines.quantity lines.trackingMethod lines.workingState")
         .populate({ path: "branchId", select: "name code" })
+        // The branch each person belonged to, for the Created By / Posted By details.
+        .populate({ path: "createdBy.branchId", model: "branches", select: "name" })
+        .populate({ path: "postedBy.branchId", model: "branches", select: "name" })
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
       StockOpeningStockModel.countDocuments(filter),
+      StockOpeningStockModel.aggregate([{ $match: base }, { $group: { _id: "$status", n: { $sum: 1 } } }]),
     ]);
+    const counts = Object.fromEntries([["ALL", 0], ...Object.values(OPENING_STOCK_STATUS).map((st) => [st, 0])]);
+    byStatus.forEach((c) => { counts[c._id] = c.n; counts.ALL += c.n; });
 
-    const data = rows.map(({ lines = [], ...r }) => ({
-      ...r,
-      lineCount: lines.length,
-      unitCount: lines.filter((l) => l.trackingMethod === TRACKING_METHODS.INDIVIDUAL).length,
-      faultyCount: lines.filter((l) => l.workingState === OPENING_STOCK_STATE.FAULTY).length,
-      beyondRepairCount: lines.filter((l) => l.workingState === OPENING_STOCK_STATE.BEYOND_REPAIR).length,
-    }));
-    return { data, total };
+    /*
+      What each entry holds, without its lines:
+        products   one row per product — a unit line counts 1, a batch its quantity
+        quantity   the same summed per unit of measure (pieces and metres never added)
+        condition  lines that are working / faulty / beyond repair (store entries)
+    */
+    const amount = (l) => (l.trackingMethod === TRACKING_METHODS.INDIVIDUAL ? 1 : Number(l.quantity) || 0);
+    const data = rows.map(({ lines = [], ...r }) => {
+      const byProduct = new Map();
+      const byUnit = new Map();
+      for (const l of lines) {
+        const key = String(l.productDefinitionId);
+        const p = byProduct.get(key) || { productDefinitionId: l.productDefinitionId, name: l.productName, unit: l.unit || null, quantity: 0 };
+        p.quantity = round3(p.quantity + amount(l));
+        byProduct.set(key, p);
+        const u = l.unit || "pieces";
+        byUnit.set(u, round3((byUnit.get(u) || 0) + amount(l)));
+      }
+      const state = (st) => lines.filter((l) => (l.workingState || OPENING_STOCK_STATE.WORKING) === st).length;
+      return {
+        ...r,
+        products: [...byProduct.values()].sort((a, b) => a.name.localeCompare(b.name)),
+        quantity: [...byUnit.entries()].map(([unit, qty]) => ({ unit, quantity: qty })),
+        condition: {
+          working: state(OPENING_STOCK_STATE.WORKING),
+          faulty: state(OPENING_STOCK_STATE.FAULTY),
+          beyondRepair: state(OPENING_STOCK_STATE.BEYOND_REPAIR),
+        },
+      };
+    });
+    return { data, total, counts };
   }
 
   static async getById(id, kind, dataAccess) {
@@ -616,11 +653,7 @@ export default class StockOpeningStockService {
 
     entry.status = OPENING_STOCK_STATUS.POSTED;
     entry.postedAt = new Date();
-    entry.postedBy = {
-      userId: user?._id || user?.id || null,
-      employeeCode: user?.employeeCode || "",
-      name: user?.name || "",
-    };
+    entry.postedBy = actorSnapshot(user);
     await entry.save({ session });
 
     const ref = { type: ITEM_MOVEMENT_REF.OPENING_STOCK, refId: entry._id, refNumber: entry.entryNumber };

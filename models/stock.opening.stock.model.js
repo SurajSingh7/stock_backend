@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { actorStampPlugin } from "./plugins/actor.stamp.plugin.js";
+import { actorStampPlugin, actorSchema } from "./plugins/actor.stamp.plugin.js";
 import {
   TRACKING_METHODS_ARRAY,
   UNIT_TYPES_ARRAY,
@@ -107,19 +107,9 @@ const openingStockEntrySchema = new Schema(
     lines: { type: [openingStockLineSchema], default: [] },
 
     postedAt: { type: Date, default: null },
-    // Who posted it — same snapshot shape as createdBy (see the plugin), kept
+    // Who posted it — the same snapshot as createdBy (see the plugin), kept
     // apart from updatedBy because posting is the one act that makes stock.
-    postedBy: {
-      type: new Schema(
-        {
-          userId: { type: Schema.Types.ObjectId, default: null },
-          employeeCode: { type: String, trim: true, default: "" },
-          name: { type: String, trim: true, default: "" },
-        },
-        { _id: false }
-      ),
-      default: null,
-    },
+    postedBy: { type: actorSchema, default: null },
 
     isActive: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null },

@@ -267,7 +267,7 @@ export default class StockProductStockService {
 
       received      Purchase (invoice) + Opening Stock + From Branches
       in store      AVAILABLE units
-      out of store  Returned to Vendor (debit notes) + Sent to Branches + In Use
+      out of store  Debited (debit notes) + Sent to Branches + In Use
                     (subscribers / employees) + Repair & Warranty (faulty, in
                     repair, at vendor, scrapped, vendor replaced)
 
