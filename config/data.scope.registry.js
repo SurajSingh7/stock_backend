@@ -52,11 +52,12 @@ export const DATA_SCOPE_REGISTRY = {
   // dropdown a transfer needs (you must be able to pick the OTHER branch)
   // is a separate service method, not a hole in this rule.
   branches: { branch: "_id" },
-  // The Stock pages (Available Product / Available Item / Product Summary)
+  // The Stock pages (Available Product / Available Item / Product / Item Summary)
   // read inventory items — each scoped to the branch the stock sits in.
   "available-products": { branch: "branchId" },
   "available-items": { branch: "branchId" },
   "product-summary": { branch: "branchId" },
+  "item-summary": { branch: "branchId" },
   // An entry belongs to the branch whose stock it counts in.
   "opening-stock": { branch: "branchId" },
   "opening-issued-stock": { branch: "branchId" },

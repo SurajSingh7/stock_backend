@@ -26,6 +26,7 @@ const MODULE_DEFINITIONS = [
   { key: "available-products", name: "Available Product", actions: withMenu(["READ"]) },
   { key: "available-items", name: "Available Item", actions: withMenu(["READ"]) },
   { key: "product-summary", name: "Product Summary", actions: withMenu(["READ"]) },
+  { key: "item-summary", name: "Item Summary", actions: withMenu(["READ"]) },
   // No UPDATE: a quotation is never edited — a mistake is rejected at review and
   // entered again as a new quotation. (scripts/remove-quotation-update-action.js
   // removes it from databases seeded before this.)

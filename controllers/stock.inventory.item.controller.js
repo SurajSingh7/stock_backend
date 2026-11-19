@@ -3,6 +3,7 @@ import { getLogger } from "../helpers/logger.helper.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import StockInventoryItemService from "../services/stock.inventory.item.service.js";
 import StockProductStockService from "../services/stock.product.stock.service.js";
+import StockItemSummaryService, { SCOPE_MODULE_KEY as ITEM_SUMMARY_MODULE } from "../services/stock.item.summary.service.js";
 
 const log = getLogger(import.meta.url);
 
@@ -11,6 +12,7 @@ const log = getLogger(import.meta.url);
     Available Product  (available-products)  getProductStock, getProductStockHistory
     Available Item     (available-items)     getInventoryCards, getReceivingHistory, getItemTimeline
     Product Summary    (product-summary)     getStockSummaryReport
+    Item Summary       (item-summary)        getItemSummary, getItemSummaryTimeline
   Stock is never edited here: it enters through an invoice or Opening Stock
   and moves through requests, repairs and transfers.
 */
@@ -20,13 +22,35 @@ export default class StockInventoryItemController {
     try {
       const { skip, limit, page } = paginate(req.query);
       const { search, categoryId, productDefinitionId, branchId, status, sourceType, condition, vendorId, warranty, from, to } = req.query;
-      const { data, total, listFields } = await StockInventoryItemService.getInventoryCards(
+      const { data, total, listFields, totals } = await StockInventoryItemService.getInventoryCards(
         { skip, limit, search, categoryId, productDefinitionId, branchId, status, sourceType, condition, vendorId, warranty, from, to },
         req.dataAccess
       );
-      successResponseHandler(res, { ...paginateReturn(data, total, page, limit), meta: { listFields } }, "Inventory cards fetched successfully");
+      successResponseHandler(res, { ...paginateReturn(data, total, page, limit), meta: { listFields, totals } }, "Inventory cards fetched successfully");
     } catch (error) {
       log.error("Error fetching inventory cards", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
+  // Item Summary: every unit we hold, wherever it is.
+  static async getItemSummary(req, res) {
+    try {
+      const { data, total, page, limit, counts, totals, listFields } = await StockItemSummaryService.list(req.query, req.dataAccess);
+      successResponseHandler(res, { ...paginateReturn(data, total, page, limit), meta: { counts, totals, listFields } }, "Item summary fetched successfully");
+    } catch (error) {
+      log.error("Error fetching item summary", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
+  // Item Summary → a unit's history (scoped by Item Summary's branches).
+  static async getItemSummaryTimeline(req, res) {
+    try {
+      const data = await StockInventoryItemService.getItemTimeline(req.params.id, req.dataAccess, ITEM_SUMMARY_MODULE);
+      successResponseHandler(res, data, "Item timeline fetched successfully");
+    } catch (error) {
+      log.error("Error fetching item timeline", error);
       errorResponseHandler(res, error);
     }
   }

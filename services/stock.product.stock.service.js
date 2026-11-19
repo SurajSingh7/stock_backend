@@ -57,7 +57,7 @@ export default class StockProductStockService {
   static async list(query = {}, dataAccess) {
     const { search, categoryId, productDefinitionId, branchId, level } = query;
     const branches = await visibleBranches(dataAccess, branchId);
-    const empty = { rows: [], counts: { ALL: 0, OK: 0, LOW: 0, OUT: 0, NONE: 0 }, total: 0 };
+    const empty = { rows: [], counts: { ALL: 0, OK: 0, LOW: 0, OUT: 0, NONE: 0 }, totals: { available: [] }, total: 0 };
     if (!branches.length) return empty;
     const branchIds = branches.map((b) => b._id);
 
@@ -118,6 +118,11 @@ export default class StockProductStockService {
     // Tab counts reflect every filter except the level itself.
     const counts = { ALL: rows.length, OK: 0, LOW: 0, OUT: 0, NONE: 0 };
     rows.forEach((r) => { counts[r.level] += 1; });
+    // Header cards: available summed per unit (pieces and metres never added),
+    // over every filter except the level — the same rows as the tab counts.
+    const byUnit = new Map();
+    rows.forEach((r) => { const u = r.unit || "pieces"; byUnit.set(u, round3((byUnit.get(u) || 0) + r.available)); });
+    const totals = { available: [...byUnit.entries()].map(([unit, quantity]) => ({ unit, quantity })) };
     if (level && counts[level] !== undefined) rows = rows.filter((r) => r.level === level);
 
     rows.sort((a, b) => RANK[a.level] - RANK[b.level] || a.productName.localeCompare(b.productName));
@@ -151,6 +156,7 @@ export default class StockProductStockService {
         })),
       })),
       counts,
+      totals,
       total: rows.length,
       page,
       limit,

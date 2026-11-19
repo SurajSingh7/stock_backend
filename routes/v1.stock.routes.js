@@ -139,6 +139,9 @@ router.get("/inventory-items/product-stock/:defId/history", authenticate, requir
 // Available Item: the units in the store, a batch product's receipts, a unit's history.
 router.get("/inventory-items/cards", authenticate, requirePermission("available-items", "READ"), StockInventoryItemController.getInventoryCards);
 router.get("/inventory-items/history/:defId", authenticate, requirePermission("available-items", "READ"), StockInventoryItemController.getReceivingHistory);
+// Item Summary: every unit wherever it is, and a unit's history (static paths before /:id).
+router.get("/inventory-items/item-summary", authenticate, requirePermission("item-summary", "READ"), StockInventoryItemController.getItemSummary);
+router.get("/inventory-items/item-summary/:id/timeline", authenticate, requirePermission("item-summary", "READ"), StockInventoryItemController.getItemSummaryTimeline);
 router.get("/inventory-items/:id/timeline", authenticate, requirePermission("available-items", "READ"), StockInventoryItemController.getItemTimeline);
 // Product Summary: everything received, and where it all is now.
 router.get("/inventory-items/stock-summary", authenticate, requirePermission("product-summary", "READ"), StockInventoryItemController.getStockSummaryReport);
@@ -341,7 +344,7 @@ router.get("/vendor-ledger/:vendorId/month", authenticate, requirePermission("ve
 router.get(
   "/scoped-branches",
   authenticate,
-  requirePermissionForQueryModule(["invoices", "available-products", "available-items", "product-summary", "item-requests", "repairs", "employee-items", "stock-reports", "vendors", "tracking-orders", "purchase-orders"], "READ"),
+  requirePermissionForQueryModule(["invoices", "available-products", "available-items", "product-summary", "item-summary", "item-requests", "repairs", "employee-items", "stock-reports", "vendors", "tracking-orders", "purchase-orders"], "READ"),
   StockBranchController.getScopedBranches
 );
 

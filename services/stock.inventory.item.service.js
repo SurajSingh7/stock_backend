@@ -6,6 +6,7 @@ import StockCategoryModel from "../models/stock.category.model.js";
 import StockCategoryService from "./stock.category.service.js";
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 import {
+  ITEM_CONDITION,
   TRACKING_METHODS,
   ITEM_STATUS,
   ITEM_APPROVAL_STATUS,
@@ -21,7 +22,7 @@ const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // Free-text search over the fields a person would type in: every unique field
 // (serial, MAC…) plus whatever the lists show as columns.
-const searchClause = async (search) => {
+export const searchClause = async (search) => {
   const fields = await StockFieldDefinitionModel.find({
     isActive: true,
     $or: [{ isUnique: true }, { isFilterable: true }, { showList: true }],
@@ -118,7 +119,10 @@ export default class StockInventoryItemService {
     const batchDefIds = await StockProductDefinitionModel.find({ trackingMethod: TRACKING_METHODS.QUANTITY }).distinct("_id");
     const isBatch = { $in: ["$productDefinitionId", batchDefIds] };
 
-    const [[grouped], usedDefIds] = await Promise.all([
+    // Header cards: quantity, used and warranty-ending, per product (a unit
+    // counts 1, a batch its quantity) — turned into per-unit totals below.
+    const qtyExpr = { $ifNull: ["$quantity", 1] };
+    const [[grouped], usedDefIds, totalsByDef] = await Promise.all([
       StockInventoryItemModel.aggregate([
         { $match: match },
         {
@@ -143,15 +147,41 @@ export default class StockInventoryItemService {
         { $facet: { rows: [{ $skip: skip }, { $limit: limit }], total: [{ $count: "n" }] } },
       ]),
       StockInventoryItemModel.distinct("productDefinitionId", match),
+      StockInventoryItemModel.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: "$productDefinitionId",
+            quantity: { $sum: qtyExpr },
+            used: { $sum: { $cond: [{ $eq: ["$condition", ITEM_CONDITION.USED] }, qtyExpr, 0] } },
+            warrantyEnding: {
+              $sum: { $cond: [{ $and: [{ $gte: ["$warranty.endDate", now] }, { $lte: ["$warranty.endDate", soon] }] }, qtyExpr, 0] },
+            },
+          },
+        },
+      ]),
     ]);
     const rows = grouped?.rows || [];
     const total = grouped?.total?.[0]?.n || 0;
 
     // The columns: every "Show in list" field any product in the result uses.
     const usedDefs = await StockProductDefinitionModel.find({ _id: { $in: usedDefIds } })
-      .select("selectedFields")
+      .select("selectedFields unit")
       .populate({ path: "selectedFields.fieldDefId", select: "code label showList" })
       .lean();
+
+    // Each total per unit of measure — pieces and metres are never added.
+    const unitOf = new Map(usedDefs.map((d) => [String(d._id), d.unit || "pieces"]));
+    const perUnit = (key) => {
+      const by = new Map();
+      for (const t of totalsByDef) {
+        if (!t[key]) continue;
+        const u = unitOf.get(String(t._id)) || "pieces";
+        by.set(u, Math.round(((by.get(u) || 0) + t[key]) * 1000) / 1000);
+      }
+      return [...by.entries()].map(([unit, quantity]) => ({ unit, quantity }));
+    };
+    const totals = { quantity: perUnit("quantity"), used: perUnit("used"), warrantyEnding: perUnit("warrantyEnding") };
     const listFields = [];
     const seen = new Set();
     for (const d of usedDefs) {
@@ -250,7 +280,7 @@ export default class StockInventoryItemService {
       });
     }
 
-    return { data, total, listFields };
+    return { data, total, listFields, totals };
   }
 
   /* ---------------------------------------------------------------------- */
@@ -316,13 +346,14 @@ export default class StockInventoryItemService {
   /* screen can show it above the real history.                             */
   /* ---------------------------------------------------------------------- */
 
-  static async getItemTimeline(id, dataAccess) {
+  // moduleKey: whose branch scope applies — Available Item, or Item Summary.
+  static async getItemTimeline(id, dataAccess, moduleKey = SCOPE_MODULE_KEY) {
     const item = await StockInventoryItemModel.findOne({ _id: id })
       .populate({ path: "productDefinitionId", select: "name trackingMethod unit" })
       .populate({ path: "branchId", select: "name" })
       .populate({ path: "vendorId", select: "name" })
       .lean();
-    if (!item || !isWithinDataScope(item, dataAccess, SCOPE_MODULE_KEY)) throw new Error("Inventory item not found");
+    if (!item || !isWithinDataScope(item, dataAccess, moduleKey)) throw new Error("Inventory item not found");
 
     const movements = await StockItemMovementService.timelineOf(item._id);
     return {
