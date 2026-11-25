@@ -43,6 +43,30 @@ export default class StockInvoiceController {
     }
   }
 
+  // Add Serial / Qty → ⬇ Template: the product's serial sheet for this invoice.
+  static async downloadSerialTemplate(req, res) {
+    try {
+      const { buffer, filename } = await StockInvoiceService.buildSerialTemplate(req.params.id, req.params.productId, req.dataAccess);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(buffer);
+    } catch (error) {
+      log.error("Error building serial template", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
+  // Add Serial / Qty → ⬆ Upload Excel: rows + their problems, nothing saved.
+  static async parseSerialUpload(req, res) {
+    try {
+      const data = await StockInvoiceService.parseSerialUpload(req.params.id, req.params.productId, req.file, req.dataAccess);
+      successResponseHandler(res, data, "File read successfully");
+    } catch (error) {
+      log.error("Error reading serial upload", error);
+      errorResponseHandler(res, error);
+    }
+  }
+
   // Add Items — Save as Draft (submit=false) or Submit (submit=true).
   static async saveItems(req, res) {
     const session = await mongoose.startSession();

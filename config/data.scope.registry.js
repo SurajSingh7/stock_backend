@@ -66,10 +66,13 @@ export const DATA_SCOPE_REGISTRY = {
   "item-requests": { branch: "branchId" },
   // Broken units are inventory items — scoped to the branch they sit in.
   repairs: { branch: "branchId" },
+  // A Lost Items entry belongs to the branch whose stock it names.
+  "lost-items": { branch: "branchId" },
+  "lost-approval": { branch: "branchId" },
+  "dead-items": { branch: "branchId" },
+  "dead-approval": { branch: "branchId" },
   // Units with employees still belong to the branch whose stock they are.
   "employee-items": { branch: "branchId" },
-  // Inventory reports read inventory items — the same branch scope.
-  "stock-reports": { branch: "branchId" },
   // 🧪 TEST ONLY — the simulator's pretend subscribers belong to no branch.
   "test-simulator": {},
   // Stock Transfer. A request belongs to the branch that asked (My
@@ -99,10 +102,10 @@ export const DATA_SCOPE_REGISTRY = {
   // while their scope on receiving stays narrow, or the other way round.
   // Same dimensions, so the same knobs are available.
   "invoice-list": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
-  // Faulty Items reads the same invoices (and their debit notes), so it is
+  // Debit Note Items reads the same invoices (and their debit notes), so it is
   // scoped exactly like the Invoice List — but as its own module, so it can be
   // given to someone who does not get the Invoice List.
-  "faulty-items": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
+  "debit-note-items": { branch: "branchId", entity: "entityAlias", ownership: "createdBy.userId" },
   // The same invoices again, once per team that looks at them. Separate keys
   // are the point: accounts normally hold every branch here while the stock
   // team holds one, and the approval team sits somewhere between. Same

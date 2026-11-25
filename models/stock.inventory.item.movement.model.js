@@ -51,6 +51,8 @@ const itemMovementSchema = new Schema(
     // destination each point at the other.
     relatedItemId: { type: Schema.Types.ObjectId, ref: "inventory_items", default: null },
     note: { type: String, trim: true, default: "" },
+    // Repairs: the estimate when sent, the final cost when it comes back.
+    cost: { type: Number, default: null, min: 0 },
   },
   { timestamps: true }
 );

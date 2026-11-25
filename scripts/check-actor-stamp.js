@@ -31,12 +31,12 @@ const MODEL_FILE = {
   "item-requests": "stock.item.request.model.js",
   repairs: "stock.inventory.item.model.js",
   "employee-items": "stock.inventory.item.model.js",
-  "stock-reports": "stock.inventory.item.model.js",
+  "item-summary": "stock.inventory.item.model.js",
   quotations: "stock.quotation.model.js",
   "tracking-orders": "stock.tracking.order.model.js",
   "purchase-orders": "stock.purchase.order.model.js",
   invoices: "stock.invoice.model.js",
-  "faulty-items": "stock.invoice.model.js",
+  "debit-note-items": "stock.invoice.model.js",
 };
 
 const ACTOR_FIELDS = ["userId", "employeeCode", "name", "email", "phone", "roleName", "branchId"];

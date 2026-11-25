@@ -167,6 +167,8 @@ export default class StockTrackingOrderService {
           entityAlias: tracking.buyerEntity?.alias || "",
           entityState: tracking.buyerEntity?.state || "",
           buyerEntity: tracking.buyerEntity || {},
+          // The state was switched on Create PO — the entity pill shows an ⓘ with the reason.
+          stateChange: po?.stateChange || null,
           items, totalAmount, totalQuantity,
           excludedItems,
           receivedQuantity, pendingQuantity,

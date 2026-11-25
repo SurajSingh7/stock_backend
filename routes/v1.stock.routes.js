@@ -11,7 +11,7 @@ import StockTermsConditionController from "../controllers/stock.terms.condition.
 import StockTrackingOrderController from "../controllers/stock.tracking.order.controller.js";
 import StockBranchController from "../controllers/stock.branch.controller.js";
 import StockGstRateController from "../controllers/stock.gst.rate.controller.js";
-import StockFaultyItemController from "../controllers/stock.faulty.item.controller.js";
+import StockDebitNoteItemController from "../controllers/stock.debit.note.item.controller.js";
 import StockAiSettingsController from "../controllers/stock.ai.settings.controller.js";
 import StockInvoiceController from "../controllers/stock.invoice.controller.js";
 import { uploadInvoiceFile, uploadInvoiceForReading } from "../helpers/stock.invoice.upload.helper.js";
@@ -20,10 +20,11 @@ import StockOpeningStockController, { StockOpeningIssuedStockController } from "
 import StockPeopleDirectoryController from "../controllers/stock.people.directory.controller.js";
 import StockItemRequestController from "../controllers/stock.item.request.controller.js";
 import StockRepairController from "../controllers/stock.repair.controller.js";
+import { LostEntryController, DeadEntryController } from "../controllers/stock.lost.entry.controller.js";
 import StockEmployeeItemController from "../controllers/stock.employee.item.controller.js";
-import StockInventoryReportController from "../controllers/stock.inventory.report.controller.js";
 import StockTestSimulatorController from "../controllers/stock.test.simulator.controller.js";
 import { uploadOpeningStockSheet } from "../helpers/stock.opening.stock.excel.helper.js";
+import { uploadInvoiceSerialSheet } from "../helpers/stock.invoice.serial.excel.helper.js";
 import StockAccessControlController from "../controllers/stock.access.control.controller.js";
 import StockAuditLogController from "../controllers/stock.audit.log.controller.js";
 import { authenticate, requireAdmin } from "../middlewares/stock.auth.middleware.js";
@@ -207,6 +208,20 @@ router.get("/invoices/board", authenticate, requirePermission("invoices", "READ"
 router.get("/invoices/:id", authenticate, requirePermission("invoices", "READ"), StockInvoiceController.getInvoiceById);
 // Add Items — entered by whoever receives: Save as Draft / Submit.
 router.put("/invoices/:id/items", authenticate, requirePermission("invoices", "CREATE"), StockInvoiceController.saveItems);
+// Add Serial / Qty → Excel template + upload (read only, nothing saved).
+router.get(
+  "/invoices/:id/serial-template/:productId",
+  authenticate,
+  requirePermission("invoices", "CREATE"),
+  StockInvoiceController.downloadSerialTemplate
+);
+router.post(
+  "/invoices/:id/serial-upload/:productId",
+  authenticate,
+  requirePermission("invoices", "CREATE"),
+  uploadInvoiceSerialSheet.single("file"),
+  StockInvoiceController.parseSerialUpload
+);
 // ⋮ → Edit invoice / Delete: details as written on the vendor's invoice.
 // Their own action so it can be granted to a few people only.
 router.put(
@@ -233,10 +248,10 @@ router.patch("/invoices/:id/reject", authenticate, requirePermission("invoices",
 // decision: moving a due date is not the same as claiming money back.
 router.get("/invoice-list", authenticate, requirePermission("invoice-list", "READ"), StockInvoicePaymentController.getList);
 
-// ─── Faulty Items · every unit a debit note claimed (read-only) ──────────────
-router.get("/faulty-items", authenticate, requirePermission("faulty-items", "READ"), StockFaultyItemController.getList);
-router.get("/faulty-items/by-vendor", authenticate, requirePermission("faulty-items", "READ"), StockFaultyItemController.getVendorSummary);
-router.get("/faulty-items/:debitNoteId/lines/:lineIndex/units", authenticate, requirePermission("faulty-items", "READ"), StockFaultyItemController.getUnits);
+// ─── Debit Note Items · every unit sent back on a debit note (read-only) ─────
+router.get("/debit-note-items", authenticate, requirePermission("debit-note-items", "READ"), StockDebitNoteItemController.getList);
+router.get("/debit-note-items/by-vendor", authenticate, requirePermission("debit-note-items", "READ"), StockDebitNoteItemController.getVendorSummary);
+router.get("/debit-note-items/:debitNoteId/lines/:lineIndex/units", authenticate, requirePermission("debit-note-items", "READ"), StockDebitNoteItemController.getUnits);
 // Read-only on misc charges (accounts' own). Debit notes are raised HERE and
 // then reviewed on Payments and decided on Payment Approval.
 router.get("/invoice-list/:id/adjustments", authenticate, requirePermission("invoice-list", "READ"), StockInvoicePaymentController.getAdjustments);
@@ -344,7 +359,7 @@ router.get("/vendor-ledger/:vendorId/month", authenticate, requirePermission("ve
 router.get(
   "/scoped-branches",
   authenticate,
-  requirePermissionForQueryModule(["invoices", "available-products", "available-items", "product-summary", "item-summary", "item-requests", "repairs", "employee-items", "stock-reports", "vendors", "tracking-orders", "purchase-orders"], "READ"),
+  requirePermissionForQueryModule(["invoices", "available-products", "available-items", "product-summary", "item-summary", "lost-items", "lost-approval", "dead-items", "dead-approval", "debit-note-items", "item-requests", "repairs", "employee-items", "vendors", "tracking-orders", "purchase-orders"], "READ"),
   StockBranchController.getScopedBranches
 );
 
@@ -451,6 +466,33 @@ router.patch("/item-requests/:id/short-close", authenticate, requirePermission("
 router.patch("/item-requests/:id/lines/:lineId/close", authenticate, requirePermission("item-requests", "SHORT_CLOSE"), StockItemRequestController.closeLine);
 router.patch("/item-requests/:id/reject", authenticate, requirePermission("item-requests", "REJECT"), StockItemRequestController.reject);
 
+// ─── Lost Items ─────────────────────────────────────────────────────────────────
+// Report units lost (or found again); every entry waits for approval. Static
+// paths before /:id.
+router.get("/lost-entries", authenticate, requirePermission("lost-items", "READ"), LostEntryController.list);
+router.get("/lost-entries/unit-options", authenticate, requirePermission("lost-items", "CREATE"), LostEntryController.unitOptions);
+router.get("/lost-entries/batch-sources", authenticate, requirePermission("lost-items", "CREATE"), LostEntryController.batchSources);
+router.get("/lost-entries/approval", authenticate, requirePermission("lost-approval", "READ"), LostEntryController.approvalList);
+router.get("/lost-entries/approval/:id", authenticate, requirePermission("lost-approval", "READ"), LostEntryController.approvalGetById);
+router.patch("/lost-entries/approval/:id/approve", authenticate, requirePermission("lost-approval", "APPROVE"), LostEntryController.approve);
+router.patch("/lost-entries/approval/:id/reject", authenticate, requirePermission("lost-approval", "APPROVE"), LostEntryController.reject);
+router.get("/lost-entries/:id", authenticate, requirePermission("lost-items", "READ"), LostEntryController.getById);
+router.post("/lost-entries", authenticate, requirePermission("lost-items", "CREATE"), LostEntryController.create);
+router.put("/lost-entries/:id", authenticate, requirePermission("lost-items", "CREATE"), LostEntryController.update);
+
+// ─── Dead Items ─────────────────────────────────────────────────────────────────
+// Write units off as dead — the same flow as Lost Items, its own modules.
+router.get("/dead-entries", authenticate, requirePermission("dead-items", "READ"), DeadEntryController.list);
+router.get("/dead-entries/unit-options", authenticate, requirePermission("dead-items", "CREATE"), DeadEntryController.unitOptions);
+router.get("/dead-entries/batch-sources", authenticate, requirePermission("dead-items", "CREATE"), DeadEntryController.batchSources);
+router.get("/dead-entries/approval", authenticate, requirePermission("dead-approval", "READ"), DeadEntryController.approvalList);
+router.get("/dead-entries/approval/:id", authenticate, requirePermission("dead-approval", "READ"), DeadEntryController.approvalGetById);
+router.patch("/dead-entries/approval/:id/approve", authenticate, requirePermission("dead-approval", "APPROVE"), DeadEntryController.approve);
+router.patch("/dead-entries/approval/:id/reject", authenticate, requirePermission("dead-approval", "APPROVE"), DeadEntryController.reject);
+router.get("/dead-entries/:id", authenticate, requirePermission("dead-items", "READ"), DeadEntryController.getById);
+router.post("/dead-entries", authenticate, requirePermission("dead-items", "CREATE"), DeadEntryController.create);
+router.put("/dead-entries/:id", authenticate, requirePermission("dead-items", "CREATE"), DeadEntryController.update);
+
 // ─── Repair & Warranty ──────────────────────────────────────────────────────────
 // What happens to our broken units — see services/stock.repair.service.js.
 router.get("/repairs/counts", authenticate, requirePermission("repairs", "READ"), StockRepairController.counts);
@@ -459,10 +501,8 @@ router.get("/repairs", authenticate, requirePermission("repairs", "READ"), Stock
 router.patch("/repairs/:id/report-faulty", authenticate, requirePermission("repairs", "REPORT"), StockRepairController.reportFaulty);
 router.patch("/repairs/:id/send-repair", authenticate, requirePermission("repairs", "MANAGE"), StockRepairController.sendForRepair);
 router.patch("/repairs/:id/repair-result", authenticate, requirePermission("repairs", "MANAGE"), StockRepairController.repairResult);
-router.patch("/repairs/:id/claim", authenticate, requirePermission("repairs", "MANAGE"), StockRepairController.sendClaim);
-router.patch("/repairs/:id/claim-outcome", authenticate, requirePermission("repairs", "MANAGE"), StockRepairController.claimOutcome);
+router.patch("/repairs/:id/old-unit-returned", authenticate, requirePermission("repairs", "MANAGE"), StockRepairController.oldUnitReturned);
 router.patch("/repairs/:id/mark-ok", authenticate, requirePermission("repairs", "MANAGE"), StockRepairController.markOk);
-router.patch("/repairs/:id/scrap", authenticate, requirePermission("repairs", "SCRAP"), StockRepairController.scrap);
 
 // ─── Employee Items ────────────────────────────────────────────────────────────
 // Stock with our own people — see services/stock.employee.item.service.js.
@@ -471,13 +511,6 @@ router.get("/employee-items/employees", authenticate, requirePermission("employe
 router.get("/employee-items/items", authenticate, requirePermission("employee-items", "READ"), StockEmployeeItemController.employeeItems);
 router.post("/employee-items/assign", authenticate, requirePermission("employee-items", "ASSIGN"), StockEmployeeItemController.assign);
 router.post("/employee-items/return", authenticate, requirePermission("employee-items", "RETURN"), StockEmployeeItemController.returnItems);
-
-// ─── Stock Reports (inventory, not billing) ────────────────────────────────────
-router.get("/stock-reports/position", authenticate, requirePermission("stock-reports", "READ"), StockInventoryReportController.position);
-router.get("/stock-reports/value", authenticate, requirePermission("stock-reports", "READ"), StockInventoryReportController.value);
-router.get("/stock-reports/warranty", authenticate, requirePermission("stock-reports", "READ"), StockInventoryReportController.warranty);
-router.get("/stock-reports/subscribers", authenticate, requirePermission("stock-reports", "READ"), StockInventoryReportController.subscribers);
-router.get("/stock-reports/repairs", authenticate, requirePermission("stock-reports", "READ"), StockInventoryReportController.repairs);
 
 // ─── 🧪 Request Simulator (TEST ONLY — remove when the real website is live) ───
 // Plays the requesting website; see services/stock.test.simulator.service.js.

@@ -99,8 +99,9 @@ const unitLabel = (item) => {
   return vals.length ? vals.join(" / ") : String(item._id).slice(-6).toUpperCase();
 };
 
-// Free stock at a branch: individual units counted, batches summed.
-const FREE = { isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED };
+// Free stock at a branch: individual units counted, batches summed. A unit on
+// a pending Lost Items entry is held (lock) and is not free.
+const FREE = { isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED, lock: null };
 
 const MAX_RETURN_ITEMS = 100;
 const MAX_REQUEST_LINES = 20;
@@ -1239,6 +1240,7 @@ export default class StockItemRequestService {
       }).session(session);
       if (!held || (!isUnit && held.quantity < qty))
         throw new AppError(`${line.label}: no longer with this subscriber as requested — refresh`, 409);
+      if (held.lock) throw new AppError(`${line.label}: on pending Lost entry ${held.lock.refNumber} — reject that entry first`, 409);
 
       const landed = landedFields(state, request.branchId, now, `Return from ${from}`, request.requestNumber);
       const move = {

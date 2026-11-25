@@ -416,7 +416,6 @@ export default class StockInvoicePaymentService {
         paymentApproval: inv.paymentApproval || null,
         payments: inv.payments || [],
         invoiceFile: inv.invoiceFile || "",
-        companyUse: !!inv.companyUse,
         // Misc as entered (with its In bill / Note flag), for the edit form.
         extraCharges: inv.extraCharges || [],
         miscEdits: inv.miscEdits || [],
@@ -680,7 +679,7 @@ export default class StockInvoicePaymentService {
     const defById = new Map(defs.map((d) => [String(d._id), d]));
 
     const items = await StockInventoryItemModel.find({ invoiceId: invoice._id, isActive: true })
-      .select("productDefinitionId status approvalStatus branchId fieldValues quantity isFoc")
+      .select("productDefinitionId status approvalStatus branchId fieldValues quantity isFoc lock")
       .lean();
 
     // Claimed by some OTHER live debit note on this invoice. Offering the
@@ -741,6 +740,7 @@ export default class StockInvoicePaymentService {
         if (it.approvalStatus !== ITEM_APPROVAL_STATUS.APPROVED) return "not approved yet";
         if (String(it.branchId) !== String(invoice.branchId)) return "moved to another branch";
         if (it.status === ITEM_STATUS.DEBITED) return "already debited";
+        if (it.lock) return `on pending Lost entry ${it.lock.refNumber}`;
         if (it.status !== ITEM_STATUS.AVAILABLE) return String(it.status).toLowerCase().replace(/_/g, " ");
         if (claimedUnits.has(String(it._id))) return "on another debit note";
         return null;
@@ -1098,6 +1098,9 @@ export default class StockInvoicePaymentService {
   static async _applyDebitNoteToStock(adjustment, session) {
     for (const line of adjustment.lines || []) {
       if ((line.inventoryItemIds || []).length) {
+        // A unit held by a pending Lost Items entry is not this note's to take.
+        const locked = await StockInventoryItemModel.findOne({ _id: { $in: line.inventoryItemIds }, lock: { $ne: null } }).select("lock").session(session).lean();
+        if (locked) throw new Error(`Invalid: a unit on this debit note is on pending Lost entry ${locked.lock.refNumber} — decide that entry first`);
         await StockInventoryItemModel.updateMany(
           { _id: { $in: line.inventoryItemIds } },
           { $set: { status: ITEM_STATUS.DEBITED } },

@@ -185,6 +185,20 @@ export default class StockProductStockService {
     const [received, items, draws] = await Promise.all([
       StockInventoryItemMovementModel.aggregate([
         { $match: { productDefinitionId: pid, type: ITEM_MOVEMENT_TYPE.RECEIVED, toBranchId: { $in: branchIds } } },
+        // A swap (old unit REPLACED) is not a receipt — see summary().
+        { $lookup: { from: "inventory_items", localField: "relatedItemId", foreignField: "_id", as: "rel" } },
+        {
+          $match: {
+            $expr: {
+              $not: {
+                $and: [
+                  { $eq: ["$ref.type", ITEM_MOVEMENT_REF.REPAIR] },
+                  { $eq: [{ $arrayElemAt: ["$rel.status", 0] }, ITEM_STATUS.REPLACED] },
+                ],
+              },
+            },
+          },
+        },
         {
           $group: {
             _id: "$ref.refId",
@@ -196,12 +210,22 @@ export default class StockProductStockService {
         },
       ]),
       StockInventoryItemModel.aggregate([
-        { $match: { productDefinitionId: pid, isActive: true, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED, branchId: { $in: branchIds } } },
+        {
+          $match: {
+            productDefinitionId: pid, isActive: true, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED, branchId: { $in: branchIds },
+            // The vendor kept these; the unit sent in place of each stands in for it.
+            status: { $ne: ITEM_STATUS.REPLACED },
+          },
+        },
+        // A swap unit belongs to the receipt of the unit it replaced.
+        { $lookup: { from: "inventory_items", localField: "replacesItemId", foreignField: "_id", as: "old" } },
+        { $addFields: { old: { $arrayElemAt: ["$old", 0] } } },
+        { $addFields: { swapped: { $eq: ["$old.status", ITEM_STATUS.REPLACED] } } },
         {
           $group: {
-            _id: { ref: "$source.refId", status: "$status", kind: "$assignedTo.kind" },
-            sourceType: { $first: "$source.type" },
-            refNumber: { $first: "$source.refNumber" },
+            _id: { ref: { $cond: ["$swapped", "$old.source.refId", "$source.refId"] }, status: "$status", kind: "$assignedTo.kind" },
+            sourceType: { $first: { $cond: ["$swapped", "$old.source.type", "$source.type"] } },
+            refNumber: { $first: { $cond: ["$swapped", "$old.source.refNumber", "$source.refNumber"] } },
             receivedAt: { $min: "$receivedAt" },
             qty: { $sum: { $ifNull: ["$quantity", 1] } },
           },
@@ -220,7 +244,7 @@ export default class StockProductStockService {
       ]),
     ]);
 
-    const blank = () => ({ subscribers: 0, employees: 0, repair: 0, returned: 0, sent: 0, inTransit: 0, unrecorded: 0 });
+    const blank = () => ({ subscribers: 0, employees: 0, faulty: 0, inRepair: 0, scrapped: 0, returned: 0, sent: 0, inTransit: 0, lost: 0, unrecorded: 0 });
     const receipts = new Map();
     const receipt = (key, seed) => {
       if (!receipts.has(key)) receipts.set(key, { refId: key === "none" ? null : key, received: 0, available: 0, now: blank(), held: 0, ...seed });
@@ -241,7 +265,10 @@ export default class StockProductStockService {
         case ITEM_STATUS.DEBITED: rec.now.returned += g.qty; break;
         // Sent to a branch, not accepted there yet — still ours here.
         case ITEM_STATUS.IN_TRANSIT: rec.now.inTransit += g.qty; break;
-        default: rec.now.repair += g.qty; // faulty, in repair, at vendor, scrapped, vendor replaced
+        case ITEM_STATUS.LOST: rec.now.lost += g.qty; break;
+        case ITEM_STATUS.IN_REPAIR: rec.now.inRepair += g.qty; break;
+        case ITEM_STATUS.SCRAPPED: rec.now.scrapped += g.qty; break;
+        default: rec.now.faulty += g.qty; // FAULTY
       }
       rec.held += g.qty;
     });
@@ -271,11 +298,14 @@ export default class StockProductStockService {
     Stock Summary — for every product, everything received and where it all is
     now, so that Total Received = In Store + Out of Store, always.
 
-      received      Purchase (invoice) + Opening Stock + From Branches
+      received      Purchase (invoice) + Opening Stock + From Branches +
+                    From Vendor (free — a replacement whose old unit came back too)
       in store      AVAILABLE units
       out of store  Debited (debit notes) + Sent to Branches + In Use
-                    (subscribers / employees) + Repair & Warranty (faulty, in
-                    repair, at vendor, scrapped, vendor replaced)
+                    (subscribers / employees) + Faulty + In Repair + Dead /
+                    Scrapped + Lost   (repair = faulty + in repair)
+    A REPLACED unit (the vendor kept it) is counted nowhere and its
+    replacement takes its place — a swap shows as one unit, never two.
 
     Transfers are counted only when they cross the edge of the branches being
     looked at: Delhi → Noida is "sent" for Delhi and "from branches" for Noida,
@@ -296,9 +326,12 @@ export default class StockProductStockService {
     const { search, categoryId, productDefinitionId, branchId, from, to } = query;
     const branches = await visibleBranches(dataAccess, branchId);
     const blankTotals = () => ({
-      received: 0, purchase: 0, opening: 0, fromBranches: 0, other: 0,
+      received: 0, purchase: 0, opening: 0, fromBranches: 0, vendorFree: 0, other: 0,
       inStore: 0, outOfStore: 0,
-      returned: 0, sent: 0, inTransit: 0, subscribers: 0, employees: 0, repair: 0, unrecorded: 0,
+      returned: 0, sent: 0, inTransit: 0, subscribers: 0, employees: 0,
+      faulty: 0, inRepair: 0, repair: 0, scrapped: 0, lost: 0, unrecorded: 0,
+      // Shown for information only — never part of Not Available or the total.
+      replaced: 0,
     });
     const empty = { rows: [], totals: blankTotals(), total: 0 };
     if (!branches.length) return empty;
@@ -328,13 +361,28 @@ export default class StockProductStockService {
             ...(dated ? { at: range } : {}),
           },
         },
+        // A vendor replacement's RECEIVED row points at the unit it replaced.
+        // While that unit is REPLACED (the vendor kept it) the new one only
+        // takes its place — a swap, not stock received.
+        { $lookup: { from: "inventory_items", localField: "relatedItemId", foreignField: "_id", as: "rel" } },
+        {
+          $addFields: {
+            swap: {
+              $and: [
+                { $eq: ["$type", ITEM_MOVEMENT_TYPE.RECEIVED] },
+                { $eq: ["$ref.type", ITEM_MOVEMENT_REF.REPAIR] },
+                { $eq: [{ $arrayElemAt: ["$rel.status", 0] }, ITEM_STATUS.REPLACED] },
+              ],
+            },
+          },
+        },
         {
           $group: {
             _id: {
               product: "$productDefinitionId", type: "$type", refType: "$ref.type",
-              from: "$fromBranchId", to: "$toBranchId",
+              from: "$fromBranchId", to: "$toBranchId", swap: "$swap",
               // A batch transfer writes two rows (source and new batch) for one move.
-              pair: { $ne: [{ $ifNull: ["$relatedItemId", null] }, null] },
+              pair: { $and: [{ $eq: ["$type", ITEM_MOVEMENT_TYPE.TRANSFERRED] }, { $ne: [{ $ifNull: ["$relatedItemId", null] }, null] }] },
             },
             qty: { $sum: { $ifNull: ["$quantity", 1] } },
           },
@@ -422,9 +470,11 @@ export default class StockProductStockService {
       const toIn = !!m._id.to && inScope.has(String(m._id.to));
       const fromIn = !!m._id.from && inScope.has(String(m._id.from));
       if (m._id.type === ITEM_MOVEMENT_TYPE.RECEIVED) {
-        if (!toIn) return;
+        if (!toIn || m._id.swap) return;
         if (m._id.refType === ITEM_MOVEMENT_REF.INVOICE) t.purchase += qtyMoved;
         else if (m._id.refType === ITEM_MOVEMENT_REF.OPENING_STOCK) t.opening += qtyMoved;
+        // A replacement whose old unit came back too: an extra unit, free.
+        else if (m._id.refType === ITEM_MOVEMENT_REF.REPAIR) t.vendorFree += qtyMoved;
         else t.other += qtyMoved;
       } else if (toIn && !fromIn) t.fromBranches += qtyMoved;
       else if (fromIn && !toIn) t.sent += qtyMoved;
@@ -442,7 +492,12 @@ export default class StockProductStockService {
         // sender to fix) — held with the sender until it is accepted.
         case ITEM_STATUS.IN_TRANSIT: t.inTransit += h.qty; break;
         case ITEM_STATUS.DEBITED: t.returned += h.qty; break;
-        default: t.repair += h.qty; // faulty, in repair, at vendor, scrapped, vendor replaced
+        case ITEM_STATUS.LOST: t.lost += h.qty; break;
+        case ITEM_STATUS.IN_REPAIR: t.inRepair += h.qty; break;
+        case ITEM_STATUS.SCRAPPED: t.scrapped += h.qty; break;
+        // The vendor kept it; the unit sent in its place is counted instead.
+        case ITEM_STATUS.REPLACED: t.replaced += h.qty; break;
+        default: t.faulty += h.qty; // FAULTY
       }
     });
     draws.forEach((d) => {
@@ -462,12 +517,13 @@ export default class StockProductStockService {
     const totals = blankTotals();
     let rows = products.map((p) => {
       const t = at(p._id);
-      t.outOfStore = t.returned + t.sent + t.inTransit + t.subscribers + t.employees + t.repair;
-      const recorded = t.purchase + t.opening + t.fromBranches + t.other;
+      t.repair = t.faulty + t.inRepair;
+      t.outOfStore = t.returned + t.sent + t.inTransit + t.subscribers + t.employees + t.repair + t.scrapped + t.lost;
+      const recorded = t.purchase + t.opening + t.fromBranches + t.vendorFree + t.other;
       const accounted = t.inStore + t.outOfStore;
       if (accounted > recorded) t.other += accounted - recorded;
       else if (recorded > accounted) { t.unrecorded = recorded - accounted; t.outOfStore += t.unrecorded; }
-      t.received = t.purchase + t.opening + t.fromBranches + t.other;
+      t.received = t.purchase + t.opening + t.fromBranches + t.vendorFree + t.other;
       Object.keys(t).forEach((k) => { t[k] = round3(t[k]); totals[k] += t[k]; });
       return {
         productDefinitionId: p._id,

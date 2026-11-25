@@ -130,14 +130,18 @@ const toWorkingState = (v) => {
   const s = String(v ?? "").trim().toUpperCase().replace(/[^A-Z]+/g, "_").replace(/^_|_$/g, "");
   if (!s || s === "WORKING") return OPENING_STOCK_STATE.WORKING;
   if (s.startsWith("FAULTY")) return OPENING_STOCK_STATE.FAULTY;
-  if (s.startsWith("BEYOND") || s === "DEAD" || s === "BER") return OPENING_STOCK_STATE.BEYOND_REPAIR;
-  throw new AppError(`Working state "${v}" is not valid — use Working, Faulty (Repairable) or Beyond Repair (Dead)`, 400);
+  // Dead stock is entered as Faulty, then written off on Dead Items (approval).
+  if (s.startsWith("BEYOND") || s === "DEAD" || s === "BER")
+    throw new AppError(`Working state "${v}" — enter dead stock as Faulty, then write it off on Dead Items`, 400);
+  throw new AppError(`Working state "${v}" is not valid — use Working or Faulty (Repairable)`, 400);
 };
 
 // What a posted line becomes.
 const postedStatus = (line) => {
   if (line.workingState === OPENING_STOCK_STATE.FAULTY) return ITEM_STATUS.FAULTY;
-  if (line.workingState === OPENING_STOCK_STATE.BEYOND_REPAIR) return ITEM_STATUS.SCRAPPED;
+  // An older draft may still hold a dead line — it must be changed to Faulty.
+  if (line.workingState === OPENING_STOCK_STATE.BEYOND_REPAIR)
+    throw new AppError(`${line.productName || "A line"}: Beyond Repair is no longer entered here — change it to Faulty, then write it off on Dead Items`, 400);
   return ITEM_STATUS.AVAILABLE;
 };
 

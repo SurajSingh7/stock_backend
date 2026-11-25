@@ -31,6 +31,13 @@ export const ITEM_STATUS = {
     (scripts/rename-allocated-to-assigned.js).
   */
   ASSIGNED: "ASSIGNED",
+  /*
+    Out to be fixed — repair.type says where: WARRANTY (the vendor it was
+    bought from, free), PAID (any vendor, at a cost) or IN_HOUSE (our own
+    technician). Comes back REPAIRED (AVAILABLE, REFURBISHED), REPLACED (the
+    vendor sent another unit) or NOT_REPAIRED (FAULTY again).
+    Replaced AT_VENDOR (scripts/migrate-repair-statuses.js).
+  */
   IN_REPAIR: "IN_REPAIR",
   SCRAPPED: "SCRAPPED",
   /*
@@ -66,27 +73,62 @@ export const ITEM_STATUS = {
   */
   FAULTY: "FAULTY",
   /*
-    Sent back to its vendor on a warranty claim (IN_REPAIR is our own repair).
-    Comes back repaired (AVAILABLE), is swapped for a new unit
-    (VENDOR_REPLACED), or the claim is refused (FAULTY again).
+    The vendor kept this unit and sent another in its place. The new unit is
+    its own inventory item (source VENDOR_REPLACEMENT, replacesItemId) and
+    TAKES THIS ONE'S PLACE in every count — this one is counted nowhere, so a
+    swap never shows as two. If the vendor later hands this one back too, it
+    returns to stock (AVAILABLE / FAULTY / SCRAPPED) and the new unit then
+    counts as an extra unit received free from the vendor.
+    Was VENDOR_REPLACED (scripts/migrate-repair-statuses.js).
   */
-  AT_VENDOR: "AT_VENDOR",
+  REPLACED: "REPLACED",
   /*
-    The vendor kept this unit and sent another in its place — terminal. The
-    new unit is its own inventory item (source VENDOR_REPLACEMENT) pointing
-    back here; this one stays on record so the chain can be followed.
+    Lost — with a subscriber, an employee, or not found in the store
+    (lost.reason). Not counted as stock; FOUND puts it back AVAILABLE.
   */
-  VENDOR_REPLACED: "VENDOR_REPLACED",
+  LOST: "LOST",
 };
 
 export const ITEM_STATUS_ARRAY = Object.values(ITEM_STATUS);
 
-// Where a FAULTY unit has gone to be fixed.
-export const REPAIR_KIND = {
-  INTERNAL: "INTERNAL", // our own technicians — IN_REPAIR
-  VENDOR: "VENDOR",     // warranty claim — AT_VENDOR
+// Where an IN_REPAIR unit has gone to be fixed.
+export const REPAIR_TYPE = {
+  WARRANTY: "WARRANTY", // the vendor it was bought from, under warranty — free
+  PAID: "PAID",         // any vendor, at a cost
+  IN_HOUSE: "IN_HOUSE", // our own technician
 };
-export const REPAIR_KIND_ARRAY = Object.values(REPAIR_KIND);
+export const REPAIR_TYPE_ARRAY = Object.values(REPAIR_TYPE);
+
+// How a repair ended.
+export const REPAIR_RESULT = {
+  REPAIRED: "REPAIRED",         // the same unit back, working → AVAILABLE (REFURBISHED)
+  REPLACED: "REPLACED",         // the vendor sent another unit → this one REPLACED
+  NOT_REPAIRED: "NOT_REPAIRED", // could not be fixed → FAULTY again
+};
+export const REPAIR_RESULT_ARRAY = Object.values(REPAIR_RESULT);
+
+// Why a unit is LOST.
+export const LOST_REASON = {
+  SUBSCRIBER: "SUBSCRIBER",
+  EMPLOYEE: "EMPLOYEE",
+  STORE: "STORE", // not found in the store
+};
+export const LOST_REASON_ARRAY = Object.values(LOST_REASON);
+
+/*
+  Lost Items / Dead Items — an entry reports units LOST, brings lost units
+  back (FOUND), or writes units off as DEAD. Every entry waits for approval:
+  APPROVED applies it, REJECTED hands it back to whoever made it to fix and
+  resend (PENDING again). No partial approval — the whole entry or none.
+*/
+export const LOST_ENTRY_TYPE = { LOST: "LOST", FOUND: "FOUND", DEAD: "DEAD" };
+export const LOST_ENTRY_TYPE_ARRAY = Object.values(LOST_ENTRY_TYPE);
+export const LOST_ENTRY_STATUS = { PENDING: "PENDING", APPROVED: "APPROVED", REJECTED: "REJECTED" };
+export const LOST_ENTRY_STATUS_ARRAY = Object.values(LOST_ENTRY_STATUS);
+
+// What holds a unit still while a document decides its fate.
+export const ITEM_LOCK_TYPE = { LOST_ENTRY: "LOST_ENTRY" };
+export const ITEM_LOCK_TYPE_ARRAY = Object.values(ITEM_LOCK_TYPE);
 
 // How a unit came back from a subscriber — decides AVAILABLE or FAULTY.
 export const RETURN_CONDITION = {
@@ -105,16 +147,18 @@ export const RETURN_CONDITION_ARRAY = Object.values(RETURN_CONDITION);
 export const ITEM_SOURCE = {
   PURCHASE: "PURCHASE",
   OPENING_STOCK: "OPENING_STOCK",
-  // Sent by a vendor against a warranty claim, in place of a faulty unit.
+  // Sent by a vendor in place of a faulty unit (repair result REPLACED).
   VENDOR_REPLACEMENT: "VENDOR_REPLACEMENT",
 };
 export const ITEM_SOURCE_ARRAY = Object.values(ITEM_SOURCE);
 
 // The unit's physical condition. A unit becomes USED the first time someone
-// is given it, and never goes back to NEW.
+// is given it, and never goes back to NEW; REFURBISHED once it comes back
+// repaired.
 export const ITEM_CONDITION = {
   NEW: "NEW",
   USED: "USED",
+  REFURBISHED: "REFURBISHED",
 };
 export const ITEM_CONDITION_ARRAY = Object.values(ITEM_CONDITION);
 
@@ -133,13 +177,14 @@ export const ITEM_MOVEMENT_TYPE = {
   REPORTED_FAULTY: "REPORTED_FAULTY",
   SENT_FOR_REPAIR: "SENT_FOR_REPAIR",
   REPAIRED: "REPAIRED",
-  REPAIR_FAILED: "REPAIR_FAILED",
-  CLAIM_SENT: "CLAIM_SENT",
-  CLAIM_RETURNED: "CLAIM_RETURNED",
-  CLAIM_REJECTED: "CLAIM_REJECTED",
-  VENDOR_REPLACED: "VENDOR_REPLACED",
+  NOT_REPAIRED: "NOT_REPAIRED",
+  REPLACED: "REPLACED",
+  // A REPLACED unit the vendor handed back after all.
+  OLD_UNIT_RETURNED: "OLD_UNIT_RETURNED",
   MARKED_OK: "MARKED_OK",
   SCRAPPED: "SCRAPPED",
+  LOST: "LOST",
+  FOUND: "FOUND",
   // Given to one of our employees (Employee Items).
   ASSIGNED: "ASSIGNED",
   // Stock Transfer. TRANSFERRED (above) is written when the receiver confirms
@@ -167,8 +212,10 @@ export const ITEM_MOVEMENT_REF = {
   // A Stock Transfer (TRF-…) — the stock that actually travelled.
   TRANSFER: "TRANSFER",
   ITEM_REQUEST: "ITEM_REQUEST",
-  // A warranty claim with a vendor — refNumber is the vendor's docket / RMA no.
-  WARRANTY_CLAIM: "WARRANTY_CLAIM",
+  // A repair (warranty / paid / in-house) — refNumber is the vendor's docket / RMA no.
+  REPAIR: "REPAIR",
+  // A Lost Items entry (LST-…) — reported lost, or found again.
+  LOST_ENTRY: "LOST_ENTRY",
 };
 export const ITEM_MOVEMENT_REF_ARRAY = Object.values(ITEM_MOVEMENT_REF);
 

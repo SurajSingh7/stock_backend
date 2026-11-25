@@ -350,7 +350,7 @@ export default class StockTransferRequestService {
   }
 
   static _free(branchId) {
-    return { branchId, isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED };
+    return { branchId, isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED, lock: null };
   }
 
   // { [lineId]: [{ _id, name, trackingMethod, unit, available }] } — products

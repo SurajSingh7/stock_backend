@@ -25,12 +25,14 @@ import {
     AVAILABLE    status AVAILABLE
     SUBSCRIBERS  ASSIGNED to a subscriber (no kind on old rows = subscriber)
     EMPLOYEES    ASSIGNED to an employee
-    REPAIR       FAULTY, IN_REPAIR or AT_VENDOR
+    FAULTY       FAULTY (in the store, not sent anywhere yet)
+    IN_REPAIR    IN_REPAIR (out with a vendor / our technician)
     ON_THE_WAY   IN_TRANSIT
     DEBITED      DEBITED (money taken back on a debit note)
     SCRAPPED     SCRAPPED
-  VENDOR_REPLACED units are left out — the vendor kept them, they are no
-  longer ours; the replacement is its own unit.
+    LOST         LOST
+    REPLACED     REPLACED — listed, but NEVER in All or the totals: the vendor
+                 kept it and the unit sent in its place is counted instead.
 
   A row is one serial-tracked unit, or for batch stock one product + branch +
   bucket + holder (40 m in the store, 15 m with Ramesh…).
@@ -42,22 +44,28 @@ export const SUMMARY_BUCKET = {
   AVAILABLE: "AVAILABLE",
   SUBSCRIBERS: "SUBSCRIBERS",
   EMPLOYEES: "EMPLOYEES",
-  REPAIR: "REPAIR",
+  FAULTY: "FAULTY",
+  IN_REPAIR: "IN_REPAIR",
   ON_THE_WAY: "ON_THE_WAY",
   DEBITED: "DEBITED",
   SCRAPPED: "SCRAPPED",
+  LOST: "LOST",
+  REPLACED: "REPLACED",
 };
 const BUCKETS = Object.values(SUMMARY_BUCKET);
+// What All and the Total card add up — every bucket but REPLACED.
+const COUNTED = BUCKETS.filter((b) => b !== SUMMARY_BUCKET.REPLACED);
 
 const LISTED_STATUSES = [
   ITEM_STATUS.AVAILABLE,
   ITEM_STATUS.ASSIGNED,
   ITEM_STATUS.FAULTY,
   ITEM_STATUS.IN_REPAIR,
-  ITEM_STATUS.AT_VENDOR,
   ITEM_STATUS.IN_TRANSIT,
   ITEM_STATUS.DEBITED,
   ITEM_STATUS.SCRAPPED,
+  ITEM_STATUS.LOST,
+  ITEM_STATUS.REPLACED,
 ];
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -72,9 +80,12 @@ const bucketExpr = {
         then: SUMMARY_BUCKET.EMPLOYEES,
       },
       { case: { $eq: ["$status", ITEM_STATUS.ASSIGNED] }, then: SUMMARY_BUCKET.SUBSCRIBERS },
-      { case: { $in: ["$status", [ITEM_STATUS.FAULTY, ITEM_STATUS.IN_REPAIR, ITEM_STATUS.AT_VENDOR]] }, then: SUMMARY_BUCKET.REPAIR },
+      { case: { $eq: ["$status", ITEM_STATUS.FAULTY] }, then: SUMMARY_BUCKET.FAULTY },
+      { case: { $eq: ["$status", ITEM_STATUS.IN_REPAIR] }, then: SUMMARY_BUCKET.IN_REPAIR },
       { case: { $eq: ["$status", ITEM_STATUS.IN_TRANSIT] }, then: SUMMARY_BUCKET.ON_THE_WAY },
       { case: { $eq: ["$status", ITEM_STATUS.DEBITED] }, then: SUMMARY_BUCKET.DEBITED },
+      { case: { $eq: ["$status", ITEM_STATUS.LOST] }, then: SUMMARY_BUCKET.LOST },
+      { case: { $eq: ["$status", ITEM_STATUS.REPLACED] }, then: SUMMARY_BUCKET.REPLACED },
     ],
     default: SUMMARY_BUCKET.SCRAPPED,
   },
@@ -86,7 +97,8 @@ const sinceExpr = {
     branches: [
       { case: { $eq: ["$status", ITEM_STATUS.ASSIGNED] }, then: { $ifNull: ["$assignedTo.assignedAt", "$updatedAt"] } },
       { case: { $eq: ["$status", ITEM_STATUS.FAULTY] }, then: { $ifNull: ["$fault.reportedAt", "$updatedAt"] } },
-      { case: { $in: ["$status", [ITEM_STATUS.IN_REPAIR, ITEM_STATUS.AT_VENDOR]] }, then: { $ifNull: ["$repair.sentAt", "$updatedAt"] } },
+      { case: { $eq: ["$status", ITEM_STATUS.IN_REPAIR] }, then: { $ifNull: ["$repair.sentAt", "$updatedAt"] } },
+      { case: { $eq: ["$status", ITEM_STATUS.LOST] }, then: { $ifNull: ["$lost.at", "$updatedAt"] } },
       { case: { $eq: ["$status", ITEM_STATUS.IN_TRANSIT] }, then: { $ifNull: ["$transit.sentAt", "$updatedAt"] } },
       { case: { $eq: ["$status", ITEM_STATUS.AVAILABLE] }, then: "$receivedAt" },
     ],
@@ -209,13 +221,14 @@ export default class StockItemSummaryService {
     // Chip counts (rows) and header totals (quantity per unit of measure).
     const counts = Object.fromEntries(BUCKETS.map((b) => [b, 0]));
     for (const c of res?.counts || []) counts[c._id] = c.n;
-    counts.ALL = BUCKETS.reduce((s, b) => s + counts[b], 0);
+    counts.ALL = COUNTED.reduce((s, b) => s + counts[b], 0);
 
     const unitOf = new Map(usedDefs.map((d) => [String(d._id), d.unit || "pieces"]));
     const sums = {}; // { bucket: Map(unit → qty) }
     for (const t of res?.totals || []) {
       const u = unitOf.get(String(t._id.product)) || "pieces";
-      for (const key of [t._id.bucket, "ALL"]) {
+      const keys = t._id.bucket === SUMMARY_BUCKET.REPLACED ? [t._id.bucket] : [t._id.bucket, "ALL"];
+      for (const key of keys) {
         sums[key] = sums[key] || new Map();
         sums[key].set(u, round3((sums[key].get(u) || 0) + t.quantity));
       }
@@ -229,7 +242,9 @@ export default class StockItemSummaryService {
       total: asList(["ALL"]),
       available: asList([SUMMARY_BUCKET.AVAILABLE]),
       inUse: asList([SUMMARY_BUCKET.SUBSCRIBERS, SUMMARY_BUCKET.EMPLOYEES]),
-      repair: asList([SUMMARY_BUCKET.REPAIR]),
+      repair: asList([SUMMARY_BUCKET.FAULTY, SUMMARY_BUCKET.IN_REPAIR]),
+      faulty: asList([SUMMARY_BUCKET.FAULTY]),
+      inRepair: asList([SUMMARY_BUCKET.IN_REPAIR]),
       debited: asList([SUMMARY_BUCKET.DEBITED]),
     };
 
@@ -246,6 +261,7 @@ export default class StockItemSummaryService {
       { path: "vendorId", select: "name", options: { lean: true } },
       { path: "invoiceId", select: "invoiceNumber receivedByName", options: { lean: true } },
       { path: "transit.toBranchId", model: "branches", select: "name", options: { lean: true } },
+      { path: "replacedByItemId", select: "identifiers fieldValues", options: { lean: true } },
     ]);
 
     // Debit note numbers for the debited rows on this page.
@@ -304,6 +320,13 @@ export default class StockItemSummaryService {
           repair: it.repair,
           transit: it.transit,
           scrapNote: it.scrapNote,
+          lost: it.lost,
+          // On a pending Lost Items entry — held until it is decided.
+          lock: it.lock || null,
+          replacedBy: it.replacedByItemId
+            ? (it.replacedByItemId.identifiers || []).map((k) => k.slice(k.indexOf(":") + 1)).join(" / ") ||
+              Object.values(it.replacedByItemId.fieldValues || {}).filter(Boolean).join(" / ")
+            : "",
           dnNumbers,
         };
       });

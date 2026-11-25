@@ -77,7 +77,7 @@ export default class StockEmployeeItemService {
 
   // Shelf units to hand out — individual units only, by serial search.
   static async available({ search, branchId } = {}, dataAccess) {
-    const filter = { isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED, quantity: null };
+    const filter = { isActive: true, status: ITEM_STATUS.AVAILABLE, approvalStatus: ITEM_APPROVAL_STATUS.APPROVED, quantity: null, lock: null };
     if (branchId && mongoose.isValidObjectId(branchId)) filter.branchId = branchId;
     if (search) filter.identifiers = { $regex: escapeRegex(String(search).trim().toUpperCase()) };
     applyDataScope(filter, dataAccess, MODULE_KEY);
@@ -147,6 +147,7 @@ export default class StockEmployeeItemService {
       isActive: true,
       approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
       status: ITEM_STATUS.AVAILABLE,
+      lock: null,
     }).session(session);
     if (items.length !== ids.length)
       throw new AppError(`${ids.length - items.length} chosen unit(s) are no longer free to assign — refresh`, 409);
@@ -204,6 +205,8 @@ export default class StockEmployeeItemService {
       "assignedTo.kind": ASSIGNEE_KIND.EMPLOYEE,
     }).session(session);
     if (items.length !== ids.length) throw new AppError(`${ids.length - items.length} chosen unit(s) are not with an employee — refresh`, 409);
+    const locked = items.find((it) => it.lock);
+    if (locked) throw new AppError(`A chosen unit is on pending Lost entry ${locked.lock.refNumber} — reject that entry first`, 409);
 
     const now = new Date();
     const movements = [];

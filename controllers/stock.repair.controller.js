@@ -22,8 +22,6 @@ export default class StockRepairController {
   static reportFaulty = step("Unit reported faulty", (...a) => StockRepairService.reportFaulty(...a));
   static sendForRepair = step("Sent for repair", (...a) => StockRepairService.sendForRepair(...a));
   static repairResult = step("Repair result saved", (...a) => StockRepairService.repairResult(...a));
-  static sendClaim = step("Warranty claim sent", (...a) => StockRepairService.sendClaim(...a));
-  static claimOutcome = step("Warranty claim closed", (...a) => StockRepairService.claimOutcome(...a));
+  static oldUnitReturned = step("Old unit taken back", (...a) => StockRepairService.oldUnitReturned(...a));
   static markOk = step("Unit marked working", (...a) => StockRepairService.markOk(...a));
-  static scrap = step("Unit scrapped", (...a) => StockRepairService.scrap(...a));
 }

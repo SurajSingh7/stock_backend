@@ -36,7 +36,10 @@ const PAGES = [
   ["stock/tracking-orders", "purchase/tracking-orders"],
   ["stock/not-required", "purchase/not-required"],
   ["stock/invoice-list", "purchase/invoices"],
-  ["stock/faulty-items", "purchase/faulty-items"],
+  // Faulty Items became Debit Note Items, under Reports (2026-11-20).
+  ["stock/purchase/faulty-items", "reports/debit-note-items"],
+  ["stock/purchase/debit-note-items", "reports/debit-note-items"],
+  ["stock/faulty-items", "reports/debit-note-items"],
   ["stock/quotations/list", "purchase/quotations"],
   ["stock/quotations/create", "purchase/quotations/create"],
   ["stock/quotations/approval", "approval/quotations"],

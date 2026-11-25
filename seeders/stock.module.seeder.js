@@ -48,7 +48,7 @@ const MODULE_DEFINITIONS = [
   // before this module did (layouts/navbar/NavCategories.js, moduleKey
   // "invoice-list"), which is why nobody could see it.
   { key: "invoice-list", name: "Invoice List", actions: withMenu(["READ", "SCHEDULE_PAYMENT", "RAISE_DEBIT_NOTE"]) },
-  { key: "faulty-items", name: "Faulty Items", actions: withMenu(["READ"]) },
+  { key: "debit-note-items", name: "Debit Note Items", actions: withMenu(["READ"]) },
   // The account team's screen. Three separate write actions on purpose: the
   // person who clears a debit note need not be the one who asks for payment
   // approval, nor the one who records the money leaving.
@@ -56,6 +56,12 @@ const MODULE_DEFINITIONS = [
   // The approval team's screen. Read and decide, nothing else — they approve a
   // payable somebody else computed, so they get no action that can change one.
   { key: "payment-approval", name: "Approvals", actions: withMenu(["READ", "APPROVE", "APPROVE_DEBIT_NOTE"]) },
+  // Lost Items: report units lost / found (CREATE), and approve or reject those entries (lost-approval).
+  { key: "lost-items", name: "Lost Items", actions: withMenu(["READ", "CREATE"]) },
+  { key: "lost-approval", name: "Lost Items Approval", actions: withMenu(["READ", "APPROVE"]) },
+  // Dead Items: write units off as dead (CREATE) — the only way a unit is scrapped — and approve them.
+  { key: "dead-items", name: "Dead Items", actions: withMenu(["READ", "CREATE"]) },
+  { key: "dead-approval", name: "Dead Items Approval", actions: withMenu(["READ", "APPROVE"]) },
   // READ only, and that is the whole module: a ledger reports what already
   // happened elsewhere. Its own key because a vendor statement is shown to a
   // wider audience than the desk that records payments.
@@ -109,13 +115,11 @@ const MODULE_DEFINITIONS = [
   // may refuse a request outright.
   { key: "item-requests", name: "Item Requests", actions: withMenu(["READ", "ISSUE", "RECEIVE", "SHORT_CLOSE", "REJECT"]) },
   // Our broken units. REPORT (mark a shelf unit faulty) is held by store staff;
-  // MANAGE (repair / warranty claim / outcome) by whoever runs repairs; SCRAP —
-  // writing an asset off — separately again.
-  { key: "repairs", name: "Repair & Warranty", actions: withMenu(["READ", "REPORT", "MANAGE", "SCRAP"]) },
+  // MANAGE (send for repair / result) by whoever runs repairs. Writing a unit
+  // off is Dead Items (dead-items / dead-approval), not here.
+  { key: "repairs", name: "Repair & Warranty", actions: withMenu(["READ", "REPORT", "MANAGE"]) },
   // Stock with our own people — handing out and taking back are separate.
   { key: "employee-items", name: "Employee Items", actions: withMenu(["READ", "ASSIGN", "RETURN"]) },
-  // Read-only inventory reports — position, value, warranty, subscribers, repairs.
-  { key: "stock-reports", name: "Stock Reports", actions: withMenu(["READ"]) },
   // 🧪 TEST ONLY — plays the requesting website. Remove when the real one is live.
   { key: "test-simulator", name: "Request Simulator (Test)", actions: withMenu(["READ", "CREATE", "REQUEST"]) },
 

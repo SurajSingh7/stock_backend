@@ -9,7 +9,8 @@ import { ITEM_STATUS, ITEM_CONDITION, ITEM_CONDITION_ARRAY, WORKING_STATE, WORKI
 
     WORKING        → AVAILABLE, back on the shelf
     FAULTY         → FAULTY, into Repair & Warranty with the note
-    BEYOND_REPAIR  → SCRAPPED, on record only, the note as why
+  BEYOND_REPAIR is refused: a dead unit comes back as FAULTY and is written
+  off through Dead Items (with approval) — the only way a unit is scrapped.
 
   The older { condition: GOOD | FAULTY } is still read (GOOD = WORKING).
   Condition defaults to USED; NEW only when the store has checked it unused.
@@ -26,7 +27,9 @@ export const readReturnState = (input, label = "") => {
       : legacy === RETURN_CONDITION.FAULTY
         ? WORKING_STATE.FAULTY
         : null;
-  if (!workingState) throw new AppError(`${at}say whether it works — Working, Faulty (Repairable) or Beyond Repair`, 400);
+  if (!workingState) throw new AppError(`${at}say whether it works — Working or Faulty`, 400);
+  if (workingState === WORKING_STATE.BEYOND_REPAIR)
+    throw new AppError(`${at}take it back as Faulty — a dead unit is written off on Dead Items, with approval`, 400);
   const cond = String(input?.itemCondition || "").toUpperCase();
   if (cond && !ITEM_CONDITION_ARRAY.includes(cond)) throw new AppError(`${at}condition must be New or Used`, 400);
   const note = input?.note === undefined || input?.note === null ? "" : String(input.note).trim().slice(0, 500);

@@ -6,7 +6,9 @@ import {
   ITEM_SOURCE_ARRAY,
   ITEM_CONDITION_ARRAY,
   ITEM_CONDITION,
-  REPAIR_KIND_ARRAY,
+  REPAIR_TYPE_ARRAY,
+  LOST_REASON_ARRAY,
+  ITEM_LOCK_TYPE_ARRAY,
   ASSIGNEE_KIND,
   ASSIGNEE_KIND_ARRAY,
 } from "../constants/stock.enums.js";
@@ -88,19 +90,53 @@ const faultSchema = new mongoose.Schema(
 );
 
 /*
-  The repair a FAULTY unit is out on — our own (IN_REPAIR) or a vendor warranty
-  claim (AT_VENDOR). Cleared when it comes back; the timeline keeps the story.
+  The repair an IN_REPAIR unit is out on: WARRANTY (the vendor it was bought
+  from), PAID (any vendor) or IN_HOUSE (our own technician — no vendor).
+  Cleared when it comes back; the timeline keeps the story and the costs.
 */
 const repairSchema = new mongoose.Schema(
   {
-    kind: { type: String, enum: REPAIR_KIND_ARRAY, default: null },
+    type: { type: String, enum: REPAIR_TYPE_ARRAY, default: null },
     sentAt: { type: Date, default: null },
     note: { type: String, trim: true, default: "" },
-    // Warranty claims only.
     vendorId: { type: mongoose.Schema.Types.ObjectId, ref: "vendors", default: null },
     vendorName: { type: String, trim: true, default: "" },
     claimRef: { type: String, trim: true, default: "" }, // vendor's docket / RMA number
-    inWarranty: { type: Boolean, default: null },        // as judged when it was sent
+    estimatedCost: { type: Number, default: null, min: 0 }, // PAID: what it should cost
+    inWarranty: { type: Boolean, default: null },            // as judged when it was sent
+  },
+  { _id: false }
+);
+
+/*
+  Why a LOST unit is lost, and who said so. Cleared when it is found.
+*/
+const lostSchema = new mongoose.Schema(
+  {
+    reason: { type: String, enum: LOST_REASON_ARRAY, default: null },
+    note: { type: String, trim: true, default: "" },
+    at: { type: Date, default: null },
+    // Who had it when it went missing (a copy of assignedTo's name / code).
+    holder: { type: String, trim: true, default: "" },
+    // The Lost Items entry that made it LOST.
+    entryId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    entryNumber: { type: String, trim: true, default: "" },
+  },
+  { _id: false }
+);
+
+/*
+  Held still while a document decides this unit's fate — a pending Lost Items
+  entry. A locked unit cannot be issued, assigned, transferred, repaired or
+  put on a debit note; the lock comes off when the entry is approved or
+  rejected.
+*/
+const lockSchema = new mongoose.Schema(
+  {
+    type: { type: String, enum: ITEM_LOCK_TYPE_ARRAY, default: null },
+    refId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    refNumber: { type: String, trim: true, default: "" },
+    at: { type: Date, default: null },
   },
   { _id: false }
 );
@@ -191,6 +227,8 @@ const stockInventoryItemSchema = new mongoose.Schema(
     fault: { type: faultSchema, default: null },
     transit: { type: transitSchema, default: null },
     repair: { type: repairSchema, default: null },
+    lost: { type: lostSchema, default: null },
+    lock: { type: lockSchema, default: null },
     // A vendor swap links both ways: the faulty unit points at the unit sent
     // in its place, and that one (source VENDOR_REPLACEMENT) back at it.
     replacedByItemId: { type: mongoose.Schema.Types.ObjectId, ref: "inventory_items", default: null },

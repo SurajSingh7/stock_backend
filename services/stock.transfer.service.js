@@ -55,7 +55,7 @@ const BATCH_COPY_FIELDS = [
   "fieldValues", "source", "condition", "warranty", "purchaseCost", "purchaseDate",
   "receivedAt", "receivedBy",
 ];
-const splitBatch = async (row, qty, set, session) => {
+export const splitBatch = async (row, qty, set, session) => {
   const src = row.toObject();
   const copy = Object.fromEntries(BATCH_COPY_FIELDS.map((f) => [f, src[f]]));
   row.quantity = round3(row.quantity - qty);
@@ -84,6 +84,7 @@ export default class StockTransferService {
         throw new AppError(`Invalid: ${labelOf(item)} is not at the sending branch`, 400);
       if (item.status !== ITEM_STATUS.AVAILABLE || item.approvalStatus !== ITEM_APPROVAL_STATUS.APPROVED)
         throw new AppError(`Invalid: ${labelOf(item)} is no longer available`, 400);
+      if (item.lock) throw new AppError(`Invalid: ${labelOf(item)} is on pending Lost entry ${item.lock.refNumber}`, 409);
     }
     return items;
   }

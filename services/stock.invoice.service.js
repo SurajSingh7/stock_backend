@@ -17,6 +17,7 @@ import StockItemIdentityService from "./stock.item.identity.service.js";
 import StockItemMovementService from "./stock.item.movement.service.js";
 import StockInvoiceScanService from "./stock.invoice.scan.service.js";
 import { warrantyEndDate } from "../helpers/stock.warranty.helper.js";
+import { buildInvoiceSerialTemplate, readInvoiceSerialSheet } from "../helpers/stock.invoice.serial.excel.helper.js";
 
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 
@@ -594,7 +595,6 @@ export default class StockInvoiceService {
           branchId,
           receivedByName: body.receivedByName || user?.name || "",
           notes: String(body.notes || "").trim(),
-          companyUse: body.companyUse === true,
           extraCharges,
           lines,
           amount: StockInvoiceService._computeAmount(lines, extraCharges),
@@ -735,10 +735,6 @@ export default class StockInvoiceService {
       const next = String(body.notes || "").trim();
       note("Notes", invoice.notes || "", next);
       invoice.notes = next;
-    }
-    if (body.companyUse !== undefined) {
-      note("Company use", invoice.companyUse ? "Yes" : "No", body.companyUse ? "Yes" : "No");
-      invoice.companyUse = body.companyUse;
     }
     if (body.extraCharges !== undefined) {
       const next = StockInvoiceService._normalizeCharges(body.extraCharges);
@@ -1226,6 +1222,107 @@ export default class StockInvoiceService {
   /* ---------------------------------------------------------------------- */
   /* Read                                                                    */
   /* ---------------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------------- */
+  /* Add Serial / Qty → Excel (individual-tracked products only)             */
+  /* ---------------------------------------------------------------------- */
+
+  // The invoice, its line for this product, and the product's tracked fields.
+  static async _serialContext(invoiceId, productId, dataAccess) {
+    const invoice = await StockInvoiceModel.findOne({ _id: invoiceId, isActive: true }).lean();
+    if (!invoice) throw new Error("Invoice not found");
+    assertDataScope(invoice, dataAccess);
+
+    const line = (invoice.lines || []).find((l) => String(l.productDefinitionId) === String(productId));
+    if (!line) throw new Error("Invalid product: it is not on this invoice");
+
+    const def = await StockProductDefinitionModel.findOne({ _id: productId, isActive: true })
+      .populate({ path: "selectedFields.fieldDefId", select: "code label isUnique isActive" })
+      .lean();
+    if (!def) throw new Error("Product definition not found");
+    if (def.trackingMethod !== TRACKING_METHODS.INDIVIDUAL) {
+      throw new Error("Invalid product: Excel upload is only for products tracked one unit at a time");
+    }
+    const fields = [...(def.selectedFields || [])]
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+      .filter((sf) => sf.fieldDefId && sf.fieldDefId.isActive !== false)
+      .map((sf) => ({
+        code: sf.fieldDefId.code,
+        label: sf.fieldDefId.label,
+        required: !!sf.isRequired,
+        isUnique: !!sf.fieldDefId.isUnique,
+      }));
+    if (!fields.length) throw new Error("Invalid product: it has no tracked fields to fill from Excel");
+
+    const left = Math.max(0, (line.invoiceQuantity || 0) - (line.receivedQuantity || 0));
+    return { invoice, line, def, fields, left };
+  }
+
+  static async buildSerialTemplate(invoiceId, productId, dataAccess) {
+    const { invoice, def, fields, left } = await StockInvoiceService._serialContext(invoiceId, productId, dataAccess);
+    const buffer = await buildInvoiceSerialTemplate({ invoice, product: def, fields, left });
+    const safe = def.name.replace(/[^\w.-]+/g, "_").slice(0, 60);
+    return { buffer, filename: `${safe}_serials.xlsx` };
+  }
+
+  /*
+    Reads a filled serial template WITHOUT saving anything. Every row comes
+    back with its problems (required field empty, no unique value, repeated in
+    the file, already in stock); the screen previews them, drops what clashes
+    with rows already typed in, caps at what is left, and adds the good ones.
+  */
+  static async parseSerialUpload(invoiceId, productId, file, dataAccess) {
+    if (!file?.buffer) throw new Error("Upload the filled serial template");
+    const sheet = await readInvoiceSerialSheet(file.buffer);
+    const { fields, left } = await StockInvoiceService._serialContext(invoiceId, productId, dataAccess);
+    if (sheet.invoiceId !== String(invoiceId)) throw new Error("Invalid file: this template was downloaded for a different invoice");
+    if (sheet.productId !== String(productId)) throw new Error("Invalid file: this template is for a different product");
+    if (!sheet.rows.length) throw new Error("Invalid file: it has no filled rows");
+
+    const uniqueFields = fields.filter((f) => f.isUnique);
+    const labelByCode = new Map(fields.map((f) => [f.code, f.label]));
+    const firstRowOf = new Map();
+    const rows = sheet.rows.map(({ rowNumber, values }) => {
+      const fieldValues = {};
+      fields.forEach((f) => {
+        if (values[f.code] !== null && values[f.code] !== undefined) fieldValues[f.code] = values[f.code];
+      });
+      const errors = fields.filter((f) => f.required && !fieldValues[f.code]).map((f) => `${f.label} is required`);
+      const keys = StockItemIdentityService.identifiersOf(fieldValues, uniqueFields);
+      if (uniqueFields.length && !keys.length) errors.push(`${uniqueFields.map((f) => f.label).join(" or ")} is required`);
+      keys.forEach((k) => {
+        const code = k.slice(0, k.indexOf(":"));
+        const value = k.slice(k.indexOf(":") + 1);
+        if (firstRowOf.has(k)) errors.push(`${labelByCode.get(code) || code} "${value}" repeats row ${firstRowOf.get(k)}`);
+        else firstRowOf.set(k, rowNumber);
+      });
+      return { rowNumber, fieldValues, keys, errors };
+    });
+
+    const allKeys = [...firstRowOf.keys()];
+    if (allKeys.length) {
+      const clashes = await StockInventoryItemModel.find({ identifiers: { $in: allKeys } })
+        .select("identifiers branchId")
+        .populate({ path: "branchId", select: "name" })
+        .lean();
+      const whereByKey = new Map();
+      clashes.forEach((it) => (it.identifiers || []).forEach((k) => whereByKey.set(k, it.branchId?.name || "")));
+      rows.forEach((r) =>
+        r.keys.forEach((k) => {
+          if (!whereByKey.has(k)) return;
+          const code = k.slice(0, k.indexOf(":"));
+          const at = whereByKey.get(k);
+          r.errors.push(`${labelByCode.get(code) || code} "${k.slice(k.indexOf(":") + 1)}" already exists in stock${at ? ` (${at})` : ""}`);
+        })
+      );
+    }
+
+    return {
+      fields,
+      left,
+      rows: rows.map(({ rowNumber, fieldValues, errors }) => ({ rowNumber, fieldValues, errors })),
+    };
+  }
 
   // Enriched with read-only, non-snapshotted display data (PO number/tax
   // type/pdf, per-line GST rate, product tracking method) for the Invoice

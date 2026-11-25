@@ -75,7 +75,6 @@ export async function buildOpeningStockTemplate({ product, fields, vendors }) {
   lists.getCell("A2").value = "USED";
   lists.getCell("C1").value = "Working";
   lists.getCell("C2").value = "Faulty (Repairable)";
-  lists.getCell("C3").value = "Beyond Repair (Dead)";
   vendors.forEach((v, i) => (lists.getCell(`B${i + 1}`).value = v.name));
 
   columns.forEach((c, idx) => {
@@ -87,7 +86,7 @@ export async function buildOpeningStockTemplate({ product, fields, vendors }) {
       if (c.key === "condition") {
         cell.dataValidation = { type: "list", allowBlank: true, formulae: [`${LISTS}!$A$1:$A$2`] };
       } else if (c.key === "workingState") {
-        cell.dataValidation = { type: "list", allowBlank: true, formulae: [`${LISTS}!$C$1:$C$3`] };
+        cell.dataValidation = { type: "list", allowBlank: true, formulae: [`${LISTS}!$C$1:$C$2`] };
       } else if (c.key === "vendor" && vendors.length) {
         cell.dataValidation = {
           type: "list",
@@ -115,7 +114,7 @@ export async function buildOpeningStockTemplate({ product, fields, vendors }) {
     "One row = one unit" + (isQuantity ? " batch (fill Quantity)." : " (one serial / MAC per row)."),
     "Columns marked * must be filled. Columns marked (unique) can never repeat — at least one of them is needed per unit.",
     "Condition: NEW or USED. Blank means USED.",
-    "Working State: Working, Faulty (Repairable) or Beyond Repair (Dead). Blank means Working. Faulty goes to Repair & Warranty; Beyond Repair (Dead) is kept on record as scrapped. Either needs a Fault / Reason.",
+    "Working State: Working or Faulty (Repairable). Blank means Working. Faulty goes to Repair & Warranty and needs a Fault / Reason. Dead stock: enter it as Faulty, then write it off on Dead Items.",
     "Warranty: give EITHER Warranty Months (counted from Purchase Date) OR a Warranty End Date. Leave both blank if unknown.",
     "Only stock that is in the store goes here. Stock already with an employee or a subscriber goes in Opening Issued Stock.",
     `Up to ${MAX_ROWS} rows per upload. Do not rename or reorder the columns.`,
@@ -127,7 +126,8 @@ export async function buildOpeningStockTemplate({ product, fields, vendors }) {
 }
 
 // An ExcelJS cell value down to a plain string / number / Date / null.
-const plain = (v) => {
+// Also used by the invoice serial upload (stock.invoice.serial.excel.helper.js).
+export const plain = (v) => {
   if (v === null || v === undefined) return null;
   if (v instanceof Date) return v;
   if (typeof v === "object") {

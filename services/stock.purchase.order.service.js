@@ -9,6 +9,7 @@ import StockProductDefinitionModel from "../models/stock.product.definition.mode
 
 import StockTermsConditionService from "./stock.terms.condition.service.js";
 import StockTrackingOrderService from "./stock.tracking.order.service.js";
+import StockInternalEntityService from "./stock.internal.entity.service.js";
 import StockAlertManualService from "./stock.alert.manual.service.js";
 import StockAuditLogService from "./stock.audit.log.service.js";
 import StockTrackingOrderModel from "../models/stock.tracking.order.model.js";
@@ -207,6 +208,8 @@ export default class StockPurchaseOrderService {
           paymentTerms: row.paymentTerms,
           poId, poNumber, status: statusVal, entityAlias: rowEntityAlias, createdBy,
           buyerEntity: tracking.buyerEntity || {},
+          // The state was switched on Create PO — shown on the board with its reason.
+          stateChange: po?.stateChange || null,
           items, totalAmount, totalQuantity, excludedItems: row._skipped, filterDate,
           rejectedReason,
           mailResult: tracking.mailResult || null,
@@ -433,6 +436,8 @@ export default class StockPurchaseOrderService {
       shipmentPreference,
       notes,
       termsConditionId,
+      buyerEntityId,
+      stateChangeReason,
     } = body;
 
     const quotation = await StockQuotationModel.findOne({
@@ -462,7 +467,37 @@ export default class StockPurchaseOrderService {
     // The entity is already fixed on the tracking order by this point, so a
     // PO can only be raised by someone allowed to work on that entity.
     assertDataScope(tracking, dataAccess);
-    const buyerEntity = tracking.buyerEntity;
+    const assigned = tracking.buyerEntity;
+
+    /*
+      The Create PO screen may switch to ANOTHER STATE of the same entity
+      (same alias, a different ERP record with its own GST and address). Only
+      the id is taken from the client; the snapshot is resolved from the ERP
+      list, exactly like addEntity. A different alias is refused — changing the
+      entity itself would move the order across data scopes. The reason is
+      mandatory because the state decides CGST+SGST vs IGST on a real PO.
+    */
+    let buyerEntity = assigned;
+    let stateChange = null;
+    if (buyerEntityId && String(buyerEntityId) !== String(assigned.entityId || "")) {
+      const picked = await StockInternalEntityService.resolve(buyerEntityId);
+      if (!picked) throw new Error("That state no longer exists or is not available");
+      if (String(picked.alias || "").toUpperCase() !== String(assigned.alias || "").toUpperCase()) {
+        throw new Error("Invalid state — only another state of " + (assigned.alias || "the assigned entity") + " can be picked");
+      }
+      if (!picked.stateCode) throw new Error((picked.alias || "This entity") + " has no state code for " + (picked.state || "that state") + " in the ERP — fix it there first");
+      const reason = String(stateChangeReason || "").trim();
+      if (!reason) throw new Error("A reason is required to change the state");
+      stateChange = {
+        fromState: assigned.state || "", fromStateCode: String(assigned.stateCode || ""),
+        toState: picked.state || "", toStateCode: String(picked.stateCode),
+        reason, changedBy: requesterName(user), changedAt: new Date(),
+      };
+      buyerEntity = { ...picked };
+      // The tracking order follows the PO, so its card, invoices and filters
+      // show the state the PO was actually raised in.
+      tracking.buyerEntity = { ...picked };
+    }
 
     // Lines excluded on the tracking order ("Not Required" / "Revise Order")
     // are refused here, not just hidden on the board — the board's Create PO
@@ -523,6 +558,7 @@ export default class StockPurchaseOrderService {
             state: buyerEntity?.state || "",
             stateCode: buyerStateCode,
           },
+          stateChange,
           // Whoever is raising this PO, read off the authenticated session —
           // not from the form. The requester is printed on the PO PDF the
           // vendor receives, so it names a real, verifiable person rather than

@@ -454,6 +454,14 @@ export const validateCreatePurchaseOrder = (body) => {
   if (body.termsConditionId !== undefined && body.termsConditionId !== null && body.termsConditionId !== "")
     assertObjectId(body.termsConditionId, "termsConditionId");
   assertPickedDate(body.poDate, "PO date");
+  // Optional: another state of the SAME entity, picked on the Create PO screen.
+  if (body.buyerEntityId !== undefined && body.buyerEntityId !== null && body.buyerEntityId !== "") {
+    if (typeof body.buyerEntityId !== "string" || !body.buyerEntityId.trim()) throw new Error("Invalid buyerEntityId");
+    if (body.stateChangeReason !== undefined && typeof body.stateChangeReason !== "string")
+      throw new Error("Invalid state change reason");
+    if (String(body.stateChangeReason || "").length > 500)
+      throw new Error("Invalid state change reason — keep it under 500 characters");
+  }
   // buyerEntity is no longer sent by the client — createPurchaseOrder derives
   // it server-side from the Tracking Order (see StockPurchaseOrderService).
   // requester is no longer sent by the client either — createPurchaseOrder
@@ -892,9 +900,6 @@ export const validateUpdateInvoice = (body) => {
   if (body.lines !== undefined) validateInvoiceLines(body.lines);
   validateExtraCharges(body.extraCharges);
   if (body.notes !== undefined && typeof body.notes !== "string") throw new Error("Notes must be text");
-  if (body.companyUse !== undefined && typeof body.companyUse !== "boolean") {
-    throw new Error("companyUse must be true or false");
-  }
 };
 
 export const validateCreateInvoice = (body) => {

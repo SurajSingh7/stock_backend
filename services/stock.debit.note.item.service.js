@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import StockBranchModel from "../models/stock.branch.model.js";
 import StockInvoiceModel from "../models/stock.invoice.model.js";
 import StockInvoiceAdjustmentModel from "../models/stock.invoice.adjustment.model.js";
 import StockPurchaseOrderModel from "../models/stock.purchase.order.model.js";
@@ -13,17 +14,19 @@ import {
 } from "../constants/stock.enums.js";
 
 /*
-  Faulty Items — every unit a debit note claimed as faulty, in one place.
+  Debit Note Items — every unit sent back to its vendor on a debit note (the
+  money deducted from the bill), in one place. Was "Faulty Items": renamed
+  2026-11-20, because Faulty now means one of OUR units waiting for repair.
 
   Read straight off debit-note lines (product, quantity, and for individual
   products the exact units), joined to the invoice they came on. Nothing new is
   stored.
 
-  Which notes count: APPROVED (debited — the units are faulty for good) and
+  Which notes count: APPROVED (debited — the units are gone for good) and
   the ones still moving (review / approval — the units are held). Rejected and
-  withdrawn notes gave their units back, so they are not faulty.
+  withdrawn notes gave their units back, so they are not listed.
 */
-const MODULE_KEY = "faulty-items";
+const MODULE_KEY = "debit-note-items";
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
 const DEBITED = [DEBIT_NOTE_STATUS.APPROVED, null];
@@ -32,11 +35,11 @@ const UNDER_REVIEW = [
   DEBIT_NOTE_STATUS.REVIEW_REJECTED,
   DEBIT_NOTE_STATUS.APPROVAL_PENDING,
 ];
-export const FAULTY_STATE = { DEBITED: "DEBITED", UNDER_REVIEW: "UNDER_REVIEW" };
+export const DEBIT_STATE = { DEBITED: "DEBITED", UNDER_REVIEW: "UNDER_REVIEW" };
 
-const stateOf = (status) => (DEBITED.includes(status ?? null) ? FAULTY_STATE.DEBITED : FAULTY_STATE.UNDER_REVIEW);
+const stateOf = (status) => (DEBITED.includes(status ?? null) ? DEBIT_STATE.DEBITED : DEBIT_STATE.UNDER_REVIEW);
 
-export default class StockFaultyItemService {
+export default class StockDebitNoteItemService {
   // Invoices the caller may see (same documents as the Invoice List).
   static async _scopedInvoices(dataAccess, moduleKey, extra = {}) {
     const filter = applyDataScope(
@@ -50,10 +53,11 @@ export default class StockFaultyItemService {
   }
 
   // Every faulty line on those invoices, one row per debit-note line.
-  static async _rows(dataAccess, moduleKey, { vendorId } = {}) {
+  static async _rows(dataAccess, moduleKey, { vendorId, branchId } = {}) {
     const extra = {};
     if (vendorId && mongoose.Types.ObjectId.isValid(vendorId)) extra.vendorId = new mongoose.Types.ObjectId(vendorId);
-    const invoices = await StockFaultyItemService._scopedInvoices(dataAccess, moduleKey, extra);
+    if (branchId && mongoose.Types.ObjectId.isValid(branchId)) extra.branchId = new mongoose.Types.ObjectId(branchId);
+    const invoices = await StockDebitNoteItemService._scopedInvoices(dataAccess, moduleKey, extra);
     const invById = new Map(invoices.map((i) => [String(i._id), i]));
 
     const notes = await StockInvoiceAdjustmentModel.find({
@@ -62,8 +66,13 @@ export default class StockFaultyItemService {
       isActive: true,
       status: { $in: [...DEBITED, ...UNDER_REVIEW] },
     })
-      .select("invoiceId dnNumber status lines createdOn createdAt createdByName reason")
+      .select("invoiceId dnNumber status lines createdOn createdAt createdByName createdBy reason")
+      .populate({ path: "createdBy.branchId", model: "branches", select: "name" })
       .lean();
+    // The branch each invoice belongs to, by name.
+    const branchIds = [...new Set(invoices.map((i) => String(i.branchId || "")).filter(Boolean))];
+    const branches = branchIds.length ? await StockBranchModel.find({ _id: { $in: branchIds } }).select("name").lean() : [];
+    const branchName = new Map(branches.map((b) => [String(b._id), b.name]));
 
     const poIds = [...new Set(invoices.map((i) => String(i.poId || "")).filter(Boolean))];
     const pos = await StockPurchaseOrderModel.find({ _id: { $in: poIds } })
@@ -82,7 +91,7 @@ export default class StockFaultyItemService {
         const il = invLine.get(String(l.quotationItemId)) || {};
         const pl = poLine.get(String(l.quotationItemId)) || {};
         const received = round2((il.receivedQuantity || 0) + (il.focQuantity || 0));
-        const faulty = l.quantity || 0;
+        const debitedQty = l.quantity || 0;
         rows.push({
           key: `${n._id}:${idx}`,
           debitNoteId: n._id,
@@ -96,17 +105,20 @@ export default class StockFaultyItemService {
           poNumber: po?.poNumber || "",
           vendorId: inv.vendorId,
           vendorName: inv.vendorName || "",
+          branchId: inv.branchId || null,
+          branchName: branchName.get(String(inv.branchId)) || "",
           productDefinitionId: l.productDefinitionId,
           productName: l.productName || il.productName || "",
           categoryId: pl.categoryId || il.categoryId || null,
           categoryName: pl.categoryName || il.categoryName || "",
           received,
-          faulty,
-          percent: received > 0 ? round2((faulty / received) * 100) : null,
+          debitedQty,
+          percent: received > 0 ? round2((debitedQty / received) * 100) : null,
           unitCount: (l.inventoryItemIds || []).length,
           amount: l.amount || 0,
           date: n.createdOn || n.createdAt,
           raisedByName: n.createdByName || "",
+          raisedBy: n.createdBy || null,
           reason: n.reason || "",
         });
       });
@@ -116,8 +128,8 @@ export default class StockFaultyItemService {
 
   static async getList(query = {}, dataAccess, moduleKey = MODULE_KEY) {
     const { skip, limit, page } = paginate(query);
-    const { search, vendorId, categoryId, state, from, to } = query;
-    let { rows } = await StockFaultyItemService._rows(dataAccess, moduleKey, { vendorId });
+    const { search, vendorId, branchId, categoryId, state, from, to } = query;
+    let { rows } = await StockDebitNoteItemService._rows(dataAccess, moduleKey, { vendorId, branchId });
 
     if (categoryId) rows = rows.filter((r) => String(r.categoryId) === String(categoryId));
     const fromD = from ? new Date(from) : null;
@@ -139,32 +151,42 @@ export default class StockFaultyItemService {
     // Counted before the state chip, so each chip says what clicking it shows.
     const counts = {
       ALL: rows.length,
-      DEBITED: rows.filter((r) => r.state === FAULTY_STATE.DEBITED).length,
-      UNDER_REVIEW: rows.filter((r) => r.state === FAULTY_STATE.UNDER_REVIEW).length,
+      DEBITED: rows.filter((r) => r.state === DEBIT_STATE.DEBITED).length,
+      UNDER_REVIEW: rows.filter((r) => r.state === DEBIT_STATE.UNDER_REVIEW).length,
     };
-    if (state && FAULTY_STATE[state]) rows = rows.filter((r) => r.state === state);
+    /*
+      Header cards — over every filter but the chip, like the chip counts:
+        notes        debit notes on the rows
+        debitedQty   units / quantity sent back
+        amount       money deducted (Debited — approved)
+        underReview  money still in review / approval (units held)
+    */
+    const sum = (list, k) => round2(list.reduce((t, r) => t + (r[k] || 0), 0));
+    const totals = {
+      notes: new Set(rows.map((r) => String(r.debitNoteId))).size,
+      debitedQty: sum(rows, "debitedQty"),
+      amount: sum(rows.filter((r) => r.state === DEBIT_STATE.DEBITED), "amount"),
+      underReview: sum(rows.filter((r) => r.state === DEBIT_STATE.UNDER_REVIEW), "amount"),
+    };
+    if (state && DEBIT_STATE[state]) rows = rows.filter((r) => r.state === state);
 
     rows.sort((a, b) => new Date(b.date) - new Date(a.date));
-    const totals = {
-      faulty: round2(rows.reduce((t, r) => t + r.faulty, 0)),
-      amount: round2(rows.reduce((t, r) => t + r.amount, 0)),
-    };
     return { data: { rows: rows.slice(skip, skip + limit), counts, totals }, total: rows.length, page, limit };
   }
 
   /*
     Per vendor: how much came in on its invoices, how much of it turned out
-    faulty, and the share — which vendor sends bad stock.
+    debited, and the share — which vendor sends bad stock.
   */
   static async getVendorSummary(query = {}, dataAccess, moduleKey = MODULE_KEY) {
-    const { state } = query;
-    const { rows, invoices } = await StockFaultyItemService._rows(dataAccess, moduleKey);
-    const counted = state && FAULTY_STATE[state] ? rows.filter((r) => r.state === state) : rows;
+    const { state, branchId } = query;
+    const { rows, invoices } = await StockDebitNoteItemService._rows(dataAccess, moduleKey, { branchId });
+    const counted = state && DEBIT_STATE[state] ? rows.filter((r) => r.state === state) : rows;
 
     const byVendor = new Map();
     const bucket = (id, name) => {
       const k = String(id || "none");
-      if (!byVendor.has(k)) byVendor.set(k, { vendorId: id, vendorName: name || "—", received: 0, faulty: 0, amount: 0, invoices: new Set(), notes: new Set() });
+      if (!byVendor.has(k)) byVendor.set(k, { vendorId: id, vendorName: name || "—", received: 0, debitedQty: 0, amount: 0, invoices: new Set(), notes: new Set() });
       return byVendor.get(k);
     };
     // Received: everything on the vendor's invoices, faulty or not.
@@ -174,18 +196,18 @@ export default class StockFaultyItemService {
     });
     counted.forEach((r) => {
       const v = bucket(r.vendorId, r.vendorName);
-      v.faulty = round2(v.faulty + r.faulty);
+      v.debitedQty = round2(v.debitedQty + r.debitedQty);
       v.amount = round2(v.amount + r.amount);
       v.invoices.add(String(r.invoiceId));
       v.notes.add(String(r.debitNoteId));
     });
 
     const out = [...byVendor.values()]
-      .filter((v) => v.faulty > 0)
+      .filter((v) => v.debitedQty > 0)
       .map((v) => ({
         vendorId: v.vendorId, vendorName: v.vendorName,
-        received: v.received, faulty: v.faulty,
-        percent: v.received > 0 ? round2((v.faulty / v.received) * 100) : null,
+        received: v.received, debitedQty: v.debitedQty,
+        percent: v.received > 0 ? round2((v.debitedQty / v.received) * 100) : null,
         amount: v.amount, invoiceCount: v.invoices.size, debitNoteCount: v.notes.size,
       }))
       .sort((a, b) => (b.percent ?? 0) - (a.percent ?? 0));
@@ -195,10 +217,10 @@ export default class StockFaultyItemService {
   // The exact units on one debit-note line (serial / MAC), for an individual product.
   static async getUnits(debitNoteId, lineIndex, dataAccess, moduleKey = MODULE_KEY) {
     const note = await StockInvoiceAdjustmentModel.findOne({ _id: debitNoteId, type: ADJUSTMENT_TYPE.DEBIT_NOTE })
-      .select("invoiceId lines")
+      .select("invoiceId lines dnNumber status reason createdByName createdOn createdAt")
       .lean();
     if (!note) throw new Error("Debit note not found");
-    const [inv] = await StockFaultyItemService._scopedInvoices(dataAccess, moduleKey, { _id: note.invoiceId });
+    const [inv] = await StockDebitNoteItemService._scopedInvoices(dataAccess, moduleKey, { _id: note.invoiceId });
     if (!inv) throw new Error("Debit note not found");
     const line = (note.lines || [])[Number(lineIndex)];
     if (!line) throw new Error("Line not found");
@@ -212,6 +234,11 @@ export default class StockFaultyItemService {
       ? await StockInventoryItemModel.find({ _id: { $in: line.inventoryItemIds } }).select("fieldValues status isFoc").lean()
       : [];
     return {
+      dnNumber: note.dnNumber,
+      dnStatus: note.status || DEBIT_NOTE_STATUS.APPROVED,
+      reason: note.reason || "",
+      invoiceNumber: inv.invoiceNumber,
+      amount: line.amount || 0,
       productName: line.productName,
       quantity: line.quantity,
       unit: def?.unit || null,

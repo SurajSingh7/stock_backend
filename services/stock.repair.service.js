@@ -11,6 +11,7 @@ import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.
 import { paginate } from "../helpers/pagination.helper.js";
 import { AppError } from "../helpers/response.helper.js";
 import { warrantyEndDate, isValidWarrantyMonths } from "../helpers/stock.warranty.helper.js";
+import { readReturnState, returnStateLabel } from "../helpers/return.state.helper.js";
 import {
   ITEM_STATUS,
   ITEM_APPROVAL_STATUS,
@@ -18,20 +19,27 @@ import {
   ITEM_SOURCE,
   ITEM_MOVEMENT_TYPE,
   ITEM_MOVEMENT_REF,
-  REPAIR_KIND,
+  REPAIR_TYPE,
+  REPAIR_TYPE_ARRAY,
+  REPAIR_RESULT,
+  REPAIR_RESULT_ARRAY,
+  WORKING_STATE,
 } from "../constants/stock.enums.js";
 
 /*
   Repair & Warranty — what happens to a unit of ours that is broken.
 
-                    ┌──► send for repair ──► IN_REPAIR ──► repaired ─────► AVAILABLE
-                    │                              └─────► can't fix ────► FAULTY
-    AVAILABLE ─report─► FAULTY ──► warranty claim ──► AT_VENDOR ──► repaired ─► AVAILABLE
-    (or returned       │                              ├─► replaced ──► VENDOR_REPLACED
-     faulty by a       │                              │     + a NEW unit, source VENDOR_REPLACEMENT
-     subscriber)       │                              └─► claim refused ─► FAULTY
-                       ├──► turned out fine ──► AVAILABLE
-                       └──► scrap ──► SCRAPPED
+    AVAILABLE ─report─► FAULTY ─── Working Fine ──────────────────────► AVAILABLE
+    (or returned          │       (writing it off as dead is Dead Items — approval)
+     faulty)              │
+                          └─ Send for Repair (WARRANTY / PAID / IN_HOUSE)
+                                     │
+                                 IN_REPAIR ─── Repaired ─────► AVAILABLE (REFURBISHED)
+                                     ├──────── Not Repaired ─► FAULTY
+                                     └──────── Replaced ─────► new unit AVAILABLE (NEW)
+                                                 old unit kept by the vendor → REPLACED
+                                                 old unit given back → AVAILABLE / FAULTY / SCRAPPED
+    REPLACED ── Old Unit Returned (later) ──► AVAILABLE / FAULTY / SCRAPPED
 
   Every step is one transaction: the unit's status, its repair/fault details
   and a timeline row move together. These statuses belong to this flow alone —
@@ -40,8 +48,33 @@ import {
 
 const MODULE_KEY = "repairs";
 const ENTITY_TYPE = "inventory-items";
-const LISTED = [ITEM_STATUS.FAULTY, ITEM_STATUS.IN_REPAIR, ITEM_STATUS.AT_VENDOR, ITEM_STATUS.SCRAPPED, ITEM_STATUS.VENDOR_REPLACED];
+const LISTED = [ITEM_STATUS.FAULTY, ITEM_STATUS.IN_REPAIR, ITEM_STATUS.REPLACED, ITEM_STATUS.SCRAPPED];
+const TYPE_LABEL = { WARRANTY: "Warranty repair", PAID: "Paid repair", IN_HOUSE: "In-house repair" };
 const text = (v, max = 500) => (v === undefined || v === null ? "" : String(v).trim().slice(0, max));
+
+// An optional amount in rupees: blank → null, otherwise a number ≥ 0.
+const money = (v, label) => {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) throw new AppError(`Invalid: ${label} must be a number of rupees, 0 or more`, 400);
+  return Math.round(n * 100) / 100;
+};
+
+// A replacement's warranty: what the vendor gives (end date or months from
+// today), else the old unit's.
+const warrantyFrom = (rep, oldWarranty, now) => {
+  if (rep.warrantyEndDate) {
+    const end = new Date(rep.warrantyEndDate);
+    if (Number.isNaN(end.getTime())) throw new AppError("Invalid warranty end date", 400);
+    return { startDate: now, months: null, endDate: end };
+  }
+  if (rep.warrantyMonths !== undefined && rep.warrantyMonths !== null && rep.warrantyMonths !== "") {
+    const months = Number(rep.warrantyMonths);
+    if (!isValidWarrantyMonths(months)) throw new AppError("Invalid: warranty months must be a whole number between 1 and 120", 400);
+    return { startDate: now, months, endDate: warrantyEndDate(now, months) };
+  }
+  return oldWarranty || {};
+};
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const labelOf = (item) => {
@@ -77,6 +110,7 @@ export default class StockRepairService {
         })
         .populate({ path: "branchId", select: "name" })
         .populate({ path: "vendorId", select: "name" })
+        .populate({ path: "replacedByItemId", select: "identifiers fieldValues status" })
         .sort({ updatedAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -97,7 +131,7 @@ export default class StockRepairService {
       fault: it.fault,
       repair: it.repair,
       scrapNote: it.scrapNote,
-      replacedByItemId: it.replacedByItemId,
+      replacedBy: it.replacedByItemId ? { _id: it.replacedByItemId._id, label: labelOf(it.replacedByItemId), status: it.replacedByItemId.status } : null,
       updatedAt: it.updatedAt,
     }));
     return { data, total };
@@ -112,7 +146,7 @@ export default class StockRepairService {
     return out;
   }
 
-  // Vendors to claim against (the unit's own vendor is the default).
+  // Vendors a repair can go to (Warranty uses the unit's own vendor).
   static async vendorOptions() {
     return StockVendorModel.find({ isActive: true }).select("name vendorCode").sort({ name: 1 }).lean();
   }
@@ -125,6 +159,7 @@ export default class StockRepairService {
     if (!mongoose.isValidObjectId(id)) throw new Error("Inventory item not found");
     const item = await StockInventoryItemModel.findOne({ _id: id, isActive: true }).session(session);
     if (!item || !isWithinDataScope(item, dataAccess, MODULE_KEY)) throw new Error("Inventory item not found");
+    if (item.lock) throw new AppError(`Invalid: ${labelOf(item)} is on pending Lost entry ${item.lock.refNumber} — wait for its approval`, 409);
     if (!allowed.includes(item.status))
       throw new AppError(`Invalid: this unit is ${item.status.toLowerCase().replace(/_/g, " ")} — that step needs it ${allowed.map((s) => s.toLowerCase().replace(/_/g, " ")).join(" or ")}`, 400);
     return item;
@@ -164,110 +199,107 @@ export default class StockRepairService {
     return StockRepairService._commit(item, before, { type: ITEM_MOVEMENT_TYPE.REPORTED_FAULTY, note }, "REPORT_FAULTY", user, session);
   }
 
+  /*
+    Off to be fixed. body: { type: WARRANTY | PAID | IN_HOUSE, vendorId?,
+    claimRef?, estimatedCost?, note? }
+      WARRANTY  the vendor it was bought from (chosen only when the unit has
+                none on record), only while in warranty or when the end date
+                is unknown — free.
+      PAID      any vendor, an optional estimate.
+      IN_HOUSE  our own technician, no vendor.
+  */
   static async sendForRepair(id, body, user, session, dataAccess) {
+    const type = String(body?.type || "").toUpperCase();
+    if (!REPAIR_TYPE_ARRAY.includes(type)) throw new AppError("Invalid: choose where it is repaired — Warranty, Paid or In-house", 400);
     const item = await StockRepairService._load(id, [ITEM_STATUS.FAULTY], session, dataAccess);
     const before = item.toObject();
     const note = text(body?.note);
-    item.status = ITEM_STATUS.IN_REPAIR;
-    item.repair = { kind: REPAIR_KIND.INTERNAL, sentAt: new Date(), note };
-    return StockRepairService._commit(item, before, { type: ITEM_MOVEMENT_TYPE.SENT_FOR_REPAIR, note: note || "Sent for repair" }, "SEND_REPAIR", user, session);
-  }
-
-  // Our own repair is back: fixed → shelf, not fixable → faulty again.
-  static async repairResult(id, body, user, session, dataAccess) {
-    const fixed = body?.result === "REPAIRED";
-    if (!fixed && body?.result !== "FAILED") throw new AppError("Invalid: result must be REPAIRED or FAILED", 400);
-    const note = text(body?.note);
-    if (!fixed && !note) throw new AppError("Say why it could not be repaired", 400);
-    const item = await StockRepairService._load(id, [ITEM_STATUS.IN_REPAIR], session, dataAccess);
-    const before = item.toObject();
-    item.repair = null;
-    if (fixed) {
-      item.status = ITEM_STATUS.AVAILABLE;
-      item.fault = null;
-    } else {
-      item.status = ITEM_STATUS.FAULTY;
-      item.fault = { ...(before.fault || {}), note: [before.fault?.note, `Repair failed: ${note}`].filter(Boolean).join(" · ") };
-    }
-    return StockRepairService._commit(
-      item,
-      before,
-      { type: fixed ? ITEM_MOVEMENT_TYPE.REPAIRED : ITEM_MOVEMENT_TYPE.REPAIR_FAILED, note: note || (fixed ? "Repaired" : "") },
-      fixed ? "REPAIRED" : "REPAIR_FAILED",
-      user,
-      session
-    );
-  }
-
-  // Warranty claim — off to the vendor. Out-of-warranty units may still be
-  // sent (a paid repair); the screen warns, and the flag records it.
-  static async sendClaim(id, body, user, session, dataAccess) {
-    const item = await StockRepairService._load(id, [ITEM_STATUS.FAULTY], session, dataAccess);
-    const vendorId = body?.vendorId || item.vendorId;
-    if (!vendorId || !mongoose.isValidObjectId(vendorId)) throw new AppError("Choose the vendor the claim goes to", 400);
-    const vendor = await StockVendorModel.findOne({ _id: vendorId, isActive: true }).select("name").session(session).lean();
-    if (!vendor) throw new AppError("Invalid vendor selected", 400);
-    const before = item.toObject();
     const claimRef = text(body?.claimRef, 100);
-    const note = text(body?.note);
-    item.status = ITEM_STATUS.AT_VENDOR;
-    item.repair = { kind: REPAIR_KIND.VENDOR, sentAt: new Date(), note, vendorId: vendor._id, vendorName: vendor.name, claimRef, inWarranty: inWarranty(before) };
+    const warranty = inWarranty(before);
+
+    let vendor = null;
+    if (type === REPAIR_TYPE.WARRANTY) {
+      if (warranty === false) throw new AppError("Invalid: the warranty has ended — send it as a Paid repair", 400);
+      const vendorId = item.vendorId || body?.vendorId;
+      if (!vendorId || !mongoose.isValidObjectId(vendorId)) throw new AppError("Choose the vendor it was bought from", 400);
+      vendor = await StockVendorModel.findOne({ _id: vendorId }).select("name").session(session).lean();
+      if (!vendor) throw new AppError("Invalid vendor selected", 400);
+    } else if (type === REPAIR_TYPE.PAID) {
+      if (!body?.vendorId || !mongoose.isValidObjectId(body.vendorId)) throw new AppError("Choose the vendor doing the repair", 400);
+      vendor = await StockVendorModel.findOne({ _id: body.vendorId, isActive: true }).select("name").session(session).lean();
+      if (!vendor) throw new AppError("Invalid vendor selected", 400);
+    }
+    const estimatedCost = type === REPAIR_TYPE.PAID ? money(body?.estimatedCost, "Estimated cost") : null;
+
+    item.status = ITEM_STATUS.IN_REPAIR;
+    item.repair = {
+      type, sentAt: new Date(), note, claimRef, estimatedCost, inWarranty: warranty,
+      vendorId: vendor?._id || null, vendorName: vendor?.name || "",
+    };
     return StockRepairService._commit(
       item,
       before,
       {
-        type: ITEM_MOVEMENT_TYPE.CLAIM_SENT,
-        ref: { type: ITEM_MOVEMENT_REF.WARRANTY_CLAIM, refId: vendor._id, refNumber: claimRef },
-        note: `Warranty claim to ${vendor.name}${claimRef ? ` (${claimRef})` : ""}${item.repair.inWarranty === false ? " · out of warranty" : ""}`,
+        type: ITEM_MOVEMENT_TYPE.SENT_FOR_REPAIR,
+        ref: { type: ITEM_MOVEMENT_REF.REPAIR, refId: vendor?._id || null, refNumber: claimRef },
+        cost: estimatedCost,
+        note: [`${TYPE_LABEL[type]}${vendor ? ` — ${vendor.name}` : ""}${claimRef ? ` (${claimRef})` : ""}`, note].filter(Boolean).join(": "),
       },
-      "WARRANTY_CLAIM",
+      "SEND_REPAIR",
       user,
       session
     );
   }
 
   /*
-    The vendor has answered the claim:
-      REPAIRED  the same unit came back working → AVAILABLE
-      REJECTED  claim refused, unit back as it was → FAULTY
-      REPLACED  the vendor kept it and sent another → this one VENDOR_REPLACED,
-                and a NEW unit is created (body.replacement: { fieldValues,
-                warrantyEndDate? | warrantyMonths?, productDefinitionId? }).
-                Its serial goes through the same unique checks as any receipt;
-                its warranty is what the vendor gives, else the old unit's.
+    The repair is back. body: { result, cost?, note?, replacement? }
+      REPAIRED      the same unit, working → AVAILABLE, condition REFURBISHED
+      NOT_REPAIRED  could not be fixed → FAULTY again (send elsewhere or scrap)
+      REPLACED      the vendor sent another unit (WARRANTY or PAID). A NEW
+                    unit is created — body.replacement: { fieldValues,
+                    warrantyEndDate? | warrantyMonths?, oldUnit } where oldUnit
+                    says whether the vendor gave this one back too:
+                      { returned: false }                     → this one REPLACED
+                      { returned: true, workingState, note }  → back in stock
+                    Kept → the new unit takes this one's place in every count;
+                    given back → both are ours, the new one counts as free.
+    cost: PAID only — the final amount.
   */
-  static async claimOutcome(id, body, user, session, dataAccess) {
-    const outcome = body?.outcome;
-    if (!["REPAIRED", "REJECTED", "REPLACED"].includes(outcome)) throw new AppError("Invalid: outcome must be REPAIRED, REJECTED or REPLACED", 400);
+  static async repairResult(id, body, user, session, dataAccess) {
+    const result = String(body?.result || "").toUpperCase();
+    if (!REPAIR_RESULT_ARRAY.includes(result)) throw new AppError("Invalid: result must be Repaired, Replaced or Not Repaired", 400);
     const note = text(body?.note);
-    if (outcome === "REJECTED" && !note) throw new AppError("Say why the vendor refused the claim", 400);
-    const item = await StockRepairService._load(id, [ITEM_STATUS.AT_VENDOR], session, dataAccess);
+    if (result === REPAIR_RESULT.NOT_REPAIRED && !note) throw new AppError("Say why it could not be repaired", 400);
+    const item = await StockRepairService._load(id, [ITEM_STATUS.IN_REPAIR], session, dataAccess);
     const before = item.toObject();
-    const claim = before.repair || {};
-    const ref = { type: ITEM_MOVEMENT_REF.WARRANTY_CLAIM, refId: claim.vendorId || null, refNumber: claim.claimRef || "" };
+    const repair = before.repair || {};
+    if (result === REPAIR_RESULT.REPLACED && repair.type === REPAIR_TYPE.IN_HOUSE)
+      throw new AppError("Invalid: only a vendor can replace a unit — In-house repairs are Repaired or Not Repaired", 400);
+    const cost = repair.type === REPAIR_TYPE.PAID ? money(body?.cost, "Cost") : null;
+    const ref = { type: ITEM_MOVEMENT_REF.REPAIR, refId: repair.vendorId || null, refNumber: repair.claimRef || "" };
+    const by = repair.vendorName || TYPE_LABEL[repair.type] || "repair";
 
-    if (outcome === "REPAIRED") {
+    if (result === REPAIR_RESULT.REPAIRED) {
       item.status = ITEM_STATUS.AVAILABLE;
+      item.condition = ITEM_CONDITION.REFURBISHED;
       item.fault = null;
       item.repair = null;
-      return StockRepairService._commit(item, before, { type: ITEM_MOVEMENT_TYPE.CLAIM_RETURNED, ref, note: note || `Repaired by ${claim.vendorName || "vendor"}` }, "CLAIM_REPAIRED", user, session);
+      return StockRepairService._commit(item, before, { type: ITEM_MOVEMENT_TYPE.REPAIRED, ref, cost, note: note || `Repaired — ${by}` }, "REPAIRED", user, session);
     }
-    if (outcome === "REJECTED") {
+    if (result === REPAIR_RESULT.NOT_REPAIRED) {
       item.status = ITEM_STATUS.FAULTY;
       item.repair = null;
-      item.fault = { ...(before.fault || {}), note: [before.fault?.note, `Claim refused: ${note}`].filter(Boolean).join(" · ") };
-      return StockRepairService._commit(item, before, { type: ITEM_MOVEMENT_TYPE.CLAIM_REJECTED, ref, note }, "CLAIM_REJECTED", user, session);
+      item.fault = { ...(before.fault || {}), note: [before.fault?.note, `Not repaired (${by}): ${note}`].filter(Boolean).join(" · ") };
+      return StockRepairService._commit(item, before, { type: ITEM_MOVEMENT_TYPE.NOT_REPAIRED, ref, cost, note }, "NOT_REPAIRED", user, session);
     }
 
-    // REPLACED
+    // REPLACED — first how the old unit ends up, then the new unit.
     const rep = body?.replacement || {};
-    const productId = rep.productDefinitionId || item.productDefinitionId;
-    const product = await StockProductDefinitionModel.findOne({ _id: productId, isActive: true }).session(session).lean();
-    if (!product) throw new AppError("Invalid: replacement product not found", 400);
-    const oldProduct = await StockProductDefinitionModel.findById(item.productDefinitionId).select("categoryId trackingMethod").session(session).lean();
-    if (String(product.categoryId) !== String(oldProduct?.categoryId) || product.trackingMethod !== oldProduct?.trackingMethod)
-      throw new AppError("Invalid: the replacement must be a product of the same category", 400);
+    const oldReturned = rep.oldUnit?.returned === true;
+    const oldState = oldReturned ? readReturnState(rep.oldUnit, "Old unit") : null;
 
+    const product = await StockProductDefinitionModel.findOne({ _id: item.productDefinitionId, isActive: true }).session(session).lean();
+    if (!product) throw new AppError("Invalid: product not found", 400);
     const isUnit = item.quantity === null || item.quantity === undefined;
     const fieldValues = isUnit ? rep.fieldValues || {} : rep.fieldValues || before.fieldValues || {};
     await StockInventoryItemService._validateFieldValues(product, fieldValues);
@@ -276,43 +308,39 @@ export default class StockRepairService {
     const keys = StockItemIdentityService.identifiersOf(fieldValues, uniqueFields);
     await StockItemIdentityService.assertIdentifiersFree(keys, {
       session,
-      excludeItemIds: [item._id],
+      // A kept unit frees its serial (it is the vendor's now); a returned one keeps it.
+      excludeItemIds: oldReturned ? [] : [item._id],
       labelByCode: new Map(uniqueFields.map((f) => [f.code, f.label])),
     });
 
     const now = new Date();
-    let warranty = before.warranty || {};
-    if (rep.warrantyEndDate) {
-      const end = new Date(rep.warrantyEndDate);
-      if (Number.isNaN(end.getTime())) throw new AppError("Invalid warranty end date", 400);
-      warranty = { startDate: now, months: null, endDate: end };
-    } else if (rep.warrantyMonths !== undefined && rep.warrantyMonths !== null && rep.warrantyMonths !== "") {
-      const months = Number(rep.warrantyMonths);
-      if (!isValidWarrantyMonths(months)) throw new AppError("Invalid: warranty months must be a whole number between 1 and 120", 400);
-      warranty = { startDate: now, months, endDate: warrantyEndDate(now, months) };
-    }
+    const warranty = warrantyFrom(rep, before.warranty, now);
 
-    // The old unit leaves for good, and frees its serial: it is the vendor's
-    // now, and the same number arriving again would be a new unit.
-    item.status = ITEM_STATUS.VENDOR_REPLACED;
     item.repair = null;
-    item.identifiers = undefined;
+    if (oldReturned) {
+      Object.assign(item, StockRepairService._landed(oldState, now));
+    } else {
+      item.status = ITEM_STATUS.REPLACED;
+      item.identifiers = undefined;
+    }
 
     const [fresh] = await StockInventoryItemModel.create(
       [
         {
           productDefinitionId: product._id,
-          vendorId: claim.vendorId || before.vendorId,
+          vendorId: repair.vendorId || before.vendorId,
           branchId: before.branchId,
+          invoiceId: before.invoiceId || null,
           status: ITEM_STATUS.AVAILABLE,
           approvalStatus: ITEM_APPROVAL_STATUS.APPROVED,
           quantity: isUnit ? null : before.quantity,
           fieldValues,
           identifiers: keys.length ? keys : undefined,
-          source: { type: ITEM_SOURCE.VENDOR_REPLACEMENT, refId: item._id, refNumber: claim.claimRef || labelOf(before) },
+          source: { type: ITEM_SOURCE.VENDOR_REPLACEMENT, refId: item._id, refNumber: repair.claimRef || labelOf(before) },
           condition: ITEM_CONDITION.NEW,
           warranty,
-          purchaseCost: before.purchaseCost,
+          // A swap carries the old unit's cost; a unit on top of ours was free.
+          purchaseCost: oldReturned ? 0 : before.purchaseCost,
           purchaseDate: before.purchaseDate,
           replacesItemId: item._id,
           receivedAt: now,
@@ -323,11 +351,12 @@ export default class StockRepairService {
     );
     item.replacedByItemId = fresh._id;
 
+    const oldNote = oldReturned ? ` · old unit given back too (${returnStateLabel(oldState)})` : "";
     return StockRepairService._commit(
       item,
       before,
-      { type: ITEM_MOVEMENT_TYPE.VENDOR_REPLACED, ref, relatedItemId: fresh._id, note: note || `Replaced by ${claim.vendorName || "vendor"} with ${labelOf(fresh)}` },
-      "CLAIM_REPLACED",
+      { type: ITEM_MOVEMENT_TYPE.REPLACED, ref, cost, relatedItemId: fresh._id, note: (note ? `${note} · ` : "") + `Replaced by ${by} with ${labelOf(fresh)}${oldNote}` },
+      "REPLACED",
       user,
       session,
       [
@@ -341,10 +370,52 @@ export default class StockRepairService {
           status: ITEM_STATUS.AVAILABLE,
           ref,
           relatedItemId: item._id,
-          note: `Vendor replacement for ${labelOf(before)}`,
+          note: oldReturned ? `From ${by}, free — ${labelOf(before)} given back too` : `Vendor replacement for ${labelOf(before)}`,
         },
       ]
     );
+  }
+
+  /*
+    A REPLACED unit the vendor handed back after all. body: { workingState,
+    note } — Working → AVAILABLE (REFURBISHED), Faulty → FAULTY, Dead →
+    SCRAPPED. Its serial is taken back (it must still be free). From now on
+    the replacement counts as an extra unit, received free.
+  */
+  static async oldUnitReturned(id, body, user, session, dataAccess) {
+    const state = readReturnState(body);
+    const item = await StockRepairService._load(id, [ITEM_STATUS.REPLACED], session, dataAccess);
+    const before = item.toObject();
+    const product = await StockProductDefinitionModel.findById(item.productDefinitionId).session(session).lean();
+    const uniqueFields = product ? await StockItemIdentityService.uniqueFieldsFor(product, session) : [];
+    const keys = StockItemIdentityService.identifiersOf(before.fieldValues || {}, uniqueFields);
+    await StockItemIdentityService.assertIdentifiersFree(keys, {
+      session,
+      excludeItemIds: [item._id],
+      labelByCode: new Map(uniqueFields.map((f) => [f.code, f.label])),
+    });
+    Object.assign(item, StockRepairService._landed(state, new Date()));
+    item.identifiers = keys.length ? keys : undefined;
+    // The replacement is now an extra unit on top of this one — free.
+    if (before.replacedByItemId) {
+      await StockInventoryItemModel.updateOne({ _id: before.replacedByItemId }, { $set: { purchaseCost: 0 } }, { session });
+    }
+    return StockRepairService._commit(
+      item,
+      before,
+      { type: ITEM_MOVEMENT_TYPE.OLD_UNIT_RETURNED, relatedItemId: before.replacedByItemId || null, note: `Given back by the vendor — ${returnStateLabel(state)}` },
+      "OLD_UNIT_RETURNED",
+      user,
+      session
+    );
+  }
+
+  // Where a unit handed back by the vendor lands, as the store judged it.
+  static _landed({ workingState, note }, now) {
+    if (workingState === WORKING_STATE.WORKING) return { status: ITEM_STATUS.AVAILABLE, condition: ITEM_CONDITION.REFURBISHED, fault: null };
+    if (workingState === WORKING_STATE.FAULTY)
+      return { status: ITEM_STATUS.FAULTY, fault: { reportedAt: now, note, via: "Given back by the vendor", requestNumber: "" } };
+    return { status: ITEM_STATUS.SCRAPPED, scrapNote: note };
   }
 
   // Turned out to work after all.
@@ -354,18 +425,6 @@ export default class StockRepairService {
     item.status = ITEM_STATUS.AVAILABLE;
     item.fault = null;
     return StockRepairService._commit(item, before, { type: ITEM_MOVEMENT_TYPE.MARKED_OK, note: text(body?.note) || "Checked — working" }, "MARKED_OK", user, session);
-  }
-
-  // Written off. The serial stays held: a scrapped unit reappearing is a
-  // mistake worth being told about.
-  static async scrap(id, body, user, session, dataAccess) {
-    const note = text(body?.note);
-    if (!note) throw new AppError("Give a reason for scrapping", 400);
-    const item = await StockRepairService._load(id, [ITEM_STATUS.FAULTY], session, dataAccess);
-    const before = item.toObject();
-    item.status = ITEM_STATUS.SCRAPPED;
-    item.scrapNote = note;
-    return StockRepairService._commit(item, before, { type: ITEM_MOVEMENT_TYPE.SCRAPPED, note }, "SCRAP", user, session);
   }
 }
 
