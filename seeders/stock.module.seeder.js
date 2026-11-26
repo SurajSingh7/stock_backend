@@ -14,7 +14,7 @@ dotenv.config();
 // would be permanently unreachable from the navigation.
 const withMenu = (actions) => [...actions, VIEW_MENU_ACTION];
 
-const MODULE_DEFINITIONS = [
+export const MODULE_DEFINITIONS = [
   { key: "field-definitions", name: "Field Definitions", actions: withMenu(STANDARD_ACTIONS) },
   { key: "categories", name: "Categories", actions: withMenu([...STANDARD_ACTIONS, "REORDER", "MOVE", "TOGGLE_TYPE"]) },
   { key: "product-definitions", name: "Product Definitions", actions: withMenu(STANDARD_ACTIONS) },
@@ -119,8 +119,9 @@ const MODULE_DEFINITIONS = [
   { key: "repairs", name: "Repair & Warranty", actions: withMenu(["READ", "REPORT", "MANAGE"]) },
   // Stock with our own people — handing out and taking back are separate.
   { key: "employee-items", name: "Employee Items", actions: withMenu(["READ", "ASSIGN", "RETURN"]) },
-  // 🧪 TEST ONLY — plays the requesting website. Remove when the real one is live.
-  { key: "test-simulator", name: "Request Simulator (Test)", actions: withMenu(["READ", "CREATE", "REQUEST"]) },
+  // "test-simulator" (🧪 the Request Simulator) is deliberately NOT seeded, so it
+  // never reaches production. Dev databases that already have it keep it; its
+  // routes stay behind requirePermission("test-simulator", …).
 
   /*
     Alerts & Escalations — one module per tab, so each page can be granted on

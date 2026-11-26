@@ -89,6 +89,13 @@ export const seedFieldDefinitions = async () => {
 // node stock/seeders/stock.field.definition.seeder.js
 if (process.argv[1].includes("stock.field.definition.seeder")) {
   const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/erp";
+  // Sample fields (ram, imei, serial_no…) for a fresh dev database only. Run
+  // against production it would add duplicates of the real fields there.
+  const host = MONGO_URI.replace(/^mongodb(\+srv)?:\/\/([^@]*@)?/, "").split(/[/?,]/)[0];
+  if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)) {
+    console.error(`Refusing: field-definition sample seeder runs on localhost only (target: ${host}).`);
+    process.exit(1);
+  }
   mongoose
     .connect(MONGO_URI)
     .then(async () => {
