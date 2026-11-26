@@ -164,8 +164,8 @@ const stockInventoryItemSchema = new mongoose.Schema(
       ref: "product_definitions", // ← was "stock_product_definitions"
       required: true,
     },
-    // Optional — who the stock was received from (Section 8.4 / 9 of spec).
-    // Add here now so the vendor delete-guard can be uncommented later.
+    // Optional — who the stock was received from. Vendor delete is blocked
+    // while an active item points here (stock.vendor.service.js).
     vendorId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "vendors", // ← matches the vendor model's registered name

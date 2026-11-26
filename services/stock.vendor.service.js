@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { actorSnapshot } from "../models/plugins/actor.stamp.plugin.js";
 import StockVendorModel from "../models/stock.vendor.model.js";
+import StockInventoryItemModel from "../models/stock.inventory.item.model.js";
 import { applyDataScope, isWithinDataScope } from "../helpers/data.scope.helper.js";
 import { paginate, paginateReturn } from "../helpers/pagination.helper.js";
 import { getLogger } from "../helpers/logger.helper.js";
@@ -425,18 +426,12 @@ export default class StockVendorService {
       }
       const before = vendor.toObject();
 
-      // NOTE: stock_inventory_items is not built yet (spec Section 8.5).
-      // Once it exists, uncomment this block so delete is blocked exactly
-      // like fieldDefinition/productDefinition delete (Section 14):
-      //
-      // const StockInventoryItemModel = (await import("../models/stock.inventory.item.model.js")).default;
-      // const referenced = await StockInventoryItemModel.exists({
-      //   vendorId: id,
-      //   isActive: true,
-      // }).session(session);
-      // if (referenced) {
-      //   throw new Error("Cannot delete — this vendor is referenced by active inventory items");
-      // }
+      // Blocked while stock from this vendor is still on the books — same rule
+      // as product-definition delete.
+      const referenced = await StockInventoryItemModel.exists({ vendorId: vendor._id, isActive: true }).session(session);
+      if (referenced) {
+        throw new Error("Cannot delete — this vendor is referenced by active inventory items");
+      }
 
       // A main vendor with live child firms would leave them pointing at
       // nothing — move or remove the children first.
