@@ -89,62 +89,6 @@ export default class StockInvoiceController {
     }
   }
 
-  // ⋮ → Partial submit ON / OFF.
-  static async setPartialSubmit(req, res) {
-    const session = await mongoose.startSession();
-    try {
-      session.startTransaction();
-      if (typeof req.body?.on !== "boolean") throw new Error("on must be true or false");
-      const data = await StockInvoiceService.setPartialSubmit(req.params.id, req.body.on, actingUser(req), session, req.dataAccess);
-      await session.commitTransaction();
-      successResponseHandler(res, data, req.body.on ? "Partial submit turned on" : "Partial submit turned off");
-    } catch (error) {
-      await session.abortTransaction();
-      log.error("Error setting partial submit", error);
-      errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
-    }
-  }
-
-  static async approveEntry(req, res) {
-    const session = await mongoose.startSession();
-    try {
-      session.startTransaction();
-      const data = await StockInvoiceService.approveEntry(req.params.id, req.params.entryId, actingUser(req), session, req.dataAccess);
-      await session.commitTransaction();
-      refreshAlerts(req.params.id);
-      successResponseHandler(res, data, "Entry approved");
-    } catch (error) {
-      await session.abortTransaction();
-      log.error("Error approving entry", error);
-      errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
-    }
-  }
-
-  static async rejectEntry(req, res) {
-    const session = await mongoose.startSession();
-    try {
-      session.startTransaction();
-      validateRejectInvoice(req.body);
-      const data = await StockInvoiceService.rejectEntry(
-        req.params.id, req.params.entryId, req.body.reason, actingUser(req), session, req.dataAccess
-      );
-      await session.commitTransaction();
-      refreshAlerts(req.params.id);
-      emitAlertEvent("INVOICE_REJECTED", req.params.id, { actor: req.user });
-      successResponseHandler(res, data, "Entry rejected");
-    } catch (error) {
-      await session.abortTransaction();
-      log.error("Error rejecting entry", error);
-      errorResponseHandler(res, error);
-    } finally {
-      await session.endSession();
-    }
-  }
-
   static async deleteInvoice(req, res) {
     const session = await mongoose.startSession();
     try {
@@ -203,7 +147,7 @@ export default class StockInvoiceController {
 
   static async getInvoiceById(req, res) {
     try {
-      const data = await StockInvoiceService.getInvoiceById(req.params.id, req.dataAccess, { entryId: req.query.entryId || null });
+      const data = await StockInvoiceService.getInvoiceById(req.params.id, req.dataAccess);
       successResponseHandler(res, data, "Invoice fetched successfully");
     } catch (error) {
       log.error("Error fetching invoice", error);

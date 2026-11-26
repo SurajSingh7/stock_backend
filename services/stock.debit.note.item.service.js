@@ -43,7 +43,7 @@ export default class StockDebitNoteItemService {
   // Invoices the caller may see (same documents as the Invoice List).
   static async _scopedInvoices(dataAccess, moduleKey, extra = {}) {
     const filter = applyDataScope(
-      { isActive: true, $or: [{ status: INVOICE_STATUS.APPROVED }, { inLedger: true }], ...extra },
+      { isActive: true, status: INVOICE_STATUS.APPROVED, ...extra },
       dataAccess,
       moduleKey
     );

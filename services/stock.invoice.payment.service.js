@@ -295,22 +295,20 @@ export default class StockInvoicePaymentService {
       // settled yet — nobody may ask to pay it until it is.
       debitNoteLive,
       canSendForApproval:
-        !inApprovalFlow && !debitNoteLive && daysLeft <= 0 && payable > 0 && invoice.status === INVOICE_STATUS.APPROVED,
+        !inApprovalFlow && !debitNoteLive && daysLeft <= 0 && payable > 0,
       /*
         Why a payment request cannot be made yet, so the screen can say so
         instead of the button silently not being there. First reason wins.
       */
       paymentLockReason: inApprovalFlow
         ? null
-        : invoice.status !== INVOICE_STATUS.APPROVED
-          ? "ITEMS_PENDING"
-          : debitNoteLive
-            ? "DN_IN_PROGRESS"
-            : daysLeft > 0
-              ? "NOT_DUE"
-              : payable <= 0
-                ? "NOTHING_PAYABLE"
-                : null,
+        : debitNoteLive
+          ? "DN_IN_PROGRESS"
+          : daysLeft > 0
+            ? "NOT_DUE"
+            : payable <= 0
+              ? "NOTHING_PAYABLE"
+              : null,
       // A new debit note: none already moving, and payment not yet approved.
       canRaiseDebitNote: !debitNoteLive && approvalStatus !== PAYMENT_APPROVAL_STATUS.APPROVED,
       canEnterPayment:
@@ -360,7 +358,7 @@ export default class StockInvoicePaymentService {
     const { search, vendorId, approvalStatus, paymentState, payable, dateFrom, dateTo } = query;
 
     const filter = applyDataScope(
-      { isActive: true, $or: [{ status: INVOICE_STATUS.APPROVED }, { inLedger: true }] },
+      { isActive: true, status: INVOICE_STATUS.APPROVED },
       dataAccess,
       moduleKey
     );
@@ -613,7 +611,7 @@ export default class StockInvoicePaymentService {
     const invoice = await StockInvoiceModel.findOne({ _id: id, isActive: true }).session(session ?? null);
     if (!invoice) throw new Error("Invoice not found");
     if (!isWithinDataScope(invoice, dataAccess, moduleKey)) throw new Error("Invoice not found");
-    if (invoice.status !== INVOICE_STATUS.APPROVED && !invoice.inLedger) {
+    if (invoice.status !== INVOICE_STATUS.APPROVED) {
       throw new Error("Only an approved invoice has a payment side");
     }
     return invoice;
@@ -1478,7 +1476,7 @@ export default class StockInvoicePaymentService {
 
     const invoices = await StockInvoiceModel.find(
       applyDataScope(
-        { isActive: true, $or: [{ status: INVOICE_STATUS.APPROVED }, { inLedger: true }] },
+        { isActive: true, status: INVOICE_STATUS.APPROVED },
         dataAccess,
         moduleKey
       )
@@ -1618,12 +1616,6 @@ export default class StockInvoicePaymentService {
   */
   static async sendForPaymentApproval(id, payload, actor, session, dataAccess, moduleKey) {
     const invoice = await StockInvoicePaymentService._loadScopedInvoice(id, dataAccess, moduleKey, session);
-
-    // A partial-submit invoice is in the ledger from its first approved
-    // entry, but is paid only once every entry is approved.
-    if (invoice.status !== INVOICE_STATUS.APPROVED) {
-      throw new Error("Payment can be asked for only once every item on this invoice is approved");
-    }
 
     const s = invoice.paymentApprovalStatus;
     if (s === PAYMENT_APPROVAL_STATUS.PENDING) {

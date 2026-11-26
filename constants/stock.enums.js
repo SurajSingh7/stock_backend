@@ -476,25 +476,15 @@ export const TRACKING_STATUS_ARRAY = Object.values(TRACKING_STATUS);
 //            (was ADDED until 2026-11-03 — see scripts/rename-invoice-added.js)
 // DRAFT  — items are being entered and saved as a draft, not submitted yet
 // PENDING — every invoiced unit is entered and submitted for approval
-// IN_PROGRESS — partial submit only: entries are being entered/approved one
-//               by one and not every invoiced unit is approved yet
+// The whole invoice is submitted and approved in one go — there is no
+// part-by-part submission (partial submit was removed 2026-11-25).
 export const INVOICE_STATUS = {
   UPLOADED: "UPLOADED",
   DRAFT: "DRAFT",
   PENDING: "PENDING",
-  IN_PROGRESS: "IN_PROGRESS",
   APPROVED: "APPROVED",
   REJECTED: "REJECTED",
 };
-
-// One entry of a partial-submit invoice (Entry 1, 2, 3 …).
-export const INVOICE_ENTRY_STATUS = {
-  DRAFT: "DRAFT",
-  PENDING: "PENDING",
-  APPROVED: "APPROVED",
-  REJECTED: "REJECTED",
-};
-export const INVOICE_ENTRY_STATUS_ARRAY = Object.values(INVOICE_ENTRY_STATUS);
 export const INVOICE_STATUS_ARRAY = Object.values(INVOICE_STATUS);
 
 // Approval state of a received inventory item — independent of its physical

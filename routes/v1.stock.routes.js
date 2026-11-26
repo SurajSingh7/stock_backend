@@ -232,10 +232,6 @@ router.put(
   StockInvoiceController.updateInvoice
 );
 router.delete("/invoices/:id", authenticate, requirePermission("invoices", "EDIT_INVOICE"), StockInvoiceController.deleteInvoice);
-// ⋮ → Partial submit ON/OFF, and the per-entry decisions it brings.
-router.patch("/invoices/:id/partial", authenticate, requirePermission("invoices", "PARTIAL_SUBMIT"), StockInvoiceController.setPartialSubmit);
-router.patch("/invoices/:id/entries/:entryId/approve", authenticate, requirePermission("invoices", "APPROVE"), StockInvoiceController.approveEntry);
-router.patch("/invoices/:id/entries/:entryId/reject", authenticate, requirePermission("invoices", "REJECT"), StockInvoiceController.rejectEntry);
 router.patch("/invoices/:id/approve", authenticate, requirePermission("invoices", "APPROVE"), StockInvoiceController.approveInvoice);
 router.patch("/invoices/:id/reject", authenticate, requirePermission("invoices", "REJECT"), StockInvoiceController.rejectInvoice);
 

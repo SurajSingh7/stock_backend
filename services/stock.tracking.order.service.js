@@ -69,7 +69,7 @@ export default class StockTrackingOrderService {
     const trackingIds = vendorOrders.flatMap((g) => g.vendors.map((v) => v.tracking?._id).filter(Boolean));
     const approvedInvoices = await StockInvoiceModel.find({
       trackingOrderId: { $in: trackingIds },
-      status: { $in: [INVOICE_STATUS.APPROVED, INVOICE_STATUS.IN_PROGRESS] },
+      status: INVOICE_STATUS.APPROVED,
       isActive: true,
     })
       .select("trackingOrderId lines.receivedQuantity")
@@ -865,7 +865,7 @@ export default class StockTrackingOrderService {
     // Received per order and quotation line, from invoices that put stock in.
     const invoices = await StockInvoiceModel.find({
       trackingOrderId: { $in: orders.filter((o) => o.poId).map((o) => o._id) },
-      status: { $in: [INVOICE_STATUS.APPROVED, INVOICE_STATUS.IN_PROGRESS] },
+      status: INVOICE_STATUS.APPROVED,
       isActive: true,
     })
       .select("trackingOrderId lines.quotationItemId lines.receivedQuantity")
@@ -961,7 +961,7 @@ export default class StockTrackingOrderService {
 
     const approvedInvoices = await StockInvoiceModel.find({
       trackingOrderId,
-      status: { $in: [INVOICE_STATUS.APPROVED, INVOICE_STATUS.IN_PROGRESS] },
+      status: INVOICE_STATUS.APPROVED,
       isActive: true,
     })
       .session(session)
@@ -1008,7 +1008,7 @@ export default class StockTrackingOrderService {
 
     const approved = await StockInvoiceModel.find({
       trackingOrderId: tracking._id,
-      status: { $in: [INVOICE_STATUS.APPROVED, INVOICE_STATUS.IN_PROGRESS] },
+      status: INVOICE_STATUS.APPROVED,
       isActive: true,
     })
       .session(session)
@@ -1056,10 +1056,7 @@ export default class StockTrackingOrderService {
     // arrived, they just are not in the system yet.
     const pendingCount = await StockInvoiceModel.countDocuments({
       trackingOrderId: tracking._id,
-      $or: [
-        { status: { $in: [INVOICE_STATUS.UPLOADED, INVOICE_STATUS.DRAFT, INVOICE_STATUS.PENDING, INVOICE_STATUS.IN_PROGRESS] } },
-        { "entries.status": { $in: ["DRAFT", "PENDING"] } },
-      ],
+      status: { $in: [INVOICE_STATUS.UPLOADED, INVOICE_STATUS.DRAFT, INVOICE_STATUS.PENDING] },
       isActive: true,
     }).session(session);
     if (pendingCount > 0) {

@@ -7,7 +7,6 @@ import {
   QUOTATION_STATUS,
   PO_STATUS,
   INVOICE_STATUS,
-  INVOICE_ENTRY_STATUS,
   PAYMENT_APPROVAL_STATUS,
   DEBIT_NOTE_STATUS,
   ADJUSTMENT_TYPE,
@@ -143,7 +142,6 @@ const PO_VARS = [
 // ─── Invoice ────────────────────────────────────────────────────────────────
 const loadInvoice = (id) => StockInvoiceModel.findOne({ _id: id, isActive: { $ne: false } }).lean();
 const buildInvoice = (inv) => {
-  const rejectedEntry = [...(inv.entries || [])].reverse().find((e) => e.status === INVOICE_ENTRY_STATUS.REJECTED);
   return {
     ref: inv.invoiceNumber || "",
     link: link("/stock/accounts/invoice-approval", inv.invoiceNumber),
@@ -158,7 +156,7 @@ const buildInvoice = (inv) => {
       entity: inv.entityAlias || "",
       amount: inr(inv.invoiceAmount || inv.amount),
       invoiceDate: inv.invoiceDate ? new Date(inv.invoiceDate).toLocaleDateString("en-IN") : "",
-      rejectedReason: inv.rejectedReason || rejectedEntry?.rejectedReason || "",
+      rejectedReason: inv.rejectedReason || "",
       createdBy: inv.createdBy?.name || inv.receivedByName || "",
       createdAt: date(inv.createdAt),
     },
@@ -171,9 +169,7 @@ const INVOICE_VARS = [
   { key: "amount", label: "Invoice amount", sample: "₹86,400" },
   { key: "invoiceDate", label: "Invoice date", sample: "20/10/2026" },
 ];
-const invoiceAwaitingApproval = (inv) =>
-  inv.status === INVOICE_STATUS.PENDING ||
-  (inv.entries || []).some((e) => e.status === INVOICE_ENTRY_STATUS.PENDING);
+const invoiceAwaitingApproval = (inv) => inv.status === INVOICE_STATUS.PENDING;
 
 // ─── Payment approval (lives on the invoice) ────────────────────────────────
 const buildPayment = (inv) => {
@@ -462,9 +458,7 @@ const EVENTS = [
     variables: withCommon([...INVOICE_VARS, REJECTED_VAR]),
     load: loadInvoice,
     build: buildInvoice,
-    isPending: (inv) =>
-      inv.status === INVOICE_STATUS.REJECTED ||
-      (inv.entries || []).some((e) => e.status === INVOICE_ENTRY_STATUS.REJECTED),
+    isPending: (inv) => inv.status === INVOICE_STATUS.REJECTED,
   },
   {
     key: "PAYMENT_APPROVAL_REJECTED",

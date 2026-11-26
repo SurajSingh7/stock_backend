@@ -39,8 +39,7 @@ const MODULE_DEFINITIONS = [
   { key: "not-required", name: "Not Required", actions: withMenu(["READ"]) },
   // EDIT_INVOICE: change an invoice's details (number, date, quantities,
   // charges) or delete it — kept apart from CREATE, which receiving staff hold.
-  // PARTIAL_SUBMIT: turn partial submit on/off for an invoice.
-  { key: "invoices", name: "Invoices", actions: withMenu(["CREATE", "READ", "UPDATE", "APPROVE", "REJECT", "EDIT_INVOICE", "PARTIAL_SUBMIT"]) },
+  { key: "invoices", name: "Invoices", actions: withMenu(["CREATE", "READ", "UPDATE", "APPROVE", "REJECT", "EDIT_INVOICE"]) },
   // The payment-side list of approved invoices — read by the stock team, who
   // have no business approving invoices. Its own module so "who can see what
   // we owe" and "who can move a payment due date" are granted separately from

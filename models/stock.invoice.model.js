@@ -2,8 +2,6 @@ import mongoose from "mongoose";
 import {
   INVOICE_STATUS,
   INVOICE_STATUS_ARRAY,
-  INVOICE_ENTRY_STATUS,
-  INVOICE_ENTRY_STATUS_ARRAY,
   PAYMENT_APPROVAL_STATUS_ARRAY,
   PAYMENT_MODE_ARRAY,
   PAYMENT_STATE_OVERRIDE_ARRAY,
@@ -57,8 +55,6 @@ const invoiceLineSchema = new Schema(
     invoiceQuantity: { type: Number, default: 0, min: 0 },
 
     // How many have been entered (serial rows / batch quantity) so far.
-    // With partial submit ON this is the APPROVED total instead — the units
-    // being typed in live on the invoice's draft entry (see `entries`).
     receivedQuantity: { type: Number, default: 0, min: 0 },
 
     // Free-of-cost units received alongside the paid receivedQuantity —
@@ -80,42 +76,6 @@ const invoiceLineSchema = new Schema(
     rating: { type: ratingSchema, default: null },
   },
   { _id: true }
-);
-
-/*
-  One entry of a partial-submit invoice: what was entered and submitted in one
-  go ("20 routers today"), approved or rejected on its own. Embedded — an
-  entry only ever exists inside its invoice.
-*/
-const entryLineSchema = new Schema(
-  {
-    quotationItemId: { type: Schema.Types.ObjectId, default: null },
-    productDefinitionId: { type: Schema.Types.ObjectId, ref: "product_definitions", default: null },
-    productName: { type: String, trim: true, default: "" },
-    receivedQuantity: { type: Number, default: 0, min: 0 },
-    focQuantity: { type: Number, default: 0, min: 0 },
-    rows: {
-      type: [{ fieldValues: Schema.Types.Mixed, isFoc: { type: Boolean, default: false } }],
-      default: [],
-    },
-    createdInventoryItemIds: { type: [Schema.Types.ObjectId], ref: "inventory_items", default: [] },
-  },
-  { _id: false }
-);
-
-const invoiceEntrySchema = new Schema(
-  {
-    entryNumber: { type: Number, required: true, min: 1 },
-    status: { type: String, enum: INVOICE_ENTRY_STATUS_ARRAY, default: INVOICE_ENTRY_STATUS.DRAFT },
-    lines: { type: [entryLineSchema], default: [] },
-    submittedAt: { type: Date, default: null },
-    submittedByName: { type: String, trim: true, default: "" },
-    rejectedReason: { type: String, trim: true, default: "" },
-    reviewedBy: { type: Schema.Types.ObjectId, default: null },
-    reviewedByName: { type: String, trim: true, default: "" },
-    reviewedAt: { type: Date, default: null },
-  },
-  { _id: true, timestamps: true }
 );
 
 const invoiceSchema = new Schema(
@@ -188,24 +148,8 @@ const invoiceSchema = new Schema(
     },
 
     /*
-      Partial submit (turned on per invoice, by permission): items can be
-      submitted a part at a time, each part an entry approved on its own.
-      Off by default — then the invoice is submitted once, complete.
-    */
-    partialSubmit: { type: Boolean, default: false },
-    entries: { type: [invoiceEntrySchema], default: [] },
-
-    /*
-      The invoice counts in the vendor ledger / outstanding / payments list.
-      Set when it is approved — or, with partial submit, when its FIRST entry
-      is approved (the whole invoice amount counts from then on). Payment
-      itself still waits for status APPROVED.
-    */
-    inLedger: { type: Boolean, default: false },
-
-    /*
-      TDS, snapshotted the moment the invoice first enters the ledger (approval,
-      or with partial submit its first approved entry) from the VENDOR's TDS %. Only the RATE is stored; the amount is rate × basic,
+      TDS, snapshotted the moment the invoice is approved (it enters the
+      ledger then) from the VENDOR's TDS %. Only the RATE is stored; the amount is rate × basic,
       worked out on read, so an admin correcting a price moves it too. Null on
       invoices approved before TDS existed — those carry no TDS.
     */
@@ -256,8 +200,6 @@ const invoiceSchema = new Schema(
             by: { type: Schema.Types.ObjectId, default: null },
             byName: { type: String, trim: true, default: "" },
             action: { type: String, enum: ["DRAFT", "SUBMIT"], default: "DRAFT" },
-            // Partial submit: which entry this save belonged to.
-            entryNumber: { type: Number, default: null },
             // Change in entered quantity per product on this save (+20, +30 …)
             items: {
               type: [
