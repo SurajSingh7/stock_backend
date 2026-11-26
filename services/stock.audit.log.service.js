@@ -18,6 +18,9 @@ export default class StockAuditLogService {
   // fail the business action it's describing. The failure is still visible
   // via the logger, just not to the caller.
   static recordAudit = async ({ entityType, entityId, action, actor, before = null, after = null, reason = "" }) => {
+    // No actor at all = no signed-in user: a release script, seeder or the
+    // alert worker. Say so, rather than leaving a blank "who" in the trail.
+    if (!actor) actor = { name: "System", roleName: "System" };
     try {
       await StockAuditLogModel.create({
         entityType,
